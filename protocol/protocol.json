@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "NekoNest Protocol",
+  "description": "JSON Envelope for NekoNest communication protocol",
+  "definitions": {
+    "NekoMessage": {
+      "type": "object",
+      "required": ["type", "device_id", "timestamp"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "device_online",
+            "device_offline",
+            "session_list",
+            "session_update",
+            "send_prompt",
+            "approve",
+            "deny",
+            "interrupt",
+            "heartbeat",
+            "error",
+            "register_device",
+            "auth_response",
+            "pair_request",
+            "pair_confirm"
+          ]
+        },
+        "device_id": {
+          "type": "string",
+          "description": "Unique device identifier"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Agent session identifier (optional for device-level messages)"
+        },
+        "timestamp": {
+          "type": "integer",
+          "description": "Unix timestamp in seconds"
+        },
+        "payload": {
+          "type": "object",
+          "description": "Message-specific payload"
+        }
+      }
+    },
+    "Device": {
+      "type": "object",
+      "required": ["id", "name", "os", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "os": { "type": "string", "enum": ["windows"] },
+        "status": { "type": "string", "enum": ["online", "offline"] },
+        "last_seen": { "type": "integer" },
+        "active_agents": { "type": "integer" }
+      }
+    },
+    "AgentSession": {
+      "type": "object",
+      "required": ["id", "device_id", "agent_type", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "device_id": { "type": "string" },
+        "agent_type": { "type": "string", "enum": ["claude_code", "codex"] },
+        "status": { "type": "string", "enum": ["running", "idle", "waiting_approval"] },
+        "summary": { "type": "string" },
+        "last_activity": { "type": "integer" },
+        "pending_approval": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "tool_name": { "type": "string" },
+            "description": { "type": "string" },
+            "parameters": { "type": "object" }
+          }
+        }
+      }
+    },
+    "SessionMessage": {
+      "type": "object",
+      "required": ["id", "role", "content", "timestamp"],
+      "properties": {
+        "id": { "type": "string" },
+        "role": { "type": "string", "enum": ["assistant", "user", "tool", "system"] },
+        "content": { "type": "string" },
+        "type": { "type": "string", "enum": ["thinking", "text", "tool_call", "tool_result", "error"] },
+        "timestamp": { "type": "integer" },
+        "metadata": { "type": "object" }
+      }
+    }
+  }
+}
