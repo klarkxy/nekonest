@@ -62,7 +62,7 @@
       "properties": {
         "id": { "type": "string" },
         "device_id": { "type": "string" },
-        "agent_type": { "type": "string", "enum": ["claude_code", "codex"] },
+        "agent_type": { "type": "string", "enum": ["claude_code", "codex", "kilo"] },
         "status": { "type": "string", "enum": ["running", "idle", "waiting_approval"] },
         "summary": { "type": "string" },
         "last_activity": { "type": "integer" },

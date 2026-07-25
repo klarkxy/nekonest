@@ -8,6 +8,7 @@ type AgentType string
 const (
 	AgentClaudeCode AgentType = "claude_code"
 	AgentCodex      AgentType = "codex"
+	AgentKilo       AgentType = "kilo"
 )
 
 // AgentStatus represents the current state of an agent session.

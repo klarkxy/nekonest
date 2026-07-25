@@ -59,12 +59,15 @@ func (a *CodexAdapter) Close() error {
 func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 	var sessions []*SessionInfo
 
-	// Codex stores sessions in:
+	// Current Codex layout:
+	// ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
+	// Older layout (still accepted):
 	// ~/.codex/sessions/<session-id>/rollout-*.jsonl
 	if _, err := os.Stat(a.sessionsDir); os.IsNotExist(err) {
 		return nil, nil // Codex not installed or no sessions
 	}
 
+	byID := make(map[string]*SessionInfo)
 	err := filepath.Walk(a.sessionsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -84,13 +87,19 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 			return nil
 		}
 
-		sessions = append(sessions, session)
+		// One logical session may have multiple rollout files; keep the newest.
+		if prev, ok := byID[session.ID]; !ok || session.LastActivity.After(prev.LastActivity) {
+			byID[session.ID] = session
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("walk error: %w", err)
 	}
 
+	for _, s := range byID {
+		sessions = append(sessions, s)
+	}
 	return sessions, nil
 }
 
@@ -109,6 +118,7 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 	var msgCount int
 	var isWaiting bool
 	var pendingApproval *ApprovalInfo
+	sessionID := codexSessionIDFromFilename(filepath.Base(path))
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -122,19 +132,73 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 		}
 
 		msgCount++
+		if t := parseCodexTimestamp(msg["timestamp"]); !t.IsZero() {
+			lastTime = t
+		}
 
-		role, _ := msg["role"].(string)
 		eventType, _ := msg["type"].(string)
+		payload, _ := msg["payload"].(map[string]interface{})
 
-		if role == "assistant" {
-			content := extractCodexContent(msg)
-			if len(content) > 0 {
-				lastMessage = truncate(content, 120)
+		// Modern Codex: session_meta carries the real thread/session ids.
+		if eventType == "session_meta" && payload != nil {
+			if id, _ := payload["id"].(string); id != "" {
+				sessionID = id
+			} else if id, _ := payload["session_id"].(string); id != "" {
+				sessionID = id
+			}
+			if t := parseCodexTimestamp(payload["timestamp"]); !t.IsZero() {
+				lastTime = t
 			}
 		}
 
-		// Detect approval state
-		if eventType == "approval_request" {
+		// Modern: event_msg / response_item nested under payload.
+		if payload != nil {
+			pType, _ := payload["type"].(string)
+			switch {
+			case pType == "agent_message":
+				if m, _ := payload["message"].(string); m != "" {
+					lastMessage = truncate(m, 120)
+				}
+			case pType == "task_complete":
+				if m, _ := payload["last_agent_message"].(string); m != "" {
+					lastMessage = truncate(m, 120)
+				}
+			case pType == "message":
+				role, _ := payload["role"].(string)
+				if role == "assistant" {
+					if content := extractCodexContent(payload); content != "" {
+						lastMessage = truncate(content, 120)
+					}
+				}
+			case pType == "approval_request" || eventType == "approval_request":
+				isWaiting = true
+				toolName, _ := payload["tool_name"].(string)
+				desc, _ := payload["description"].(string)
+				if toolName == "" {
+					toolName = "unknown_tool"
+				}
+				if desc == "" {
+					desc = "Codex tool call"
+				}
+				pendingApproval = &ApprovalInfo{
+					ID:          fmt.Sprintf("codex_approval_%s_%d", sessionID, msgCount),
+					ToolName:    toolName,
+					Description: desc,
+				}
+			case pType == "approval_response" || eventType == "approval_response":
+				isWaiting = false
+				pendingApproval = nil
+			}
+		}
+
+		// Legacy flat rollout format.
+		role, _ := msg["role"].(string)
+		if role == "assistant" {
+			if content := extractCodexContent(msg); content != "" {
+				lastMessage = truncate(content, 120)
+			}
+		}
+		if eventType == "approval_request" && pendingApproval == nil {
 			isWaiting = true
 			toolName, _ := msg["tool_name"].(string)
 			desc, _ := msg["description"].(string)
@@ -145,7 +209,7 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 				desc = "Codex tool call"
 			}
 			pendingApproval = &ApprovalInfo{
-				ID:          fmt.Sprintf("codex_approval_%s_%d", filepath.Base(filepath.Dir(path)), msgCount),
+				ID:          fmt.Sprintf("codex_approval_%s_%d", sessionID, msgCount),
 				ToolName:    toolName,
 				Description: desc,
 			}
@@ -154,14 +218,17 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 			isWaiting = false
 			pendingApproval = nil
 		}
-
-		if ts, ok := msg["timestamp"].(float64); ok {
-			lastTime = time.Unix(int64(ts), 0)
-		}
 	}
 
 	if msgCount == 0 {
 		return nil, fmt.Errorf("empty rollout file")
+	}
+	if sessionID == "" {
+		// Last-resort fallback for very old layouts: parent directory name.
+		sessionID = filepath.Base(filepath.Dir(path))
+	}
+	if sessionID == "" || sessionID == "." || sessionID == string(filepath.Separator) {
+		return nil, fmt.Errorf("could not determine session id for %s", path)
 	}
 
 	modTime := info.ModTime()
@@ -176,9 +243,6 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 		status = StatusRunning
 	}
 
-	// Session ID is the parent directory name
-	sessionID := filepath.Base(filepath.Dir(path))
-
 	return &SessionInfo{
 		ID:              sessionID,
 		AgentType:       AgentCodex,
@@ -188,6 +252,61 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 		SessionPath:     path,
 		PendingApproval: pendingApproval,
 	}, nil
+}
+
+// codexSessionIDFromFilename extracts the UUID suffix from
+// rollout-2026-07-25T18-02-04-019f98b9-787f-7573-9d8e-9d308b04aaf6.jsonl
+func codexSessionIDFromFilename(name string) string {
+	base := strings.TrimSuffix(name, ".jsonl")
+	base = strings.TrimPrefix(base, "rollout-")
+	// UUID is the last 5 hyphen-separated groups at the end.
+	parts := strings.Split(base, "-")
+	if len(parts) >= 5 {
+		cand := strings.Join(parts[len(parts)-5:], "-")
+		if looksLikeUUID(cand) {
+			return cand
+		}
+	}
+	return ""
+}
+
+func looksLikeUUID(s string) bool {
+	if len(s) < 32 || len(s) > 40 {
+		return false
+	}
+	hyphens := 0
+	for _, r := range s {
+		switch {
+		case r == '-':
+			hyphens++
+		case (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F'):
+		default:
+			return false
+		}
+	}
+	return hyphens == 4
+}
+
+func parseCodexTimestamp(v interface{}) time.Time {
+	switch t := v.(type) {
+	case float64:
+		// Seconds or milliseconds
+		if t > 1e12 {
+			return time.UnixMilli(int64(t))
+		}
+		return time.Unix(int64(t), 0)
+	case string:
+		if t == "" {
+			return time.Time{}
+		}
+		if parsed, err := time.Parse(time.RFC3339Nano, t); err == nil {
+			return parsed
+		}
+		if parsed, err := time.Parse(time.RFC3339, t); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
 
 // Watch monitors a Codex session for changes.
@@ -286,23 +405,31 @@ func (a *CodexAdapter) Interrupt(sessionID string) error {
 // --- Codex-specific helpers ---
 
 func extractCodexContent(msg map[string]interface{}) string {
-	content, ok := msg["content"]
-	if !ok {
-		return ""
-	}
-	switch v := content.(type) {
-	case string:
-		return v
-	case []interface{}:
-		var parts []string
-		for _, block := range v {
-			if blockMap, ok := block.(map[string]interface{}); ok {
+	if content, ok := msg["content"]; ok {
+		switch v := content.(type) {
+		case string:
+			return v
+		case []interface{}:
+			var parts []string
+			for _, block := range v {
+				blockMap, ok := block.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if text, ok := blockMap["text"].(string); ok && text != "" {
+					parts = append(parts, text)
+					continue
+				}
+				// Modern Codex uses input_text / output_text blocks.
 				if text, ok := blockMap["text"].(string); ok {
 					parts = append(parts, text)
 				}
 			}
+			return strings.Join(parts, " ")
 		}
-		return strings.Join(parts, " ")
+	}
+	if m, ok := msg["message"].(string); ok {
+		return m
 	}
 	return ""
 }

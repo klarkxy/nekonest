@@ -63,7 +63,8 @@ func main() {
 	// Initialize adapters
 	ccAdapter := adapters.NewClaudeCodeAdapter()
 	codexAdapter := adapters.NewCodexAdapter()
-	adapterList := []adapters.Adapter{ccAdapter, codexAdapter}
+	kiloAdapter := adapters.NewKiloAdapter()
+	adapterList := []adapters.Adapter{ccAdapter, codexAdapter, kiloAdapter}
 
 	// Log available agents
 	for _, a := range adapterList {
@@ -78,7 +79,7 @@ func main() {
 	client := connection.NewClient(ctx, cfg.ServerURL, cfg.DeviceID, cfg.Token)
 
 	// Wire up agent output callbacks — send session_message back to server
-	setupOutputCallbacks(ccAdapter, codexAdapter, client, cfg.DeviceID)
+	setupOutputCallbacks(ccAdapter, codexAdapter, kiloAdapter, client, cfg.DeviceID)
 
 	// Session discovery state
 	var (
@@ -374,6 +375,7 @@ func main() {
 func setupOutputCallbacks(
 	ccAdapter *adapters.ClaudeCodeAdapter,
 	codexAdapter *adapters.CodexAdapter,
+	kiloAdapter *adapters.KiloAdapter,
 	client *connection.Client,
 	deviceID string,
 ) {
@@ -387,6 +389,12 @@ func setupOutputCallbacks(
 	codexCommander := codexAdapter.GetCommander()
 	codexCommander.OnAgentOutput = func(sessionID, msgType, content string) {
 		sendSessionMessage(client, deviceID, sessionID, "codex", msgType, content)
+	}
+
+	// Kilo output callback
+	kiloCommander := kiloAdapter.GetCommander()
+	kiloCommander.OnAgentOutput = func(sessionID, msgType, content string) {
+		sendSessionMessage(client, deviceID, sessionID, "kilo", msgType, content)
 	}
 }
 
@@ -466,7 +474,7 @@ func startNewSession(agentType, prompt, workDir string, ccAdapter *adapters.Clau
 	_ = codexAdapter
 	_ = prompt
 	return "", fmt.Errorf(
-		"create_session is not reliable yet for %s; open Claude Code/Codex on the PC first, wait for the session to appear in the phone list, then send prompts there",
+		"create_session is not reliable yet for %s; open Claude Code/Codex/Kilo on the PC first, wait for the session to appear in the phone list, then send prompts there",
 		agentType,
 	)
 }

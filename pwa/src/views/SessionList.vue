@@ -13,7 +13,7 @@
         @click="goToSession(session)"
       >
         <div class="session-header">
-          <span class="agent-icon">{{ session.agent_type === 'claude_code' ? '🟣' : '🟢' }}</span>
+          <span class="agent-icon">{{ agentIcon(session.agent_type) }}</span>
           <span class="session-type">{{ agentTypeLabel(session.agent_type) }}</span>
           <n-tag :type="statusTagType(session.status)" size="small" round>
             {{ statusLabel(session.status) }}
@@ -72,8 +72,21 @@ function goToSession(session: AgentSession) {
   router.push(`/device/${deviceId}/session/${session.id}`)
 }
 
+function agentIcon(type: AgentType): string {
+  switch (type) {
+    case 'claude_code': return '🟣'
+    case 'kilo': return '🔴'
+    default: return '🟢'
+  }
+}
+
 function agentTypeLabel(type: AgentType): string {
-  return type === 'claude_code' ? 'Claude Code' : 'Codex'
+  switch (type) {
+    case 'claude_code': return 'Claude Code'
+    case 'codex': return 'Codex'
+    case 'kilo': return 'Kilo'
+    default: return type
+  }
 }
 
 function statusLabel(status: AgentStatus): string {

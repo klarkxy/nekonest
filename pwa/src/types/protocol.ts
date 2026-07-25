@@ -39,7 +39,7 @@ export interface Device {
   active_agents: number
 }
 
-export type AgentType = 'claude_code' | 'codex'
+export type AgentType = 'claude_code' | 'codex' | 'kilo'
 export type AgentStatus = 'running' | 'idle' | 'waiting_approval'
 
 export interface AgentSession {

@@ -63,6 +63,7 @@ type AgentType string
 const (
 	AgentClaudeCode AgentType = "claude_code"
 	AgentCodex      AgentType = "codex"
+	AgentKilo       AgentType = "kilo"
 )
 
 // AgentSession represents an active agent session on a device.

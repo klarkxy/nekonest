@@ -84,7 +84,11 @@ const messagesRef = ref<HTMLElement>()
 const agentLabel = computed(() => {
   const session = sessionStore.currentSession
   if (!session) return '会话详情'
-  return session.agent_type === 'claude_code' ? '🟣 Claude Code' : '🟢 Codex'
+  switch (session.agent_type) {
+    case 'claude_code': return '🟣 Claude Code'
+    case 'kilo': return '🔴 Kilo'
+    default: return '🟢 Codex'
+  }
 })
 
 onMounted(() => {

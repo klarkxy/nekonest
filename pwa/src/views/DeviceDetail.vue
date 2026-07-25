@@ -61,7 +61,7 @@
         @click="$router.push(`/device/${deviceId}/session/${session.id}`)"
       >
         <div class="session-row">
-          <span>{{ session.agent_type === 'claude_code' ? '🟣' : '🟢' }}</span>
+          <span>{{ session.agent_type === 'claude_code' ? '🟣' : session.agent_type === 'kilo' ? '🔴' : '🟢' }}</span>
           <span class="session-summary">{{ session.summary || '空闲会话' }}</span>
           <n-tag :type="statusType(session.status)" size="small" round>{{ statusLabel(session.status) }}</n-tag>
         </div>
