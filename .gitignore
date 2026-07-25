@@ -1,0 +1,35 @@
+# Build
+bin/
+dist/
+pwa/dist/
+server/pwa-dist/
+*.exe
+*.log
+
+# Toolchains / caches (never commit)
+go-sdk/
+gocache/
+node_modules/
+
+# Archives / packages
+*.tar.gz
+*.zip
+
+# Local data
+data/
+*.db
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Env
+.env
+.env.*
+
+# Stale root scaffolding (kept locally only)
+_archive/
+
