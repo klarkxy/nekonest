@@ -13,6 +13,7 @@ import (
 
 	"github.com/nekonest/server/internal/db"
 	"github.com/nekonest/server/internal/protocol"
+	"github.com/nekonest/server/internal/push"
 )
 
 // Server is the main NekoNest server.
@@ -20,6 +21,7 @@ type Server struct {
 	db          *db.DB
 	connMgr     *ConnectionManager
 	phoneSecret string // if non-empty, required for phone REST + phone WS
+	dataDir     string // SQLite + attachments root
 }
 
 // New creates a new NekoNest server.
@@ -51,6 +53,11 @@ func NewWithSecret(database *db.DB, phoneSecret string) *Server {
 	return s
 }
 
+// SetDataDir sets the root directory for attachments (and related files).
+func (s *Server) SetDataDir(dir string) {
+	s.dataDir = dir
+}
+
 // RegisterRoutes sets up HTTP routes.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/daemon", s.HandleDaemonWS)
@@ -64,8 +71,13 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// P2-A: Message history API
 	mux.HandleFunc("/api/messages", s.handleMessages)
 
+	// Attachments (upload + download)
+	mux.HandleFunc("/api/attachments", s.handleAttachments)
+	mux.HandleFunc("/api/attachments/", s.handleAttachments)
+
 	// P2-C: Push subscription API
 	mux.HandleFunc("/api/push/subscribe", s.handlePushSubscribe)
+	mux.HandleFunc("/api/push/vapid-public-key", s.handleVAPIDPublicKey)
 
 	// Pairing APIs
 	mux.HandleFunc("/api/pair/generate", s.handleGeneratePairCode)
@@ -155,7 +167,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		messages, err := s.db.GetMessages(deviceID, sessionID, limit)
+		messages, err := s.db.GetMessages(deviceID, sessionID, limit+1)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -163,9 +175,14 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		if messages == nil {
 			messages = []*protocol.SessionMessage{}
 		}
+		messages, truncated := truncateHistory(messages, limit)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"messages": messages})
+		json.NewEncoder(w).Encode(map[string]any{
+			"messages":  messages,
+			"limit":     limit,
+			"truncated": truncated,
+		})
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -194,8 +211,29 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.DeviceID == "" || req.Endpoint == "" {
-		http.Error(w, "device_id and endpoint required", http.StatusBadRequest)
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.Endpoint = strings.TrimSpace(req.Endpoint)
+	req.P256DH = strings.TrimSpace(req.P256DH)
+	req.Auth = strings.TrimSpace(req.Auth)
+	if req.DeviceID == "" || req.Endpoint == "" || req.P256DH == "" || req.Auth == "" {
+		http.Error(w, "device_id, endpoint, p256dh and auth required", http.StatusBadRequest)
+		return
+	}
+	if len(req.DeviceID) > 256 || len(req.Endpoint) > 4096 ||
+		len(req.P256DH) > 512 || len(req.Auth) > 256 {
+		http.Error(w, "push subscription field too long", http.StatusBadRequest)
+		return
+	}
+	if !s.db.DeviceExists(req.DeviceID) {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	if err := push.ValidateEndpoint(req.Endpoint); err != nil {
+		http.Error(w, "invalid push endpoint", http.StatusBadRequest)
+		return
+	}
+	if err := push.ValidateKeys(req.P256DH, req.Auth); err != nil {
+		http.Error(w, "invalid push subscription keys", http.StatusBadRequest)
 		return
 	}
 
@@ -216,14 +254,37 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "subscribed"})
 }
 
+// GET /api/push/vapid-public-key — public key for PushManager.subscribe
+func (s *Server) handleVAPIDPublicKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requirePhoneAuth(w, r) {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if !push.Enabled() {
+		writeJSON(w, map[string]any{"enabled": false, "public_key": ""})
+		return
+	}
+	writeJSON(w, map[string]any{"enabled": true, "public_key": push.PublicKey()})
+}
+
 func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Optional bootstrap secret: when set, registration is not open to the internet.
-	if bootstrap := strings.TrimSpace(os.Getenv("NEKONEST_BOOTSTRAP_TOKEN")); bootstrap != "" {
+	// When phone secret is configured (production-like), require bootstrap token
+	// so /api/devices/register is not open to the internet.
+	bootstrap := strings.TrimSpace(os.Getenv("NEKONEST_BOOTSTRAP_TOKEN"))
+	if s.phoneSecret != "" && bootstrap == "" {
+		http.Error(w, "server misconfigured: set NEKONEST_BOOTSTRAP_TOKEN", http.StatusServiceUnavailable)
+		return
+	}
+	if bootstrap != "" {
 		got := r.Header.Get("X-Neko-Bootstrap")
 		if got == "" {
 			got = r.URL.Query().Get("bootstrap")

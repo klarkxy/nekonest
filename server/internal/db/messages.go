@@ -8,10 +8,17 @@ import (
 )
 
 // SaveMessage stores a session message in the database.
+// Same id is upserted so streaming patches update content in place.
 func (db *DB) SaveMessage(deviceID, sessionID string, msg *protocol.SessionMessage) error {
 	_, err := db.conn.Exec(`
 		INSERT INTO session_messages (id, device_id, session_id, role, content, type, timestamp, metadata_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id, device_id, session_id) DO UPDATE SET
+			content = excluded.content,
+			type = excluded.type,
+			timestamp = excluded.timestamp,
+			metadata_json = excluded.metadata_json,
+			role = excluded.role`,
 		msg.ID, deviceID, sessionID, msg.Role, msg.Content, msg.Type, msg.Timestamp,
 		metadataToJSON(msg.Metadata),
 	)
@@ -58,6 +65,9 @@ func (db *DB) GetMessages(deviceID, sessionID string, limit int) ([]*protocol.Se
 			msg.Metadata = jsonToMetadata(metadataJSON.String)
 		}
 		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	// If we used LIMIT, reverse to get chronological order

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,14 +34,30 @@ func main() {
 	}
 	defer database.Close()
 
-	phoneSecret := os.Getenv("NEKONEST_PHONE_SECRET")
+	phoneSecret := strings.TrimSpace(os.Getenv("NEKONEST_PHONE_SECRET"))
 	if phoneSecret == "" {
-		log.Printf("⚠️  NEKONEST_PHONE_SECRET not set — phone API/WS are open (dev only)")
+		log.Printf("⚠️  NEKONEST_PHONE_SECRET not set — local-only development mode")
+		if strings.TrimSpace(os.Getenv("NEKONEST_ALLOWED_ORIGINS")) == "" {
+			_ = os.Setenv("NEKONEST_ALLOWED_ORIGINS", defaultLocalOrigins(*port))
+		}
 	} else {
 		log.Printf("🔒 phone secret auth enabled")
 	}
+	if strings.TrimSpace(os.Getenv("NEKONEST_BOOTSTRAP_TOKEN")) == "" {
+		if phoneSecret != "" {
+			log.Printf("⚠️  NEKONEST_BOOTSTRAP_TOKEN not set while PHONE_SECRET is set — device registration is disabled")
+		} else {
+			log.Printf("⚠️  NEKONEST_BOOTSTRAP_TOKEN not set — /api/devices/register is open (dev only)")
+		}
+	} else {
+		log.Printf("🔒 device registration bootstrap token enabled")
+	}
+	if v := strings.TrimSpace(os.Getenv("NEKONEST_TRUST_PROXY")); v == "1" || strings.EqualFold(v, "true") {
+		log.Printf("🔒 TRUST_PROXY on — X-Forwarded-For used for rate limits (only behind a trusted reverse proxy)")
+	}
 
 	server := ws.NewWithSecret(database, phoneSecret)
+	server.SetDataDir(*dataDir)
 
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
@@ -64,15 +81,19 @@ func main() {
 	// Apply middleware
 	handler := ws.LoggingMiddleware(ws.CORSMiddleware(mux))
 
-	addr := ":" + *port
+	addr := listenAddress(*port, phoneSecret)
 
 	// Create HTTP server with graceful shutdown support
 	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      handler,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:    addr,
+		Handler: handler,
+		// WebSocket long-poll: do not set WriteTimeout (kills idle WS frames).
+		// ReadHeaderTimeout bounds slowloris on headers; REST bodies are also
+		// capped via MaxBytesReader/LimitReader in handlers (1 MiB).
+		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       60 * time.Second, // REST slow-body cap; WS hijacks before body read
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	// Start server in goroutine
@@ -101,6 +122,23 @@ func main() {
 	}
 
 	log.Println("[server] goodbye 🐱")
+}
+
+// listenAddress prevents an accidentally unauthenticated process from being
+// exposed to the LAN. Public binds are enabled only when phone auth exists.
+func listenAddress(port, phoneSecret string) string {
+	if strings.TrimSpace(phoneSecret) == "" {
+		return "127.0.0.1:" + port
+	}
+	return ":" + port
+}
+
+func defaultLocalOrigins(port string) string {
+	return strings.Join([]string{
+		"http://127.0.0.1:" + port,
+		"http://localhost:" + port,
+		"http://[::1]:" + port,
+	}, ",")
 }
 
 // spaHandler returns an HTTP handler that serves the SPA's index.html
@@ -133,5 +171,3 @@ func spaHandler(distDir string) http.HandlerFunc {
 		}
 	}
 }
-
-

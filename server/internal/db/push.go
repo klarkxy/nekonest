@@ -2,6 +2,8 @@ package db
 
 import "time"
 
+const maxPushSubscriptionsPerDevice = 32
+
 // PushSubscription represents a Web Push subscription.
 type PushSubscription struct {
 	ID       int64  `json:"id"`
@@ -11,17 +13,39 @@ type PushSubscription struct {
 	Auth     string `json:"auth"`
 }
 
-// SavePushSubscription stores a push subscription.
+// SavePushSubscription stores one endpoint mapping per device. A browser reuses
+// the same endpoint while the user subscribes to multiple devices.
 func (db *DB) SavePushSubscription(sub *PushSubscription) error {
 	now := time.Now().Unix()
-	_, err := db.conn.Exec(`
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`
 		INSERT INTO push_subscriptions (device_id, endpoint, p256dh, auth, created_at)
 		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(endpoint) DO UPDATE SET device_id = ?, p256dh = ?, auth = ?`,
+		ON CONFLICT(endpoint, device_id) DO UPDATE SET
+			p256dh = excluded.p256dh,
+			auth = excluded.auth,
+			created_at = excluded.created_at`,
 		sub.DeviceID, sub.Endpoint, sub.P256DH, sub.Auth, now,
-		sub.DeviceID, sub.P256DH, sub.Auth,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`
+		DELETE FROM push_subscriptions
+		WHERE id IN (
+			SELECT id FROM push_subscriptions
+			WHERE device_id = ?
+			ORDER BY created_at DESC, id DESC
+			LIMIT -1 OFFSET ?
+		)`,
+		sub.DeviceID, maxPushSubscriptionsPerDevice,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetPushSubscriptions returns all subscriptions for a device.

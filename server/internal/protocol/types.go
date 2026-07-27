@@ -6,26 +6,34 @@ import "time"
 type MessageType string
 
 const (
-	MsgDeviceOnline   MessageType = "device_online"
-	MsgDeviceOffline  MessageType = "device_offline"
-	MsgDeviceList     MessageType = "device_list"
-	MsgSessionList    MessageType = "session_list"
-	MsgSessionUpdate  MessageType = "session_update"
-	MsgSessionMessage MessageType = "session_message" // new: real-time output streaming
-	MsgSendPrompt     MessageType = "send_prompt"
-	MsgPromptSent     MessageType = "prompt_sent"
-	MsgApprove        MessageType = "approve"
-	MsgDeny           MessageType = "deny"
-	MsgInterrupt      MessageType = "interrupt"
-	MsgHeartbeat      MessageType = "heartbeat"
-	MsgError          MessageType = "error"
-	MsgRegisterDevice MessageType = "register_device"
-	MsgAuthResponse   MessageType = "auth_response"
-	MsgPairRequest    MessageType = "pair_request"
-	MsgPairConfirm    MessageType = "pair_confirm"
-	MsgCreateSession  MessageType = "create_session"  // P2-B: phone requests new session
-	MsgSessionCreated MessageType = "session_created"  // P2-B: server confirms session created
-	MsgSubscribe      MessageType = "subscribe"        // phone subscribes to a device
+	MsgDeviceOnline      MessageType = "device_online"
+	MsgDeviceOffline     MessageType = "device_offline"
+	MsgDeviceList        MessageType = "device_list"
+	MsgSessionList       MessageType = "session_list"
+	MsgSessionUpdate     MessageType = "session_update"
+	MsgSessionMessage    MessageType = "session_message" // new: real-time output streaming
+	MsgSendPrompt        MessageType = "send_prompt"
+	MsgPromptStatusQuery MessageType = "prompt_status_query"
+	MsgPromptNotSeen     MessageType = "prompt_not_seen"
+	MsgPromptAccepted    MessageType = "prompt_accepted"
+	MsgPromptCommitted   MessageType = "prompt_committed"
+	MsgPromptFailed      MessageType = "prompt_failed"
+	MsgPromptSent        MessageType = "prompt_sent"
+	MsgApprove           MessageType = "approve"
+	MsgDeny              MessageType = "deny"
+	MsgInterrupt         MessageType = "interrupt"
+	MsgHeartbeat         MessageType = "heartbeat"
+	MsgError             MessageType = "error"
+	MsgRegisterDevice    MessageType = "register_device"
+	MsgAuthResponse      MessageType = "auth_response"
+	MsgPairRequest       MessageType = "pair_request"
+	MsgPairConfirm       MessageType = "pair_confirm"
+	MsgCreateSession     MessageType = "create_session"  // P2-B: phone requests new session
+	MsgSessionCreated    MessageType = "session_created" // P2-B: server confirms session created
+	MsgSubscribe         MessageType = "subscribe"       // phone subscribes to a device
+	MsgSubscribeAck      MessageType = "subscribe_ack"
+	MsgFetchHistory      MessageType = "fetch_history"   // phone asks daemon for PC-side transcript
+	MsgSessionHistory    MessageType = "session_history" // daemon returns imported transcript
 )
 
 // NekoMessage is the JSON envelope for all communication.
@@ -74,6 +82,8 @@ type AgentSession struct {
 	Status          AgentStatus      `json:"status"`
 	Summary         string           `json:"summary"`
 	LastActivity    int64            `json:"last_activity"`
+	ProjectDir      string           `json:"project_dir,omitempty"` // full path on PC
+	Project         string           `json:"project,omitempty"`     // short folder name
 	PendingApproval *PendingApproval `json:"pending_approval,omitempty"`
 }
 
