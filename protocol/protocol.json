@@ -1,31 +1,49 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nekonest.local/protocol.json",
   "title": "NekoNest Protocol",
-  "description": "JSON Envelope for NekoNest communication protocol",
+  "description": "JSON envelope for NekoNest phone ↔ server ↔ daemon communication",
+  "$ref": "#/definitions/NekoMessage",
   "definitions": {
+    "MessageType": {
+      "type": "string",
+      "enum": [
+        "device_online",
+        "device_offline",
+        "device_list",
+        "session_list",
+        "session_update",
+        "session_message",
+        "send_prompt",
+        "prompt_status_query",
+        "prompt_not_seen",
+        "prompt_accepted",
+        "prompt_committed",
+        "prompt_failed",
+        "prompt_sent",
+        "approve",
+        "deny",
+        "interrupt",
+        "heartbeat",
+        "error",
+        "register_device",
+        "auth_response",
+        "pair_request",
+        "pair_confirm",
+        "create_session",
+        "session_created",
+        "subscribe",
+        "subscribe_ack",
+        "fetch_history",
+        "session_history"
+      ]
+    },
     "NekoMessage": {
       "type": "object",
       "required": ["type", "device_id", "timestamp"],
+      "additionalProperties": false,
       "properties": {
-        "type": {
-          "type": "string",
-          "enum": [
-            "device_online",
-            "device_offline",
-            "session_list",
-            "session_update",
-            "send_prompt",
-            "approve",
-            "deny",
-            "interrupt",
-            "heartbeat",
-            "error",
-            "register_device",
-            "auth_response",
-            "pair_request",
-            "pair_confirm"
-          ]
-        },
+        "type": { "$ref": "#/definitions/MessageType" },
         "device_id": {
           "type": "string",
           "description": "Unique device identifier"
@@ -66,6 +84,8 @@
         "status": { "type": "string", "enum": ["running", "idle", "waiting_approval"] },
         "summary": { "type": "string" },
         "last_activity": { "type": "integer" },
+        "project_dir": { "type": "string" },
+        "project": { "type": "string" },
         "pending_approval": {
           "type": "object",
           "properties": {
@@ -84,9 +104,24 @@
         "id": { "type": "string" },
         "role": { "type": "string", "enum": ["assistant", "user", "tool", "system"] },
         "content": { "type": "string" },
-        "type": { "type": "string", "enum": ["thinking", "text", "tool_call", "tool_result", "error"] },
+        "type": {
+          "type": "string",
+          "enum": ["thinking", "text", "assistant", "tool_call", "tool_result", "error", "system"]
+        },
         "timestamp": { "type": "integer" },
         "metadata": { "type": "object" }
+      }
+    },
+    "AttachmentRef": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "id": { "type": "string" },
+        "url": { "type": "string" },
+        "name": { "type": "string" },
+        "mime": { "type": "string" },
+        "size": { "type": "integer" },
+        "key": { "type": "string" }
       }
     }
   }
