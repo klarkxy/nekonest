@@ -16,7 +16,7 @@ const MAX_EDGE = 1920
 const MAX_COUNT = 5
 
 const ALLOWED = new Set([
-  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif',
   'text/plain', 'text/markdown', 'application/pdf', 'application/json'
 ])
 
@@ -24,16 +24,74 @@ export function isImageMime(mime: string): boolean {
   return mime.startsWith('image/')
 }
 
-/** Compress images client-side; pass through other types. */
+type DecodedImage = {
+  source: CanvasImageSource
+  width: number
+  height: number
+  close: () => void
+}
+
+async function decodeImage(file: File): Promise<DecodedImage> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file)
+      return {
+        source: bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+        close: () => bitmap.close()
+      }
+    } catch {
+      // Some mobile formats are supported by <img> but not createImageBitmap.
+    }
+  }
+
+  if (
+    typeof Image === 'undefined' ||
+    typeof URL.createObjectURL !== 'function'
+  ) {
+    throw new Error(`${file.name} 无法在当前浏览器中读取`)
+  }
+
+  const objectURL = URL.createObjectURL(file)
+  const image = new Image()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error('image decode failed'))
+      image.src = objectURL
+    })
+    return {
+      source: image,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      close: () => URL.revokeObjectURL(objectURL)
+    }
+  } catch {
+    URL.revokeObjectURL(objectURL)
+    throw new Error(`${file.name} 无法读取，请转换为 JPG、PNG 或 WebP 后重试`)
+  }
+}
+
+/** Pass through upload-ready files; only decode images that need shrinking/conversion. */
 export async function prepareFile(file: File): Promise<File> {
-  if (!file.type.startsWith('image/') || file.type === 'image/gif') {
+  const mime = file.type.toLowerCase()
+  if (!mime.startsWith('image/') || mime === 'image/gif') {
     if (file.size > MAX_BYTES) {
       throw new Error(`${file.name} 超过 4MB`)
     }
     return file
   }
-  const bitmap = await createImageBitmap(file)
-  let { width, height } = bitmap
+
+  // Avoid an unnecessary decode/re-encode step. Besides preserving image
+  // quality, this keeps normal screenshots working in browsers whose
+  // createImageBitmap implementation is missing or incomplete.
+  if (ALLOWED.has(mime) && file.size <= MAX_BYTES) {
+    return file
+  }
+
+  const decoded = await decodeImage(file)
+  let { width, height } = decoded
   const scale = Math.min(1, MAX_EDGE / Math.max(width, height))
   width = Math.round(width * scale)
   height = Math.round(height * scale)
@@ -42,15 +100,17 @@ export async function prepareFile(file: File): Promise<File> {
   canvas.height = height
   const ctx = canvas.getContext('2d')
   if (!ctx) {
-    bitmap.close()
-    return file
+    decoded.close()
+    throw new Error(`${file.name} 无法在当前浏览器中压缩`)
   }
-  ctx.drawImage(bitmap, 0, 0, width, height)
-  bitmap.close()
+  ctx.drawImage(decoded.source, 0, 0, width, height)
+  decoded.close()
   const blob: Blob | null = await new Promise(resolve =>
     canvas.toBlob(resolve, 'image/jpeg', 0.85)
   )
-  if (!blob) return file
+  if (!blob) {
+    throw new Error(`${file.name} 无法在当前浏览器中压缩`)
+  }
   if (blob.size > MAX_BYTES) {
     throw new Error(`${file.name} 压缩后仍超过 4MB`)
   }
@@ -66,8 +126,8 @@ export async function uploadAttachment(
     throw new Error(`${file.name} 超过 4MB`)
   }
   const mime = file.type || 'application/octet-stream'
-  if (!ALLOWED.has(mime) && !mime.startsWith('image/')) {
-    // allow after prepareFile may convert
+  if (!ALLOWED.has(mime) && mime !== 'application/octet-stream') {
+    throw new Error(`${file.name} 的文件类型不受支持`)
   }
   const fd = new FormData()
   fd.append('file', file)

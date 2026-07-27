@@ -160,23 +160,26 @@
     >{{ sessionStore.lastError }}</div>
 
     <div class="input-bar">
-      <input
-        ref="fileInput"
-        type="file"
-        class="hidden-file"
-        multiple
-        accept="image/*,.txt,.md,.pdf,.json,text/plain,text/markdown,application/pdf"
-        @change="onFileChange"
-      />
-      <n-button
-        circle
-        quaternary
-        aria-label="添加附件"
-        :disabled="sending || uploading"
-        @click="fileInput?.click()"
-      >
-        📎
-      </n-button>
+      <span class="attachment-picker">
+        <n-button
+          circle
+          quaternary
+          tabindex="-1"
+          aria-hidden="true"
+          :disabled="sending || uploading"
+        >
+          📎
+        </n-button>
+        <input
+          type="file"
+          class="attachment-file"
+          multiple
+          accept="image/*,.txt,.md,.pdf,.json,text/plain,text/markdown,application/pdf"
+          aria-label="添加附件"
+          :disabled="sending || uploading"
+          @change="onFileChange"
+        />
+      </span>
       <n-input
         v-model:value="inputText"
         placeholder="输入指令，或点 📎 加图/附件…"
@@ -229,7 +232,6 @@ const sending = ref(false)
 const uploading = ref(false)
 const uploadError = ref('')
 const messagesRef = ref<HTMLElement>()
-const fileInput = ref<HTMLInputElement | null>(null)
 const pendingAtts = ref<AttachmentRef[]>([])
 /** avoid writing draft while restoring */
 let restoringDraft = false
@@ -791,5 +793,18 @@ function handleInterrupt() {
   align-items: flex-end;
 }
 .input-bar :deep(.n-input) { flex: 1; }
-.hidden-file { display: none; }
+.attachment-picker {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.attachment-file {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.attachment-file:disabled { cursor: not-allowed; }
 </style>
