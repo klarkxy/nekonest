@@ -15,6 +15,8 @@
 ```bash
 cd server && go build -o nekonest-server ./cmd/server
 export NEKONEST_PHONE_SECRET='长随机串'
+export NEKONEST_BOOTSTRAP_TOKEN='另一段长随机串'   # 公网必设，保护设备注册
+# 若前面有 Caddy/Nginx：export NEKONEST_TRUST_PROXY=1
 ./nekonest-server -port 8080 -data ./data -pwa ../pwa/dist
 ```
 

@@ -1,4 +1,4 @@
-.PHONY: all server daemon pwa clean dev-server dev-daemon dev-pwa
+.PHONY: all server daemon pwa clean dev-server dev-daemon dev-pwa test test-server test-daemon test-pwa
 
 # Default target
 all: server daemon pwa
@@ -34,6 +34,18 @@ dev-daemon:
 dev-pwa:
 	cd pwa && pnpm dev
 
+# Unit tests
+test: test-server test-daemon test-pwa
+
+test-server:
+	cd server && go test ./...
+
+test-daemon:
+	cd daemon && go test ./...
+
+test-pwa:
+	cd pwa && pnpm install && pnpm test
+
 # Clean build artifacts
 clean:
 	rm -rf bin/
@@ -51,5 +63,6 @@ proto:
 # Production-oriented env reminders (not secrets — just names)
 env-hints:
 	@echo "NEKONEST_PHONE_SECRET     - protect phone REST/WS"
-	@echo "NEKONEST_BOOTSTRAP_TOKEN  - protect /api/devices/register"
+	@echo "NEKONEST_BOOTSTRAP_TOKEN  - protect /api/devices/register (required on public VPS)"
 	@echo "NEKONEST_ALLOWED_ORIGINS  - CORS allowlist (comma-separated)"
+	@echo "NEKONEST_VAPID_*          - optional Web Push (PUBLIC_KEY, PRIVATE_KEY, SUBJECT)"

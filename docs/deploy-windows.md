@@ -12,6 +12,8 @@ go build -trimpath -ldflags="-s -w" -o nekonest-daemon.exe ./cmd/daemon
 
 ```powershell
 $env:NEKONEST_SERVER="https://nekonest.example.com"
+# 与 VPS 上 NEKONEST_BOOTSTRAP_TOKEN 相同（公网注册必填）
+$env:NEKONEST_BOOTSTRAP_TOKEN="另一段长随机串"
 .\nekonest-daemon.exe -register -name "书房电脑"
 ```
 
