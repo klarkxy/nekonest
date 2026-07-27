@@ -92,14 +92,19 @@ func (a *KiloAdapter) Discover() ([]*SessionInfo, error) {
 
 	// time_updated is unix milliseconds. 7-day window + higher limit for phone history.
 	cutoff := time.Now().Add(-7 * 24 * time.Hour).UnixMilli()
-	rows, err := db.Query(`
+	query := `
 		SELECT id, title, directory, time_updated, agent
 		FROM session
 		WHERE time_archived IS NULL
-		  AND time_updated >= ?
+		  AND time_updated >= ?`
+	if kiloSessionHasParentID(db) {
+		query += `
+		  AND parent_id IS NULL`
+	}
+	query += `
 		ORDER BY time_updated DESC
-		LIMIT 100
-	`, cutoff)
+		LIMIT 100`
+	rows, err := db.Query(query, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("query sessions: %w", err)
 	}
@@ -161,6 +166,35 @@ func (a *KiloAdapter) Discover() ([]*SessionInfo, error) {
 	a.watcherMu.Unlock()
 
 	return sessions, nil
+}
+
+// kiloSessionHasParentID keeps discovery compatible with older Kilo schemas.
+// Current Kilo/OpenCode versions use session.parent_id as the authoritative
+// child-agent marker.
+func kiloSessionHasParentID(db *sql.DB) bool {
+	rows, err := db.Query(`PRAGMA table_info(session)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid      int
+			name     string
+			colType  string
+			notNull  int
+			defaultV interface{}
+			primary  int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultV, &primary); err != nil {
+			continue
+		}
+		if name == "parent_id" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *KiloAdapter) latestTextSummary(db *sql.DB, sessionID string) string {

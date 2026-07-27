@@ -3,6 +3,7 @@ package adapters
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/nekonest/daemon/internal/agentexec"
 )
+
+var errCodexSubagentRollout = errors.New("codex subagent rollout")
 
 // CodexAdapter discovers and monitors Codex sessions.
 type CodexAdapter struct {
@@ -83,6 +86,9 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 
 		session, parseErr := a.parseRolloutFile(path, info)
 		if parseErr != nil {
+			if errors.Is(parseErr, errCodexSubagentRollout) {
+				return nil
+			}
 			log.Printf("[codex] skip %s: %v", path, parseErr)
 			return nil
 		}
@@ -251,6 +257,9 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 
 		// Modern Codex: session_meta carries the real thread/session ids.
 		if eventType == "session_meta" && payload != nil {
+			if isCodexSubagentSessionMeta(payload) {
+				return nil, errCodexSubagentRollout
+			}
 			if id, _ := payload["id"].(string); id != "" {
 				sessionID = id
 			} else if id, _ := payload["session_id"].(string); id != "" {
@@ -376,6 +385,25 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 		ProjectDir:      projectDir,
 		PendingApproval: pendingApproval,
 	}, nil
+}
+
+// isCodexSubagentSessionMeta identifies only explicit Codex subagent markers.
+// Other lineage fields (parent_thread_id, forked_from_id, id != session_id)
+// may also occur on user-created forks, so they must not be used to hide a
+// session.
+func isCodexSubagentSessionMeta(payload map[string]interface{}) bool {
+	if threadSource, _ := payload["thread_source"].(string); threadSource == "subagent" {
+		return true
+	}
+	switch source := payload["source"].(type) {
+	case string:
+		return source == "subagent"
+	case map[string]interface{}:
+		_, ok := source["subagent"]
+		return ok
+	default:
+		return false
+	}
 }
 
 // codexSessionIDFromFilename extracts the UUID suffix from

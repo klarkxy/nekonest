@@ -3,6 +3,7 @@ package adapters
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/nekonest/daemon/internal/agentexec"
 )
+
+var errClaudeSubagentTranscript = errors.New("claude subagent transcript")
 
 // ClaudeCodeAdapter discovers and monitors Claude Code sessions.
 type ClaudeCodeAdapter struct {
@@ -74,12 +77,21 @@ func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 		if err != nil {
 			return nil // skip errors
 		}
-		if info.IsDir() || !strings.HasSuffix(info.Name(), ".jsonl") {
+		if info.IsDir() {
+			if strings.EqualFold(info.Name(), "subagents") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".jsonl") {
 			return nil
 		}
 
 		session, parseErr := a.parseSessionFile(path, info)
 		if parseErr != nil {
+			if errors.Is(parseErr, errClaudeSubagentTranscript) {
+				return nil
+			}
 			log.Printf("[claude] skip %s: %v", path, parseErr)
 			return nil
 		}
@@ -178,7 +190,13 @@ func (a *ClaudeCodeAdapter) resolveSessionPath(sessionID string) string {
 	// Fallback walk
 	var found string
 	_ = filepath.Walk(a.projectsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.IsDir() {
+			if strings.EqualFold(info.Name(), "subagents") {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if strings.TrimSuffix(info.Name(), ".jsonl") == sessionID {
@@ -218,6 +236,12 @@ func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*Se
 			continue
 		}
 
+		// Current Claude Code stores child-agent transcripts under a subagents
+		// directory. This first-record check is a defensive fallback for a
+		// future layout that keeps the same explicit sidechain metadata.
+		if msgCount == 0 && isClaudeSubagentRecord(msg) {
+			return nil, errClaudeSubagentTranscript
+		}
 		msgCount++
 
 		if projectDir == "" {
@@ -323,6 +347,12 @@ func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*Se
 		ProjectDir:      projectDir,
 		PendingApproval: pendingApproval,
 	}, nil
+}
+
+func isClaudeSubagentRecord(msg map[string]interface{}) bool {
+	isSidechain, _ := msg["isSidechain"].(bool)
+	agentID, _ := msg["agentId"].(string)
+	return isSidechain && strings.TrimSpace(agentID) != ""
 }
 
 // decodeClaudeProjectDir best-effort reverses Claude's project folder encoding
