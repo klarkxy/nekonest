@@ -10,6 +10,13 @@ server/pwa-dist/
 go-sdk/
 gocache/
 node_modules/
+.kilo/
+
+# Coverage / local test artifacts
+coverage
+*.out
+daemon/c
+daemon/coverage
 
 # Archives / packages
 *.tar.gz
