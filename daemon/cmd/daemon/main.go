@@ -11,11 +11,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/nekonest/daemon/internal/adapters"
+	"github.com/nekonest/daemon/internal/attach"
 	"github.com/nekonest/daemon/internal/config"
 	"github.com/nekonest/daemon/internal/connection"
 )
@@ -60,6 +64,50 @@ func main() {
 	log.Printf("   Device: %s", cfg.DeviceID)
 	log.Printf("   Server: %s", cfg.ServerURL)
 
+	// Runtime config is published as immutable snapshots. Device credentials are
+	// intentionally fixed for this daemon process; changing them requires a
+	// restart so connection authentication and message identity cannot diverge.
+	initialCfg := *cfg
+	var runtimeCfg atomic.Pointer[config.Config]
+	runtimeCfg.Store(&initialCfg)
+	currentConfig := func() *config.Config {
+		return runtimeCfg.Load()
+	}
+	deviceID := initialCfg.DeviceID
+	token := initialCfg.Token
+	activeConfigPath := *configPath
+	if activeConfigPath == "" {
+		activeConfigPath = config.DefaultConfigPath()
+	}
+	activeConfigPath, err = filepath.Abs(activeConfigPath)
+	if err != nil {
+		log.Fatalf("[daemon] resolve config path: %v", err)
+	}
+	activeConfigPath, err = filepath.EvalSymlinks(activeConfigPath)
+	if err != nil {
+		log.Fatalf("[daemon] canonicalize config path for instance lock: %v", err)
+	}
+	journalPath := promptJournalPath(activeConfigPath, deviceID)
+	instanceLock, lockErr := acquireDaemonInstanceLock(activeConfigPath + ".daemon.lock")
+	if lockErr != nil {
+		log.Fatalf("[daemon] refusing to start a second instance: %v", lockErr)
+	}
+	defer func() {
+		if err := instanceLock.Close(); err != nil {
+			log.Printf("[daemon] release instance lock: %v", err)
+		}
+	}()
+	commandJournal, journalErr := loadPromptJournal(
+		journalPath,
+		deviceID,
+		maxAcceptedPromptIDs,
+	)
+	if journalErr != nil {
+		// Failing open could replay a prompt that already reached an agent.
+		log.Fatalf("[daemon] cannot safely load prompt journal: %v", journalErr)
+	}
+	log.Printf("   Prompt journal: %s", commandJournal.path)
+
 	// Initialize adapters
 	ccAdapter := adapters.NewClaudeCodeAdapter()
 	codexAdapter := adapters.NewCodexAdapter()
@@ -76,16 +124,18 @@ func main() {
 	defer cancel()
 
 	// Create server connection
-	client := connection.NewClient(ctx, cfg.ServerURL, cfg.DeviceID, cfg.Token)
+	client := connection.NewClient(ctx, initialCfg.ServerURL, deviceID, token)
 
 	// Wire up agent output callbacks — send session_message back to server
-	setupOutputCallbacks(ccAdapter, codexAdapter, kiloAdapter, client, cfg.DeviceID)
+	setupOutputCallbacks(ccAdapter, codexAdapter, kiloAdapter, client, deviceID)
 
 	// Session discovery state
 	var (
 		sessionMu    sync.Mutex
 		lastSessions = make(map[string]*adapters.SessionInfo)
 	)
+	sessionSends := newSessionLockMap()
+	acceptedPrompts := newPromptAcceptanceCache(maxAcceptedPromptIDs)
 
 	// Handle incoming messages from server
 	client.OnMessage(func(data []byte) {
@@ -123,47 +173,176 @@ func main() {
 
 		switch msgType {
 		case "send_prompt":
-			prompt, _ := payload["prompt"].(string)
-			if prompt == "" {
-				log.Printf("[daemon] empty prompt")
-				sendDaemonError(client, cfg.DeviceID, sessionID, "empty prompt")
+			// Serialize sends per session (prevents double codex/kilo process).
+			unlock := sessionSends.lock(sessionID)
+			defer unlock()
+
+			clientMsgID, _ := payload["client_msg_id"].(string)
+			if clientMsgID == "" {
+				clientMsgID, _ = payload["message_id"].(string)
+			}
+			if clientMsgID == "" {
+				sendPromptFailed(client, deviceID, sessionID, "", "client_msg_id required for safe dispatch")
 				return
 			}
-			if targetAdapter == nil {
-				log.Printf("[daemon] no adapter for session %s, trying all", sessionID)
-				var lastErr error
-				for _, a := range adapterList {
-					if err := a.SendPrompt(sessionID, prompt); err == nil {
-						log.Printf("[daemon] prompt sent via %s", a.Name())
-						return
-					} else {
-						lastErr = err
+			if recorded, seen := commandJournal.state(sessionID, clientMsgID); seen {
+				switch recorded.Status {
+				case promptJournalAccepted, promptJournalCommitted:
+					accepted := acceptedPrompt{prompt: recorded.PromptEcho}
+					if cached, ok := acceptedPrompts.get(sessionID, clientMsgID); ok {
+						accepted = cached
 					}
+					log.Printf("[daemon] re-acknowledging durable accepted prompt session=%s client_msg_id=%s", sessionID, clientMsgID)
+					sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
+				default:
+					log.Printf("[daemon] refusing replay of unresolved prompt session=%s client_msg_id=%s state=%s", sessionID, clientMsgID, recorded.Status)
+					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate)
 				}
-				msg := "failed to send prompt: session not found or agent CLI error"
-				if lastErr != nil {
-					msg = lastErr.Error()
+				return
+			}
+			if accepted, duplicate := acceptedPrompts.get(sessionID, clientMsgID); duplicate {
+				log.Printf("[daemon] re-acknowledging accepted prompt session=%s client_msg_id=%s", sessionID, clientMsgID)
+				sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
+				return
+			}
+			prompt, _ := payload["prompt"].(string)
+			originalPrompt := prompt
+			// Drop stale attachment blocks if client re-sent an already-augmented draft.
+			prompt = stripNekoAttachSuffix(prompt)
+			refs := parseAttachmentRefs(payload["attachments"])
+			if prompt == "" && len(refs) == 0 {
+				log.Printf("[daemon] empty prompt")
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "empty prompt")
+				return
+			}
+
+			if len(refs) > 0 {
+				attDir, _, suffix, aerr := attach.Materialize(currentConfig().ServerURL, sessionID, refs)
+				if aerr != nil {
+					log.Printf("[daemon] attach materialize: %v", aerr)
+					sendPromptFailed(client, deviceID, sessionID, clientMsgID, "attachment download failed: "+aerr.Error())
+					return
 				}
-				log.Printf("[daemon] %s", msg)
-				sendDaemonError(client, cfg.DeviceID, sessionID, msg)
+				// Agent may read files during the run; remove after a few hours.
+				if attDir != "" {
+					go func(dir string) {
+						time.Sleep(2 * time.Hour)
+						_ = os.RemoveAll(dir)
+					}(attDir)
+				}
+				if prompt == "" {
+					prompt = "(user sent attachments)"
+				}
+				prompt = prompt + suffix
+				log.Printf("[daemon] attached %d file(s) into prompt for %s", len(refs), sessionID)
+			}
+
+			if targetAdapter == nil {
+				log.Printf("[daemon] no cached adapter for session %s, probing local agent stores", sessionID)
+				// Prefer single best guess — never blast all agents (that multi-sends).
+				targetAdapter = pickAdapterForSession(sessionID, adapterList)
+			}
+			if targetAdapter == nil {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "session not found on this PC")
+				return
+			}
+			// Persist before crossing the Agent boundary. If the daemon dies
+			// after this write, startup converts dispatching to indeterminate
+			// and will never automatically execute the command again.
+			if err := commandJournal.markDispatching(sessionID, clientMsgID, originalPrompt); err != nil {
+				log.Printf("[daemon] prompt journal refused dispatch session=%s client_msg_id=%s: %v", sessionID, clientMsgID, err)
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "prompt was not executed because its durable dispatch record could not be written: "+err.Error())
 				return
 			}
 			if err := targetAdapter.SendPrompt(sessionID, prompt); err != nil {
-				log.Printf("[daemon] send_prompt error: %v", err)
-				sendDaemonError(client, cfg.DeviceID, sessionID, err.Error())
+				log.Printf("[daemon] send_prompt error via %s: %v", targetAdapter.Name(), err)
+				// The adapter API cannot prove whether a failing Start/Send
+				// crossed into the agent. Preserve the ambiguity instead of
+				// enabling an unsafe automatic retry.
+				if journalErr := commandJournal.markIndeterminate(sessionID, clientMsgID); journalErr != nil {
+					log.Printf("[daemon] mark prompt indeterminate failed: %v", journalErr)
+				}
+				sendPromptIndeterminate(
+					client,
+					deviceID,
+					sessionID,
+					clientMsgID,
+					promptOutcomeIndeterminate+"; agent returned: "+err.Error(),
+				)
 			} else {
-				log.Printf("[daemon] prompt sent successfully")
+				if err := commandJournal.markAccepted(sessionID, clientMsgID); err != nil {
+					log.Printf("[daemon] persist prompt acceptance failed session=%s client_msg_id=%s: %v", sessionID, clientMsgID, err)
+					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate+"; acceptance journal update failed")
+					return
+				}
+				accepted := acceptedPrompt{prompt: boundedPromptEcho(originalPrompt)}
+				acceptedPrompts.add(sessionID, clientMsgID, accepted)
+				sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
+				log.Printf("[daemon] prompt sent via %s", targetAdapter.Name())
 			}
+
+		case "prompt_status_query":
+			unlock := sessionSends.lock(sessionID)
+			defer unlock()
+			clientMsgID, _ := payload["client_msg_id"].(string)
+			if clientMsgID == "" {
+				sendPromptFailed(client, deviceID, sessionID, "", "client_msg_id required")
+				return
+			}
+			if recorded, seen := commandJournal.state(sessionID, clientMsgID); seen {
+				if recorded.Status == promptJournalAccepted || recorded.Status == promptJournalCommitted {
+					accepted := acceptedPrompt{prompt: recorded.PromptEcho}
+					if cached, ok := acceptedPrompts.get(sessionID, clientMsgID); ok {
+						accepted = cached
+					}
+					log.Printf("[daemon] durable prompt status accepted session=%s client_msg_id=%s", sessionID, clientMsgID)
+					sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
+				} else {
+					log.Printf("[daemon] durable prompt status unresolved session=%s client_msg_id=%s state=%s", sessionID, clientMsgID, recorded.Status)
+					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate)
+				}
+				return
+			}
+			log.Printf("[daemon] prompt status absent from durable journal session=%s client_msg_id=%s", sessionID, clientMsgID)
+			sendPromptNotSeen(client, deviceID, sessionID, clientMsgID)
+
+		case "prompt_committed":
+			unlock := sessionSends.lock(sessionID)
+			defer unlock()
+			clientMsgID, _ := payload["client_msg_id"].(string)
+			if clientMsgID == "" {
+				log.Printf("[daemon] prompt_committed without client_msg_id session=%s", sessionID)
+				return
+			}
+			recorded, seen := commandJournal.state(sessionID, clientMsgID)
+			if !seen {
+				// A duplicate commit may arrive after an old committed record
+				// was evicted; there is nothing left to transition.
+				log.Printf("[daemon] prompt_committed for absent/evicted record session=%s client_msg_id=%s", sessionID, clientMsgID)
+				return
+			}
+			if recorded.Status == promptJournalCommitted {
+				return
+			}
+			if recorded.Status != promptJournalAccepted {
+				log.Printf("[daemon] refusing prompt_committed for state=%s session=%s client_msg_id=%s", recorded.Status, sessionID, clientMsgID)
+				return
+			}
+			if err := commandJournal.markCommitted(sessionID, clientMsgID); err != nil {
+				log.Printf("[daemon] persist prompt_committed failed session=%s client_msg_id=%s: %v", sessionID, clientMsgID, err)
+				return
+			}
+			log.Printf("[daemon] prompt committed by server session=%s client_msg_id=%s", sessionID, clientMsgID)
 
 		case "approve":
 			approvalID, _ := payload["approval_id"].(string)
 			if targetAdapter == nil {
-				sendDaemonError(client, cfg.DeviceID, sessionID, "no adapter for session (is agent process still running?)")
+				sendDaemonError(client, deviceID, sessionID, "no adapter for session (is agent process still running?)")
 				return
 			}
 			if err := targetAdapter.Approve(sessionID, approvalID); err != nil {
 				log.Printf("[daemon] approve error: %v", err)
-				sendDaemonError(client, cfg.DeviceID, sessionID, "approve failed: "+err.Error())
+				sendDaemonError(client, deviceID, sessionID, "approve failed: "+err.Error())
 			} else {
 				log.Printf("[daemon] approved: %s", approvalID)
 			}
@@ -171,26 +350,110 @@ func main() {
 		case "deny":
 			approvalID, _ := payload["approval_id"].(string)
 			if targetAdapter == nil {
-				sendDaemonError(client, cfg.DeviceID, sessionID, "no adapter for session")
+				sendDaemonError(client, deviceID, sessionID, "no adapter for session")
 				return
 			}
 			if err := targetAdapter.Deny(sessionID, approvalID); err != nil {
 				log.Printf("[daemon] deny error: %v", err)
-				sendDaemonError(client, cfg.DeviceID, sessionID, "deny failed: "+err.Error())
+				sendDaemonError(client, deviceID, sessionID, "deny failed: "+err.Error())
 			} else {
 				log.Printf("[daemon] denied: %s", approvalID)
 			}
 
 		case "interrupt":
 			if targetAdapter == nil {
-				sendDaemonError(client, cfg.DeviceID, sessionID, "no adapter for session")
+				sendDaemonError(client, deviceID, sessionID, "no adapter for session")
 				return
 			}
 			if err := targetAdapter.Interrupt(sessionID); err != nil {
 				log.Printf("[daemon] interrupt error: %v", err)
-				sendDaemonError(client, cfg.DeviceID, sessionID, "interrupt failed: "+err.Error())
+				sendDaemonError(client, deviceID, sessionID, "interrupt failed: "+err.Error())
 			} else {
 				log.Printf("[daemon] interrupted session %s", sessionID)
+			}
+
+		case "fetch_history":
+			limit := 40
+			if payload != nil {
+				if n, ok := payload["limit"].(float64); ok && int(n) > 0 {
+					limit = int(n)
+				}
+			}
+			if limit > 40 {
+				limit = 40
+			}
+			var (
+				hist   []*adapters.HistoryMessage
+				source string
+				err    error
+			)
+			try := func(a adapters.Adapter) {
+				if a == nil || hist != nil {
+					return
+				}
+				h, e := a.FetchHistory(sessionID, limit)
+				if e == nil && h != nil {
+					hist = h
+					source = a.Name()
+					err = nil
+				} else if e != nil && err == nil {
+					err = e
+				}
+			}
+			try(targetAdapter)
+			if hist == nil {
+				for _, a := range adapterList {
+					try(a)
+					if hist != nil {
+						break
+					}
+				}
+			}
+			if hist == nil {
+				msg := "no history found for session"
+				if err != nil {
+					msg = err.Error()
+				}
+				log.Printf("[daemon] fetch_history: %s", msg)
+				// Still reply empty so phone stops waiting
+				hist = []*adapters.HistoryMessage{}
+				if source == "" {
+					source = "unknown"
+				}
+			}
+			msgs := make([]map[string]interface{}, 0, len(hist))
+			for _, m := range hist {
+				if m == nil {
+					continue
+				}
+				msgs = append(msgs, map[string]interface{}{
+					"id":        m.ID,
+					"role":      m.Role,
+					"content":   m.Content,
+					"type":      m.Type,
+					"timestamp": m.Timestamp,
+					"metadata": map[string]interface{}{
+						"imported":   true,
+						"agent_type": source,
+					},
+				})
+			}
+			out := map[string]interface{}{
+				"type":       "session_history",
+				"device_id":  deviceID,
+				"session_id": sessionID,
+				"timestamp":  time.Now().Unix(),
+				"payload": map[string]interface{}{
+					"source":    source,
+					"truncated": len(msgs) >= limit,
+					"limit":     limit,
+					"messages":  msgs,
+				},
+			}
+			if e := client.Send(out); e != nil {
+				log.Printf("[daemon] send session_history: %v", e)
+			} else {
+				log.Printf("[daemon] session_history %s source=%s n=%d", sessionID, source, len(msgs))
 			}
 
 		case "create_session":
@@ -202,17 +465,18 @@ func main() {
 			log.Printf("[daemon] create_session (experimental): type=%s workDir=%s", agentType, workDir)
 
 			go func() {
-				newSessionID, err := startNewSession(agentType, prompt, workDir, ccAdapter, codexAdapter, cfg)
+				cfgSnapshot := *currentConfig()
+				newSessionID, err := startNewSession(agentType, prompt, workDir, ccAdapter, codexAdapter, &cfgSnapshot)
 				if err != nil {
 					log.Printf("[daemon] create_session error: %v", err)
-					sendDaemonError(client, cfg.DeviceID, "", "create_session failed: "+err.Error()+
+					sendDaemonError(client, deviceID, "", "create_session failed: "+err.Error()+
 						" — prefer opening a session on the PC first, then use Discover/resume")
 					return
 				}
 
 				confirmMsg := map[string]interface{}{
 					"type":       "session_created",
-					"device_id":  cfg.DeviceID,
+					"device_id":  deviceID,
 					"session_id": newSessionID,
 					"timestamp":  time.Now().Unix(),
 					"payload": map[string]interface{}{
@@ -229,6 +493,37 @@ func main() {
 
 		default:
 			log.Printf("[daemon] unknown message type: %s", msgType)
+		}
+	})
+
+	// Session force-report after reconnect (server cache starts empty).
+	forceReport := make(chan struct{}, 1)
+	requestForceReport := func() {
+		select {
+		case forceReport <- struct{}{}:
+		default:
+		}
+	}
+	client.OnConnect(func() {
+		requestForceReport()
+		pending := commandJournal.uncommittedAccepted()
+		if len(pending) > 0 {
+			log.Printf("[daemon] re-acknowledging %d accepted prompt(s) awaiting server commit", len(pending))
+		}
+		for _, record := range pending {
+			accepted := acceptedPrompt{prompt: record.PromptEcho}
+			if cached, ok := acceptedPrompts.get(record.SessionID, record.ClientMsgID); ok {
+				accepted = cached
+			}
+			if err := sendPromptAccepted(
+				client,
+				deviceID,
+				record.SessionID,
+				record.ClientMsgID,
+				accepted,
+			); err != nil {
+				break
+			}
 		}
 	})
 
@@ -252,7 +547,7 @@ func main() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
-		discoverAndReport := func() {
+		discoverAndReport := func(force bool) {
 			var allSessions []*adapters.SessionInfo
 			for _, adapter := range adapterList {
 				sessions, err := adapter.Discover()
@@ -264,7 +559,7 @@ func main() {
 			}
 
 			// Check for changes
-			changed := false
+			changed := force
 			sessionMu.Lock()
 
 			// Build new session map
@@ -274,14 +569,16 @@ func main() {
 			}
 
 			// Compare with last state
-			if len(newSessions) != len(lastSessions) {
-				changed = true
-			} else {
-				for id, newS := range newSessions {
-					oldS, ok := lastSessions[id]
-					if !ok || oldS.Status != newS.Status || oldS.Summary != newS.Summary {
-						changed = true
-						break
+			if !changed {
+				if len(newSessions) != len(lastSessions) {
+					changed = true
+				} else {
+					for id, newS := range newSessions {
+						oldS, ok := lastSessions[id]
+						if !ok || oldS.Status != newS.Status || oldS.Summary != newS.Summary || oldS.ProjectDir != newS.ProjectDir {
+							changed = true
+							break
+						}
 					}
 				}
 			}
@@ -289,33 +586,45 @@ func main() {
 			lastSessions = newSessions
 			sessionMu.Unlock()
 
-			// Always report on first run or when changed
+			// Always report on force (reconnect) or when local list changed
 			if changed {
 				report := map[string]interface{}{
 					"type":      "session_list",
-					"device_id": cfg.DeviceID,
+					"device_id": deviceID,
 					"timestamp": time.Now().Unix(),
 					"payload": map[string]interface{}{
 						// Convert at the wire boundary: unix last_activity + device_id
-						"sessions": sessionsToWire(cfg.DeviceID, allSessions),
+						"sessions": sessionsToWire(deviceID, allSessions),
 					},
 				}
 				if err := client.Send(report); err != nil {
 					log.Printf("[daemon] report error: %v", err)
+					// Retry after short backoff (reconnect race / transient drop)
+					if force {
+						go func() {
+							select {
+							case <-time.After(2 * time.Second):
+								requestForceReport()
+							case <-ctx.Done():
+							}
+						}()
+					}
 				} else {
-					log.Printf("[daemon] reported %d sessions", len(allSessions))
+					log.Printf("[daemon] reported %d sessions (force=%v)", len(allSessions), force)
 				}
 			}
 		}
 
 		// First discovery
-		discoverAndReport()
+		discoverAndReport(true)
 
-		// Periodic discovery
+		// Periodic discovery + reconnect-driven force report
 		for {
 			select {
 			case <-ticker.C:
-				discoverAndReport()
+				discoverAndReport(false)
+			case <-forceReport:
+				discoverAndReport(true)
 			case <-ctx.Done():
 				log.Printf("[daemon] discovery loop stopped")
 				return
@@ -323,14 +632,28 @@ func main() {
 		}
 	}()
 
-	// Start config hot-reload watcher
-	go config.WatchForChanges(ctx, func(newCfg *config.Config) {
-		log.Printf("[daemon] config reloaded, server=%s", newCfg.ServerURL)
-		// If server URL changed, we need to reconnect
-		if newCfg.ServerURL != cfg.ServerURL {
-			log.Printf("[daemon] server URL changed, reconnecting...")
-			client.SetServerURL(newCfg.ServerURL)
+	// Start config hot-reload watcher. Snapshots are immutable after Store.
+	watchPath := activeConfigPath
+	go config.WatchPath(ctx, watchPath, func(newCfg *config.Config) {
+		oldCfg := currentConfig()
+		nextCfg := *newCfg
+		credChanged := nextCfg.DeviceID != deviceID || nextCfg.Token != token
+		if credChanged {
+			log.Printf("[daemon] config credentials changed but were NOT applied; restart daemon to use the new device_id/token")
+			nextCfg.DeviceID = deviceID
+			nextCfg.Token = token
 		}
+		urlChanged := nextCfg.ServerURL != oldCfg.ServerURL
+		if urlChanged {
+			log.Printf("[daemon] server URL changed, reconnecting...")
+		}
+		// Endpoint change and snapshot publication share the same dispatch
+		// linearization point. Existing callbacks finish against oldCfg; no
+		// callback from the new endpoint can start before nextCfg is visible.
+		client.SetServerURLAndPublish(nextCfg.ServerURL, func() {
+			runtimeCfg.Store(&nextCfg)
+		})
+		log.Printf("[daemon] config snapshot applied, server=%s work_dir=%s", nextCfg.ServerURL, nextCfg.WorkDir)
 	})
 
 	// Start read loop (blocking, handles reconnection)
@@ -382,20 +705,58 @@ func setupOutputCallbacks(
 	// Claude Code output callback
 	ccCommander := ccAdapter.GetCommander()
 	ccCommander.OnAgentOutput = func(sessionID, msgType, content string) {
-		sendSessionMessage(client, deviceID, sessionID, "claude_code", msgType, content)
+		sendSessionMessage(client, deviceID, sessionID, "claude_code", msgType, content, "")
 	}
 
 	// Codex output callback
 	codexCommander := codexAdapter.GetCommander()
 	codexCommander.OnAgentOutput = func(sessionID, msgType, content string) {
-		sendSessionMessage(client, deviceID, sessionID, "codex", msgType, content)
+		sendSessionMessage(client, deviceID, sessionID, "codex", msgType, content, "")
 	}
 
-	// Kilo output callback
+	// Kilo: stdout JSON + DB poll for near-live text growth
 	kiloCommander := kiloAdapter.GetCommander()
-	kiloCommander.OnAgentOutput = func(sessionID, msgType, content string) {
-		sendSessionMessage(client, deviceID, sessionID, "kilo", msgType, content)
+	kiloCommander.OnAgentOutput = func(sessionID, msgType, content, msgID string) {
+		sendSessionMessage(client, deviceID, sessionID, "kilo", msgType, content, msgID)
 	}
+	var streamStops sync.Map // sessionID -> stop func
+	kiloCommander.OnStreamStart = func(sessionID string) {
+		if v, ok := streamStops.Load(sessionID); ok {
+			if stop, ok := v.(func()); ok {
+				stop()
+			}
+			streamStops.Delete(sessionID)
+		}
+		stop := kiloAdapter.StartDBStream(sessionID, func(sid, partID, msgType, content string) {
+			sendSessionMessage(client, deviceID, sid, "kilo", msgType, content, partID)
+		})
+		streamStops.Store(sessionID, stop)
+		log.Printf("[daemon] kilo DB stream started for %s", sessionID)
+	}
+	kiloCommander.OnStreamEnd = func(sessionID string) {
+		if v, ok := streamStops.Load(sessionID); ok {
+			if stop, ok := v.(func()); ok {
+				stop()
+			}
+			streamStops.Delete(sessionID)
+		}
+		log.Printf("[daemon] kilo DB stream stopped for %s", sessionID)
+	}
+}
+
+// projectLabel shortens a full path to the leaf folder name for UI.
+func projectLabel(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	// Normalize slashes
+	dir = strings.ReplaceAll(dir, "\\", "/")
+	dir = strings.TrimRight(dir, "/")
+	if i := strings.LastIndex(dir, "/"); i >= 0 && i+1 < len(dir) {
+		return dir[i+1:]
+	}
+	return dir
 }
 
 // sessionsToWire converts internal discovery models into the public protocol shape
@@ -414,6 +775,10 @@ func sessionsToWire(deviceID string, sessions []*adapters.SessionInfo) []map[str
 			"summary":       s.Summary,
 			"last_activity": s.LastActivity.Unix(),
 		}
+		if s.ProjectDir != "" {
+			item["project_dir"] = s.ProjectDir
+			item["project"] = projectLabel(s.ProjectDir)
+		}
 		if s.PendingApproval != nil {
 			item["pending_approval"] = map[string]interface{}{
 				"id":          s.PendingApproval.ID,
@@ -427,12 +792,15 @@ func sessionsToWire(deviceID string, sessions []*adapters.SessionInfo) []map[str
 }
 
 // sendSessionMessage creates a session_message and sends it to the server.
-func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentType, msgType, content string) {
+// msgID, when non-empty, is a stable id so the phone can patch streaming content.
+func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentType, msgType, content, msgID string) {
 	// Determine role from msgType
 	role := "assistant"
 	switch msgType {
 	case "system":
 		role = "system"
+	case "user":
+		role = "user"
 	case "tool_call":
 		role = "assistant"
 	case "tool_result":
@@ -440,21 +808,25 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 	case "error":
 		role = "system"
 	}
+	if msgID == "" {
+		msgID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
+	}
 
 	msg := map[string]interface{}{
-		"type":      "session_message",
-		"device_id": deviceID,
+		"type":       "session_message",
+		"device_id":  deviceID,
 		"session_id": sessionID,
-		"timestamp": time.Now().Unix(),
+		"timestamp":  time.Now().Unix(),
 		"payload": map[string]interface{}{
 			"message": map[string]interface{}{
-				"id":        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+				"id":        msgID,
 				"role":      role,
 				"content":   content,
 				"type":      msgType,
 				"timestamp": time.Now().Unix(),
 				"metadata": map[string]interface{}{
 					"agent_type": agentType,
+					"stream":     true,
 				},
 			},
 		},
@@ -617,6 +989,135 @@ func requestPairCode(cfg *config.Config) (string, time.Time, error) {
 		return "", time.Time{}, err
 	}
 	return result.Code, time.Unix(result.ExpiresAt, 0), nil
+}
+
+func stripNekoAttachSuffix(prompt string) string {
+	// Only strip our exact injected block, not arbitrary user text containing the phrase.
+	const mark = "\n\n[NekoNest attachments — local files on this PC]\n"
+	if i := strings.Index(prompt, mark); i >= 0 {
+		return strings.TrimSpace(prompt[:i])
+	}
+	return prompt
+}
+
+// pickAdapterForSession chooses one adapter when Discover cache missed.
+func pickAdapterForSession(sessionID string, list []adapters.Adapter) adapters.Adapter {
+	// Kilo: ses_...
+	if strings.HasPrefix(sessionID, "ses_") {
+		for _, a := range list {
+			if a.Name() == "kilo" {
+				return a
+			}
+		}
+	}
+	// Claude and Codex both use UUID-shaped IDs. Probe their authoritative local
+	// stores instead of guessing from the ID shape, especially before the first
+	// discovery pass has populated lastSessions.
+	for _, name := range []string{"claude_code", "codex", "kilo"} {
+		for _, a := range list {
+			if a.Name() == name {
+				// Probe: FetchHistory cheap existence check
+				if _, err := a.FetchHistory(sessionID, 1); err == nil {
+					return a
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func parseAttachmentRefs(raw interface{}) []attach.Ref {
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	var out []attach.Ref
+	for _, item := range arr {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		u, _ := m["url"].(string)
+		if u == "" {
+			continue
+		}
+		name, _ := m["name"].(string)
+		mime, _ := m["mime"].(string)
+		id, _ := m["id"].(string)
+		out = append(out, attach.Ref{URL: u, Name: name, MIME: mime, ID: id})
+	}
+	return out
+}
+
+func sendPromptAccepted(
+	client *connection.Client,
+	deviceID, sessionID, clientMsgID string,
+	accepted acceptedPrompt,
+) error {
+	payload := map[string]interface{}{
+		"client_msg_id": clientMsgID,
+		"prompt":        accepted.prompt,
+	}
+	msg := map[string]interface{}{
+		"type":       "prompt_accepted",
+		"device_id":  deviceID,
+		"session_id": sessionID,
+		"timestamp":  time.Now().Unix(),
+		"payload":    payload,
+	}
+	if err := client.Send(msg); err != nil {
+		// The accepted ID remains cached. A server retransmission will only
+		// re-send this acknowledgement and will not execute the prompt again.
+		log.Printf("[daemon] send prompt_accepted failed client_msg_id=%s: %v", clientMsgID, err)
+		return err
+	}
+	return nil
+}
+
+func sendPromptFailed(client *connection.Client, deviceID, sessionID, clientMsgID, message string) {
+	sendPromptFailure(client, deviceID, sessionID, clientMsgID, message, "rejected", true)
+}
+
+func sendPromptIndeterminate(client *connection.Client, deviceID, sessionID, clientMsgID, message string) {
+	sendPromptFailure(client, deviceID, sessionID, clientMsgID, message, "indeterminate", false)
+}
+
+func sendPromptNotSeen(client *connection.Client, deviceID, sessionID, clientMsgID string) {
+	msg := map[string]interface{}{
+		"type":       "prompt_not_seen",
+		"device_id":  deviceID,
+		"session_id": sessionID,
+		"timestamp":  time.Now().Unix(),
+		"payload": map[string]interface{}{
+			"client_msg_id": clientMsgID,
+		},
+	}
+	if err := client.Send(msg); err != nil {
+		log.Printf("[daemon] send prompt_not_seen failed client_msg_id=%s: %v", clientMsgID, err)
+	}
+}
+
+func sendPromptFailure(
+	client *connection.Client,
+	deviceID, sessionID, clientMsgID, message, outcome string,
+	retryAllowed bool,
+) {
+	msg := map[string]interface{}{
+		"type":       "prompt_failed",
+		"device_id":  deviceID,
+		"session_id": sessionID,
+		"timestamp":  time.Now().Unix(),
+		"payload": map[string]interface{}{
+			"client_msg_id": clientMsgID,
+			"error":         message,
+			"message":       message,
+			"outcome":       outcome,
+			"retry_allowed": retryAllowed,
+		},
+	}
+	if err := client.Send(msg); err != nil {
+		log.Printf("[daemon] send prompt_failed failed client_msg_id=%s: %v", clientMsgID, err)
+	}
 }
 
 // sendDaemonError reports an error back to the server (forwarded to phones).

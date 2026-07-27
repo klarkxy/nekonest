@@ -15,19 +15,20 @@ const (
 type AgentStatus string
 
 const (
-	StatusRunning        AgentStatus = "running"
-	StatusIdle           AgentStatus = "idle"
+	StatusRunning         AgentStatus = "running"
+	StatusIdle            AgentStatus = "idle"
 	StatusWaitingApproval AgentStatus = "waiting_approval"
 )
 
 // SessionInfo describes a discovered agent session.
 type SessionInfo struct {
-	ID              string      `json:"id"`
-	AgentType       AgentType   `json:"agent_type"`
-	Status          AgentStatus `json:"status"`
-	Summary         string      `json:"summary,omitempty"`
-	LastActivity    time.Time   `json:"last_activity"`
-	SessionPath     string      `json:"-"` // local filesystem path, not sent to server
+	ID              string        `json:"id"`
+	AgentType       AgentType     `json:"agent_type"`
+	Status          AgentStatus   `json:"status"`
+	Summary         string        `json:"summary,omitempty"`
+	LastActivity    time.Time     `json:"last_activity"`
+	SessionPath     string        `json:"-"`                     // local store path (jsonl/db), not sent
+	ProjectDir      string        `json:"project_dir,omitempty"` // workspace / project folder on PC
 	PendingApproval *ApprovalInfo `json:"pending_approval,omitempty"`
 }
 
@@ -36,6 +37,15 @@ type ApprovalInfo struct {
 	ID          string `json:"id"`
 	ToolName    string `json:"tool_name"`
 	Description string `json:"description"`
+}
+
+// HistoryMessage is a chat turn imported from the agent-native store.
+type HistoryMessage struct {
+	ID        string `json:"id"`
+	Role      string `json:"role"` // user | assistant
+	Content   string `json:"content"`
+	Type      string `json:"type,omitempty"`
+	Timestamp int64  `json:"timestamp"` // unix seconds
 }
 
 // Adapter defines the interface for discovering and controlling coding agents.
@@ -64,6 +74,10 @@ type Adapter interface {
 
 	// Interrupt interrupts a running session (like Ctrl+C).
 	Interrupt(sessionID string) error
+
+	// FetchHistory returns the last N user/assistant turns from the agent store.
+	// limit is capped by each adapter (typically 50).
+	FetchHistory(sessionID string, limit int) ([]*HistoryMessage, error)
 }
 
 // ClosableAdapter extends Adapter with resource cleanup.

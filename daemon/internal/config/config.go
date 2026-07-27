@@ -94,16 +94,19 @@ func (c *Config) Save() error {
 	return os.WriteFile(path, data, 0600)
 }
 
-// WatchForChanges monitors the config file for changes and calls the callback
-// when the config is modified. Uses polling since fsnotify adds a dependency.
-// Stops when context is cancelled.
+// WatchForChanges monitors the default config path.
 func WatchForChanges(ctx context.Context, onChange func(*Config)) {
-	configPath := DefaultConfigPath()
+	WatchPath(ctx, DefaultConfigPath(), onChange)
+}
 
+// WatchPath monitors a specific config file for changes (polling).
+func WatchPath(ctx context.Context, configPath string, onChange func(*Config)) {
+	if configPath == "" {
+		configPath = DefaultConfigPath()
+	}
 	var lastModTime time.Time
 	var lastSize int64
 
-	// Get initial state
 	if info, err := os.Stat(configPath); err == nil {
 		lastModTime = info.ModTime()
 		lastSize = info.Size()
@@ -122,16 +125,11 @@ func WatchForChanges(ctx context.Context, onChange func(*Config)) {
 			if err != nil {
 				continue
 			}
-
-			// Check if file changed (mod time or size)
 			if info.ModTime().Equal(lastModTime) && info.Size() == lastSize {
 				continue
 			}
-
 			lastModTime = info.ModTime()
 			lastSize = info.Size()
-
-			// Brief delay to let the file write complete
 			time.Sleep(200 * time.Millisecond)
 
 			newCfg, err := LoadFrom(configPath)
@@ -139,8 +137,7 @@ func WatchForChanges(ctx context.Context, onChange func(*Config)) {
 				log.Printf("[config] reload error: %v", err)
 				continue
 			}
-
-			log.Printf("[config] config file changed, reloading")
+			log.Printf("[config] config file changed, reloading %s", configPath)
 			onChange(newCfg)
 		}
 	}

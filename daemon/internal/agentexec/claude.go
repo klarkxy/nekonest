@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -14,8 +15,8 @@ import (
 // ClaudeCommander handles Claude Code CLI interactions.
 type ClaudeCommander struct {
 	mu        sync.Mutex
-	cliPath   string                            // path to claude binary
-	executors map[string]*AgentExecutor         // sessionID -> executor
+	cliPath   string                    // path to claude binary
+	executors map[string]*AgentExecutor // sessionID -> executor
 
 	// OnAgentOutput is called for each line of output from the agent.
 	// The callback receives (sessionID, parsedMessageType, content).
@@ -24,12 +25,8 @@ type ClaudeCommander struct {
 
 // NewClaudeCommander creates a new Claude Code commander.
 func NewClaudeCommander() *ClaudeCommander {
-	cliPath := "claude" // assume it's in PATH
-	if p, err := exec.LookPath("claude"); err == nil {
-		cliPath = p
-	}
 	return &ClaudeCommander{
-		cliPath:   cliPath,
+		cliPath:   FindCLIBinary(),
 		executors: make(map[string]*AgentExecutor),
 	}
 }
@@ -52,9 +49,9 @@ func (c *ClaudeCommander) SendPromptInDir(sessionID, prompt, workDir string) err
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Check if we already have a running executor for this session
+	// Print/resume closes stdin after -p; a second prompt needs a new process.
 	if executor, ok := c.executors[sessionID]; ok && executor.IsRunning() {
-		return executor.SendPrompt(prompt)
+		return fmt.Errorf("claude session %s is still running; wait for it to finish", sessionID)
 	}
 
 	// Reject obviously fake IDs from older create_session experiments
@@ -77,13 +74,17 @@ func (c *ClaudeCommander) SendPromptInDir(sessionID, prompt, workDir string) err
 	executor.OnExit = func(exitCode int) {
 		log.Printf("[claude] session %s process exited with code %d", sessionID, exitCode)
 		c.mu.Lock()
-		delete(c.executors, sessionID)
+		if cur, ok := c.executors[sessionID]; ok && cur == executor {
+			delete(c.executors, sessionID)
+		}
 		c.mu.Unlock()
 	}
 
 	if err := executor.StartWithDir(c.cliPath, args, nil, workDir); err != nil {
 		return fmt.Errorf("start claude: %w", err)
 	}
+	// Prompt already passed via -p; close stdin to avoid 3s "no stdin" wait.
+	_ = executor.CloseStdin()
 
 	c.executors[sessionID] = executor
 	log.Printf("[claude] started process for session %s", sessionID)
@@ -190,32 +191,28 @@ func extractTextFromContentBlocks(blocks []interface{}) string {
 	return strings.Join(parts, "\n")
 }
 
-// Approve approves a pending tool call.
-// Only works while a print/resume process is still attached and reading stdin.
-// Historical JSONL "waiting_approval" state without a live process cannot be approved remotely.
+// Approve is unavailable in print/resume mode (stdin closed after -p).
 func (c *ClaudeCommander) Approve(sessionID, approvalID string) error {
+	_ = approvalID
 	c.mu.Lock()
 	executor, ok := c.executors[sessionID]
 	c.mu.Unlock()
-
-	if ok && executor.IsRunning() {
+	if ok && executor.StdinOpen() {
 		return executor.SendPrompt("y")
 	}
-
-	return fmt.Errorf("approval_unavailable: no live Claude process for session %s (open/resume the session on the PC first)", sessionID)
+	return fmt.Errorf("approval_unavailable: Claude print mode is non-interactive; approve on the PC terminal (session %s)", sessionID)
 }
 
-// Deny denies a pending approval.
+// Deny is unavailable in print/resume mode (stdin closed after -p).
 func (c *ClaudeCommander) Deny(sessionID, approvalID string) error {
+	_ = approvalID
 	c.mu.Lock()
 	executor, ok := c.executors[sessionID]
 	c.mu.Unlock()
-
-	if ok && executor.IsRunning() {
+	if ok && executor.StdinOpen() {
 		return executor.SendPrompt("n")
 	}
-
-	return fmt.Errorf("approval_unavailable: no live Claude process for session %s (open/resume the session on the PC first)", sessionID)
+	return fmt.Errorf("approval_unavailable: Claude print mode is non-interactive; deny on the PC terminal (session %s)", sessionID)
 }
 
 // Interrupt sends SIGINT to a running Claude Code process.
@@ -228,6 +225,20 @@ func (c *ClaudeCommander) Interrupt(sessionID string) error {
 		return fmt.Errorf("no running executor for session %s", sessionID)
 	}
 	return executor.Interrupt()
+}
+
+// StopAll stops every tracked executor (daemon shutdown).
+func (c *ClaudeCommander) StopAll() {
+	c.mu.Lock()
+	list := make([]*AgentExecutor, 0, len(c.executors))
+	for _, e := range c.executors {
+		list = append(list, e)
+	}
+	c.executors = make(map[string]*AgentExecutor)
+	c.mu.Unlock()
+	for _, e := range list {
+		_ = e.Stop()
+	}
 }
 
 // StopSession stops a running Claude Code executor.
@@ -243,21 +254,43 @@ func (c *ClaudeCommander) StopSession(sessionID string) error {
 }
 
 // FindCLIBinary locates the Claude Code CLI binary.
+// On Windows prefer the real .exe under npm global (not the npm shim without extension).
 func FindCLIBinary() string {
-	locations := []string{
-		"claude",
-		filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "claude", "claude.exe"),
-		filepath.Join(os.Getenv("APPDATA"), "npm", "claude.cmd"),
+	appData := os.Getenv("APPDATA")
+	localApp := os.Getenv("LOCALAPPDATA")
+	candidates := []string{
+		filepath.Join(appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"),
+		filepath.Join(localApp, "Programs", "claude", "claude.exe"),
 		`C:\Program Files\Claude\claude.exe`,
 	}
-
-	for _, loc := range locations {
-		if p, err := exec.LookPath(loc); err == nil {
-			return p
-		}
-		if _, err := os.Stat(loc); err == nil {
+	for _, loc := range candidates {
+		if st, err := os.Stat(loc); err == nil && !st.IsDir() {
 			return loc
 		}
+	}
+	// PATH: prefer *.exe
+	if p, err := exec.LookPath("claude.exe"); err == nil {
+		return p
+	}
+	if p, err := exec.LookPath("claude"); err == nil {
+		// Skip non-executable npm shims on Windows (no extension)
+		if runtime.GOOS == "windows" {
+			ext := strings.ToLower(filepath.Ext(p))
+			if ext == ".exe" || ext == ".cmd" || ext == ".bat" {
+				return p
+			}
+			// bare "claude" file is often a unix shell shim — try sibling .cmd / nested exe
+			cmdShim := p + ".cmd"
+			if st, err := os.Stat(cmdShim); err == nil && !st.IsDir() {
+				// Prefer nested exe next to npm root
+				nested := filepath.Join(filepath.Dir(p), "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe")
+				if st, err := os.Stat(nested); err == nil && !st.IsDir() {
+					return nested
+				}
+				return cmdShim
+			}
+		}
+		return p
 	}
 	return "claude"
 }

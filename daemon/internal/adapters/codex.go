@@ -20,6 +20,7 @@ type CodexAdapter struct {
 	sessionsDir string
 	watcherMu   sync.Mutex
 	watchers    map[string]*fsnotify.Watcher
+	lastPaths   map[string]string
 	commander   *agentexec.CodexCommander
 }
 
@@ -29,6 +30,7 @@ func NewCodexAdapter() *CodexAdapter {
 	return &CodexAdapter{
 		sessionsDir: filepath.Join(home, ".codex", "sessions"),
 		watchers:    make(map[string]*fsnotify.Watcher),
+		lastPaths:   make(map[string]string),
 		commander:   agentexec.NewCodexCommander(),
 	}
 }
@@ -40,8 +42,11 @@ func (a *CodexAdapter) IsAvailable() bool {
 	return a.commander.IsAvailable()
 }
 
-// Close releases all file watchers.
+// Close releases all file watchers and stops running agent processes.
 func (a *CodexAdapter) Close() error {
+	if a.commander != nil {
+		a.commander.StopAll()
+	}
 	a.watcherMu.Lock()
 	defer a.watcherMu.Unlock()
 
@@ -82,8 +87,8 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 			return nil
 		}
 
-		// Only include recent sessions
-		if time.Since(session.LastActivity) > 24*time.Hour {
+		// 7-day window so phone sees historical sessions too
+		if time.Since(session.LastActivity) > 7*24*time.Hour {
 			return nil
 		}
 
@@ -98,9 +103,113 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 	}
 
 	for _, s := range byID {
+		a.watcherMu.Lock()
+		a.lastPaths[s.ID] = s.SessionPath
+		a.watcherMu.Unlock()
 		sessions = append(sessions, s)
 	}
 	return sessions, nil
+}
+
+// FetchHistory imports last N chat turns from the rollout file.
+func (a *CodexAdapter) FetchHistory(sessionID string, limit int) ([]*HistoryMessage, error) {
+	limit = clampHistoryLimit(limit)
+	path := a.resolveSessionPath(sessionID)
+	if path == "" {
+		return nil, fmt.Errorf("codex session not found: %s", sessionID)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var out []*HistoryMessage
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+	idx := 0
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var msg map[string]interface{}
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+		typ, _ := msg["type"].(string)
+		payload, _ := msg["payload"].(map[string]interface{})
+		if payload == nil {
+			continue
+		}
+		var role, content string
+		if typ == "event_msg" {
+			pt, _ := payload["type"].(string)
+			switch pt {
+			case "user_message":
+				role = "user"
+				content, _ = payload["message"].(string)
+			case "agent_message":
+				role = "assistant"
+				content, _ = payload["message"].(string)
+			}
+		}
+		if role == "" {
+			continue
+		}
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		if strings.HasPrefix(content, "# AGENTS.md") || len(content) > 20000 {
+			continue
+		}
+		ts := parseCodexTimestamp(msg["timestamp"])
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		idx++
+		out = append(out, &HistoryMessage{
+			ID:        fmt.Sprintf("codex_%s_%d", sessionID, idx),
+			Role:      role,
+			Content:   truncateRunes(content, 4000),
+			Type:      "text",
+			Timestamp: ts.Unix(),
+		})
+	}
+	return takeLastHistory(out, limit), sc.Err()
+}
+
+func (a *CodexAdapter) resolveSessionPath(sessionID string) string {
+	a.watcherMu.Lock()
+	p := a.lastPaths[sessionID]
+	a.watcherMu.Unlock()
+	if p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	var found string
+	var foundTime time.Time
+	_ = filepath.Walk(a.sessionsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if !strings.HasPrefix(info.Name(), "rollout-") || !strings.HasSuffix(info.Name(), ".jsonl") {
+			return nil
+		}
+		id := codexSessionIDFromFilename(info.Name())
+		// Exact id match only — path substring matches empty/short IDs incorrectly.
+		if id == "" || id != sessionID {
+			return nil
+		}
+		if found == "" || info.ModTime().After(foundTime) {
+			found = path
+			foundTime = info.ModTime()
+		}
+		return nil
+	})
+	return found
 }
 
 func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*SessionInfo, error) {
@@ -118,6 +227,7 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 	var msgCount int
 	var isWaiting bool
 	var pendingApproval *ApprovalInfo
+	var projectDir string
 	sessionID := codexSessionIDFromFilename(filepath.Base(path))
 
 	for scanner.Scan() {
@@ -148,6 +258,19 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 			}
 			if t := parseCodexTimestamp(payload["timestamp"]); !t.IsZero() {
 				lastTime = t
+			}
+			if projectDir == "" {
+				for _, k := range []string{"cwd", "workdir", "working_directory", "dir"} {
+					if v, _ := payload[k].(string); v != "" {
+						projectDir = v
+						break
+					}
+				}
+			}
+		}
+		if projectDir == "" {
+			if v, _ := msg["cwd"].(string); v != "" {
+				projectDir = v
 			}
 		}
 
@@ -250,6 +373,7 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 		Summary:         lastMessage,
 		LastActivity:    lastTime,
 		SessionPath:     path,
+		ProjectDir:      projectDir,
 		PendingApproval: pendingApproval,
 	}, nil
 }
@@ -436,6 +560,7 @@ func extractCodexContent(msg map[string]interface{}) string {
 
 // ensure CodexAdapter implements ClosableAdapter
 var _ ClosableAdapter = (*CodexAdapter)(nil)
+
 // GetCommander returns the underlying CodexCommander for direct access.
 func (a *CodexAdapter) GetCommander() *agentexec.CodexCommander {
 	return a.commander

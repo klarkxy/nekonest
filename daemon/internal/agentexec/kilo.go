@@ -22,7 +22,13 @@ type KiloCommander struct {
 	sessionDirs map[string]string
 
 	// OnAgentOutput is called for each parsed line of agent output.
-	OnAgentOutput func(sessionID string, msgType string, content string)
+	// msgID may be empty (daemon will mint one) or a stable part id for streaming patches.
+	OnAgentOutput func(sessionID string, msgType string, content string, msgID string)
+
+	// OnStreamStart is optional; called when a kilo process starts (for DB pollers).
+	OnStreamStart func(sessionID string)
+	// OnStreamEnd is optional; called when process exits.
+	OnStreamEnd func(sessionID string)
 }
 
 // NewKiloCommander creates a new Kilo commander.
@@ -123,7 +129,7 @@ func (c *KiloCommander) SendPromptInDir(sessionID, prompt, workDir string) error
 	}
 
 	if executor, ok := c.executors[sessionID]; ok && executor.IsRunning() {
-		return executor.SendPrompt(prompt)
+		return fmt.Errorf("kilo session %s is still running; wait for it to finish", sessionID)
 	}
 
 	if workDir != "" {
@@ -148,16 +154,29 @@ func (c *KiloCommander) SendPromptInDir(sessionID, prompt, workDir string) error
 	executor.OnExit = func(exitCode int) {
 		log.Printf("[kilo] session %s process exited with code %d", sessionID, exitCode)
 		c.mu.Lock()
-		delete(c.executors, sessionID)
+		cur, ok := c.executors[sessionID]
+		live := ok && cur == executor
+		if live {
+			delete(c.executors, sessionID)
+		}
 		c.mu.Unlock()
+		// Only end stream for the executor that still owns the session.
+		if live && c.OnStreamEnd != nil {
+			c.OnStreamEnd(sessionID)
+		}
 	}
 
 	// Process cwd can stay default; --dir tells kilo the project root.
 	if err := executor.Start(c.cliPath, args, nil); err != nil {
 		return fmt.Errorf("start kilo: %w", err)
 	}
+	// Prompt is on argv; leave stdin open and kilo waits forever for more input.
+	_ = executor.CloseStdin()
 
 	c.executors[sessionID] = executor
+	if c.OnStreamStart != nil {
+		c.OnStreamStart(sessionID)
+	}
 	log.Printf("[kilo] started process for session %s dir=%s", sessionID, workDir)
 	return nil
 }
@@ -169,8 +188,20 @@ func (c *KiloCommander) parseAndForwardOutput(sessionID, line string) {
 
 	var msg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		c.OnAgentOutput(sessionID, "text", line)
+		c.OnAgentOutput(sessionID, "text", line, "")
 		return
+	}
+
+	partID := ""
+	if part, ok := msg["part"].(map[string]interface{}); ok {
+		if id, _ := part["id"].(string); id != "" {
+			partID = id
+		}
+	}
+	if partID == "" {
+		if id, _ := msg["id"].(string); id != "" {
+			partID = id
+		}
 	}
 
 	// Common Kilo JSON event shapes (best-effort).
@@ -178,34 +209,56 @@ func (c *KiloCommander) parseAndForwardOutput(sessionID, line string) {
 		switch t {
 		case "text", "message", "assistant":
 			if text := extractKiloText(msg); text != "" {
-				c.OnAgentOutput(sessionID, "assistant", text)
+				c.OnAgentOutput(sessionID, "assistant", text, partID)
 				return
 			}
 		case "reasoning", "thinking":
 			if text := extractKiloText(msg); text != "" {
-				c.OnAgentOutput(sessionID, "thinking", text)
+				c.OnAgentOutput(sessionID, "thinking", text, partID)
 				return
 			}
-		case "tool", "tool_call":
+		case "tool", "tool_call", "tool_use":
 			name, _ := msg["tool"].(string)
 			if name == "" {
 				name, _ = msg["name"].(string)
 			}
-			c.OnAgentOutput(sessionID, "tool_call", fmt.Sprintf("🔧 %s", name))
+			if name == "" {
+				if part, ok := msg["part"].(map[string]interface{}); ok {
+					name, _ = part["tool"].(string)
+					if name == "" {
+						name, _ = part["name"].(string)
+					}
+				}
+			}
+			if name == "" {
+				name = "tool"
+			}
+			c.OnAgentOutput(sessionID, "tool_call", fmt.Sprintf("🔧 %s", name), partID)
+			return
+		case "step_start", "step_finish":
+			if text := extractKiloText(msg); text != "" {
+				c.OnAgentOutput(sessionID, "system", text, partID)
+			}
 			return
 		case "error":
 			if text := extractKiloText(msg); text != "" {
-				c.OnAgentOutput(sessionID, "error", text)
+				c.OnAgentOutput(sessionID, "error", text, partID)
 				return
 			}
+			if errObj, ok := msg["error"].(map[string]interface{}); ok {
+				if m, _ := errObj["message"].(string); m != "" {
+					c.OnAgentOutput(sessionID, "error", m, partID)
+					return
+				}
+			}
 		case "permission", "permission_request":
-			c.OnAgentOutput(sessionID, "tool_call", "⚠️ permission request")
+			c.OnAgentOutput(sessionID, "tool_call", "⚠️ permission request", partID)
 			return
 		}
 	}
 
 	if text := extractKiloText(msg); text != "" {
-		c.OnAgentOutput(sessionID, "text", text)
+		c.OnAgentOutput(sessionID, "text", text, partID)
 	}
 }
 
@@ -228,28 +281,28 @@ func extractKiloText(msg map[string]interface{}) string {
 	return ""
 }
 
-// Approve approves a pending permission if a live process is attached.
+// Approve is unavailable when kilo run closes stdin after argv prompt.
 func (c *KiloCommander) Approve(sessionID, approvalID string) error {
 	_ = approvalID
 	c.mu.Lock()
 	executor, ok := c.executors[sessionID]
 	c.mu.Unlock()
-	if ok && executor.IsRunning() {
+	if ok && executor.StdinOpen() {
 		return executor.SendPrompt("y")
 	}
-	return fmt.Errorf("approval_unavailable: no live Kilo process for session %s", sessionID)
+	return fmt.Errorf("approval_unavailable: Kilo run is non-interactive from phone; approve on the PC (session %s)", sessionID)
 }
 
-// Deny denies a pending permission if a live process is attached.
+// Deny is unavailable when kilo run closes stdin after argv prompt.
 func (c *KiloCommander) Deny(sessionID, approvalID string) error {
 	_ = approvalID
 	c.mu.Lock()
 	executor, ok := c.executors[sessionID]
 	c.mu.Unlock()
-	if ok && executor.IsRunning() {
+	if ok && executor.StdinOpen() {
 		return executor.SendPrompt("n")
 	}
-	return fmt.Errorf("approval_unavailable: no live Kilo process for session %s", sessionID)
+	return fmt.Errorf("approval_unavailable: Kilo run is non-interactive from phone; deny on the PC (session %s)", sessionID)
 }
 
 // Interrupt stops a running Kilo session process.
@@ -261,4 +314,18 @@ func (c *KiloCommander) Interrupt(sessionID string) error {
 		return fmt.Errorf("no running executor for session %s", sessionID)
 	}
 	return executor.Interrupt()
+}
+
+// StopAll stops every tracked executor (daemon shutdown).
+func (c *KiloCommander) StopAll() {
+	c.mu.Lock()
+	list := make([]*AgentExecutor, 0, len(c.executors))
+	for _, e := range c.executors {
+		list = append(list, e)
+	}
+	c.executors = make(map[string]*AgentExecutor)
+	c.mu.Unlock()
+	for _, e := range list {
+		_ = e.Stop()
+	}
 }

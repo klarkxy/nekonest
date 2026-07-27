@@ -25,10 +25,14 @@ type Client struct {
 	token      string
 	conn       *websocket.Conn
 	mu         sync.Mutex
+	connectMu  sync.Mutex
+	dispatchMu sync.RWMutex // linearizes callbacks against endpoint changes/Close
 	onMessage  func([]byte)
+	onConnect  func() // called after successful auth (initial + reconnect)
 	connected  bool
 	reconnects int
 	closed     bool
+	generation uint64        // incremented whenever the desired endpoint changes
 	closeCh    chan struct{} // closed when Close() is called
 }
 
@@ -44,81 +48,179 @@ func NewClient(ctx context.Context, serverURL, deviceID, token string) *Client {
 
 // OnMessage sets the callback for incoming messages.
 func (c *Client) OnMessage(fn func([]byte)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.onMessage = fn
+}
+
+// OnConnect sets the callback after successful authentication (including reconnect).
+func (c *Client) OnConnect(fn func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onConnect = fn
 }
 
 // SetServerURL updates the server URL (for config hot-reload).
 func (c *Client) SetServerURL(url string) {
+	c.SetServerURLAndPublish(url, nil)
+}
+
+// SetServerURLAndPublish updates the desired endpoint and publishes related
+// runtime state at the same linearization point as message/connect callbacks.
+// The publish callback must not call back into Client methods that acquire
+// dispatchMu.
+func (c *Client) SetServerURLAndPublish(url string, publish func()) {
+	c.dispatchMu.Lock()
+	var oldConn *websocket.Conn
+	defer func() {
+		c.dispatchMu.Unlock()
+		if oldConn != nil {
+			_ = oldConn.Close()
+		}
+	}()
+
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.serverURL = url
-	// Close existing connection to trigger reconnect with new URL
-	if c.conn != nil {
-		c.conn.Close()
+	if !c.closed && c.serverURL != url {
+		c.serverURL = url
+		c.generation++
+		c.reconnects = 0
+		// Detach before close so an old read error cannot clear a connection that
+		// has already authenticated against the new endpoint.
+		oldConn = c.conn
 		c.conn = nil
 		c.connected = false
+	}
+	c.mu.Unlock()
+
+	if publish != nil {
+		publish()
 	}
 }
 
 // Connect establishes the WebSocket connection and authenticates.
 func (c *Client) Connect() error {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
+	for {
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return fmt.Errorf("client closed")
+		}
+		serverURL := c.serverURL
+		deviceID := c.deviceID
+		token := c.token
+		generation := c.generation
+		c.mu.Unlock()
+
+		wsURL := serverURL + "/ws/daemon"
+		log.Printf("[conn] connecting to %s", wsURL)
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			if !c.isCurrentGeneration(generation) {
+				continue
+			}
+			return fmt.Errorf("dial: %w", err)
+		}
+
+		authMsg := map[string]interface{}{
+			"type":      "register_device",
+			"device_id": deviceID,
+			"timestamp": time.Now().Unix(),
+			"payload": map[string]interface{}{
+				"device_id": deviceID,
+				"token":     token,
+			},
+		}
+
+		if err := conn.WriteJSON(authMsg); err != nil {
+			_ = conn.Close()
+			if !c.isCurrentGeneration(generation) {
+				continue
+			}
+			return fmt.Errorf("auth write: %w", err)
+		}
+
+		if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("auth deadline: %w", err)
+		}
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			_ = conn.Close()
+			if !c.isCurrentGeneration(generation) {
+				continue
+			}
+			return fmt.Errorf("auth read: %w", err)
+		}
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("clear auth deadline: %w", err)
+		}
+
+		var resp map[string]interface{}
+		if err := json.Unmarshal(data, &resp); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("auth parse: %w", err)
+		}
+		if resp["type"] == "error" {
+			_ = conn.Close()
+			return fmt.Errorf("auth failed: %v", resp["payload"])
+		}
+
+		c.dispatchMu.Lock()
+		c.mu.Lock()
+		if c.closed || c.generation != generation || c.serverURL != serverURL {
+			closed := c.closed
+			c.mu.Unlock()
+			c.dispatchMu.Unlock()
+			_ = conn.Close()
+			if closed {
+				return fmt.Errorf("client closed")
+			}
+			// Endpoint changed while Dial/auth was in flight. Discard this
+			// authenticated-but-stale socket and immediately try the new URL.
+			continue
+		}
+		oldConn := c.conn
+		c.conn = conn
+		c.connected = true
+		c.reconnects = 0
+		onConnect := c.onConnect
+		c.mu.Unlock()
+		c.dispatchMu.Unlock()
+		if oldConn != nil && oldConn != conn {
+			_ = oldConn.Close()
+		}
+
+		log.Printf("[conn] authenticated as %s", deviceID)
+		if onConnect != nil {
+			// The callback is generation-bound. If an endpoint switch wins
+			// before this goroutine starts, it is discarded; if the callback
+			// starts first, SetServerURL waits for it to finish.
+			go c.dispatchConnect(conn, onConnect)
+		}
+		return nil
+	}
+}
+
+func (c *Client) isCurrentGeneration(generation uint64) bool {
 	c.mu.Lock()
-	serverURL := c.serverURL
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	return !c.closed && c.generation == generation
+}
 
-	wsURL := serverURL + "/ws/daemon"
-	log.Printf("[conn] connecting to %s", wsURL)
-
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		return fmt.Errorf("dial: %w", err)
-	}
-
-	// Send auth message
-	authMsg := map[string]interface{}{
-		"type":      "register_device",
-		"device_id": c.deviceID,
-		"timestamp": time.Now().Unix(),
-		"payload": map[string]interface{}{
-			"device_id": c.deviceID,
-			"token":     c.token,
-		},
-	}
-
-	if err := conn.WriteJSON(authMsg); err != nil {
-		conn.Close()
-		return fmt.Errorf("auth write: %w", err)
-	}
-
-	// Check auth response
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("auth read: %w", err)
-	}
-
-	// Clear read deadline after auth
-	conn.SetReadDeadline(time.Time{})
-
-	var resp map[string]interface{}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		conn.Close()
-		return fmt.Errorf("auth parse: %w", err)
-	}
-	if resp["type"] == "error" {
-		conn.Close()
-		return fmt.Errorf("auth failed: %v", resp["payload"])
-	}
-
+func (c *Client) dispatchConnect(conn *websocket.Conn, onConnect func()) {
+	c.dispatchMu.RLock()
+	defer c.dispatchMu.RUnlock()
 	c.mu.Lock()
-	c.conn = conn
-	c.connected = true
-	c.reconnects = 0
+	current := !c.closed && c.conn == conn
 	c.mu.Unlock()
-
-	log.Printf("[conn] authenticated as %s", c.deviceID)
-	return nil
+	if current {
+		onConnect()
+	}
 }
 
 // Send sends a message to the server.
@@ -172,20 +274,40 @@ func (c *Client) StartReadLoop(ctx context.Context) {
 
 			log.Printf("[conn] read error: %v", err)
 			c.mu.Lock()
-			c.conn = nil
-			c.connected = false
+			wasCurrent := c.conn == conn
+			if wasCurrent {
+				c.conn = nil
+				c.connected = false
+			}
 			c.mu.Unlock()
-			conn.Close()
+			_ = conn.Close()
 
-			if !c.reconnect(ctx) {
+			if wasCurrent && !c.reconnect(ctx) {
 				return
 			}
 			continue
 		}
 
-		if c.onMessage != nil {
-			c.onMessage(data)
-		}
+		c.dispatchMessage(conn, data)
+	}
+}
+
+func (c *Client) dispatchMessage(conn *websocket.Conn, data []byte) {
+	c.dispatchMu.RLock()
+	defer c.dispatchMu.RUnlock()
+
+	c.mu.Lock()
+	// SetServerURL detaches the old socket before closing it. The read callback
+	// runs under dispatchMu so the check and invocation are one linearizable
+	// operation: an endpoint switch either happens before both or after both.
+	if c.closed || c.conn != conn {
+		c.mu.Unlock()
+		return
+	}
+	onMessage := c.onMessage
+	c.mu.Unlock()
+	if onMessage != nil {
+		onMessage(data)
 	}
 }
 
@@ -216,6 +338,9 @@ func (c *Client) StartHeartbeat(ctx context.Context) {
 
 // Close gracefully closes the WebSocket connection.
 func (c *Client) Close() {
+	c.dispatchMu.Lock()
+	defer c.dispatchMu.Unlock()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -223,6 +348,7 @@ func (c *Client) Close() {
 		return
 	}
 	c.closed = true
+	c.generation++
 	close(c.closeCh)
 
 	if c.conn != nil {

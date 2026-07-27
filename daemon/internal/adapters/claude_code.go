@@ -20,6 +20,7 @@ type ClaudeCodeAdapter struct {
 	projectsDir string
 	watcherMu   sync.Mutex
 	watchers    map[string]*fsnotify.Watcher
+	lastPaths   map[string]string // sessionID -> jsonl path
 	commander   *agentexec.ClaudeCommander
 }
 
@@ -29,6 +30,7 @@ func NewClaudeCodeAdapter() *ClaudeCodeAdapter {
 	return &ClaudeCodeAdapter{
 		projectsDir: filepath.Join(home, ".claude", "projects"),
 		watchers:    make(map[string]*fsnotify.Watcher),
+		lastPaths:   make(map[string]string),
 		commander:   agentexec.NewClaudeCommander(),
 	}
 }
@@ -40,8 +42,11 @@ func (a *ClaudeCodeAdapter) IsAvailable() bool {
 	return a.commander.IsAvailable()
 }
 
-// Close releases all file watchers.
+// Close releases all file watchers and stops running agent processes.
 func (a *ClaudeCodeAdapter) Close() error {
+	if a.commander != nil {
+		a.commander.StopAll()
+	}
 	a.watcherMu.Lock()
 	defer a.watcherMu.Unlock()
 
@@ -79,11 +84,14 @@ func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 			return nil
 		}
 
-		// Only include sessions from the last 24 hours
-		if time.Since(session.LastActivity) > 24*time.Hour {
+		// Include recent + historical (7 days) so phone can resume older chats
+		if time.Since(session.LastActivity) > 7*24*time.Hour {
 			return nil
 		}
 
+		a.watcherMu.Lock()
+		a.lastPaths[session.ID] = session.SessionPath
+		a.watcherMu.Unlock()
 		sessions = append(sessions, session)
 		return nil
 	})
@@ -92,6 +100,94 @@ func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 	}
 
 	return sessions, nil
+}
+
+// FetchHistory imports the last N user/assistant turns from the session JSONL.
+func (a *ClaudeCodeAdapter) FetchHistory(sessionID string, limit int) ([]*HistoryMessage, error) {
+	limit = clampHistoryLimit(limit)
+	path := a.resolveSessionPath(sessionID)
+	if path == "" {
+		return nil, fmt.Errorf("claude session not found: %s", sessionID)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var out []*HistoryMessage
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var msg map[string]interface{}
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+		role := ""
+		if r, ok := msg["type"].(string); ok && (r == "user" || r == "assistant") {
+			role = r
+		}
+		if nested, ok := msg["message"].(map[string]interface{}); ok {
+			if r, ok := nested["role"].(string); ok && (r == "user" || r == "assistant") {
+				role = r
+			}
+		}
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		content := strings.TrimSpace(extractContent(msg))
+		if content == "" {
+			continue
+		}
+		// Skip meta local-command caveats
+		if strings.Contains(content, "<local-command-caveat>") {
+			continue
+		}
+		ts := time.Now()
+		if t, ok := parseMessageTime(msg["timestamp"]); ok {
+			ts = t
+		}
+		id, _ := msg["uuid"].(string)
+		if id == "" {
+			id = fmt.Sprintf("claude_%s_%d", sessionID, len(out))
+		}
+		out = append(out, &HistoryMessage{
+			ID:        id,
+			Role:      role,
+			Content:   truncateRunes(content, 4000),
+			Type:      "text",
+			Timestamp: ts.Unix(),
+		})
+	}
+	return takeLastHistory(out, limit), sc.Err()
+}
+
+func (a *ClaudeCodeAdapter) resolveSessionPath(sessionID string) string {
+	a.watcherMu.Lock()
+	p := a.lastPaths[sessionID]
+	a.watcherMu.Unlock()
+	if p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	// Fallback walk
+	var found string
+	_ = filepath.Walk(a.projectsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if strings.TrimSuffix(info.Name(), ".jsonl") == sessionID {
+			found = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*SessionInfo, error) {
@@ -109,6 +205,7 @@ func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*Se
 	var msgCount int
 	var isWaiting bool
 	var pendingApproval *ApprovalInfo
+	var projectDir string
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -123,41 +220,74 @@ func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*Se
 
 		msgCount++
 
-		// Extract content for summary
+		if projectDir == "" {
+			if cwd, ok := msg["cwd"].(string); ok && cwd != "" {
+				projectDir = cwd
+			}
+		}
+
+		// Claude JSONL often nests role/content under message.{role,content}
 		role, _ := msg["role"].(string)
 		msgType, _ := msg["type"].(string)
+		if nested, ok := msg["message"].(map[string]interface{}); ok {
+			if r, ok := nested["role"].(string); ok && r != "" {
+				role = r
+			}
+			// Prefer nested for content/tool detection
+			if role == "" {
+				if r, _ := nested["role"].(string); r != "" {
+					role = r
+				}
+			}
+		}
+		contentSrc := msg
+		if nested, ok := msg["message"].(map[string]interface{}); ok {
+			if _, has := nested["content"]; has {
+				contentSrc = nested
+			}
+		}
 
-		if role == "assistant" {
-			content := extractContent(msg)
+		if role == "assistant" || msgType == "assistant" {
+			content := extractContent(contentSrc)
+			if content == "" {
+				content = extractContent(msg)
+			}
 			if len(content) > 0 {
 				lastAssistantMsg = truncate(content, 120)
 			}
 		}
 
 		// Detect tool_use for approval detection
-		if msgType == "tool_use" || role == "assistant" && hasToolUse(msg) {
-			toolName := extractToolName(msg)
+		if msgType == "tool_use" || hasToolUse(contentSrc) || hasToolUse(msg) {
+			toolName := extractToolName(contentSrc)
+			if toolName == "" {
+				toolName = extractToolName(msg)
+			}
 			if toolName != "" && !isReadOnlyTool(toolName) {
 				isWaiting = true
+				desc := extractToolDescription(contentSrc)
+				if desc == "" || desc == "Tool call" {
+					desc = extractToolDescription(msg)
+				}
 				pendingApproval = &ApprovalInfo{
 					ID:          fmt.Sprintf("approval_%s_%d", filepath.Base(path), msgCount),
 					ToolName:    toolName,
-					Description: extractToolDescription(msg),
+					Description: desc,
 				}
 			}
 		}
 
-		// Tool result clears waiting state
-		if msgType == "tool_result" || role == "tool" {
+		// Tool result clears waiting state (top-level or nested message.content blocks).
+		if msgType == "tool_result" || role == "tool" || hasToolResult(contentSrc) || hasToolResult(msg) {
 			isWaiting = false
 			pendingApproval = nil
 		}
 
-		// Update timestamp
-		if ts, ok := msg["timestamp"].(float64); ok {
-			lastTime = time.Unix(int64(ts), 0)
-		} else if ts, ok := msg["created"].(float64); ok {
-			lastTime = time.Unix(int64(ts), 0)
+		// Update timestamp (unix seconds/ms or RFC3339 string)
+		if t, ok := parseMessageTime(msg["timestamp"]); ok && t.After(lastTime) {
+			lastTime = t
+		} else if t, ok := parseMessageTime(msg["created"]); ok && t.After(lastTime) {
+			lastTime = t
 		}
 	}
 
@@ -179,6 +309,9 @@ func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*Se
 	}
 
 	sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	if projectDir == "" {
+		projectDir = decodeClaudeProjectDir(filepath.Base(filepath.Dir(path)))
+	}
 
 	return &SessionInfo{
 		ID:              sessionID,
@@ -187,8 +320,27 @@ func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*Se
 		Summary:         lastAssistantMsg,
 		LastActivity:    lastTime,
 		SessionPath:     path,
+		ProjectDir:      projectDir,
 		PendingApproval: pendingApproval,
 	}, nil
+}
+
+// decodeClaudeProjectDir best-effort reverses Claude's project folder encoding
+// (drive/path separators become '-').
+func decodeClaudeProjectDir(encoded string) string {
+	if encoded == "" || encoded == "." {
+		return ""
+	}
+	// Common Windows form: C--Users-admin-... or D--nekonest
+	s := encoded
+	if len(s) >= 3 && s[1] == '-' && s[2] == '-' {
+		// C--foo -> C:\foo  (remaining dashes stay as path seps approximately)
+		drive := string(s[0])
+		rest := s[3:]
+		rest = strings.ReplaceAll(rest, "-", string(filepath.Separator))
+		return drive + ":" + string(filepath.Separator) + rest
+	}
+	return strings.ReplaceAll(s, "-", string(filepath.Separator))
 }
 
 // Watch monitors a session file for changes.
@@ -292,11 +444,21 @@ func (a *ClaudeCodeAdapter) Interrupt(sessionID string) error {
 // --- Helper functions ---
 
 func extractContent(msg map[string]interface{}) string {
-	content, ok := msg["content"]
-	if !ok {
-		return ""
+	if content, ok := msg["content"]; ok {
+		if s := contentToText(content); s != "" {
+			return s
+		}
 	}
+	// Claude JSONL often nests under message.{role,content}
+	if nested, ok := msg["message"].(map[string]interface{}); ok {
+		if content, ok := nested["content"]; ok {
+			return contentToText(content)
+		}
+	}
+	return ""
+}
 
+func contentToText(content interface{}) string {
 	switch v := content.(type) {
 	case string:
 		return v
@@ -304,7 +466,7 @@ func extractContent(msg map[string]interface{}) string {
 		var parts []string
 		for _, block := range v {
 			if blockMap, ok := block.(map[string]interface{}); ok {
-				if blockType, _ := blockMap["type"].(string); blockType == "text" {
+				if blockType, _ := blockMap["type"].(string); blockType == "text" || blockType == "" {
 					if text, ok := blockMap["text"].(string); ok {
 						parts = append(parts, text)
 					}
@@ -317,6 +479,21 @@ func extractContent(msg map[string]interface{}) string {
 }
 
 func hasToolUse(msg map[string]interface{}) bool {
+	return contentHasBlockType(msg, "tool_use")
+}
+
+func hasToolResult(msg map[string]interface{}) bool {
+	if contentHasBlockType(msg, "tool_result") {
+		return true
+	}
+	// Nested message.content
+	if nested, ok := msg["message"].(map[string]interface{}); ok {
+		return contentHasBlockType(nested, "tool_result")
+	}
+	return false
+}
+
+func contentHasBlockType(msg map[string]interface{}, want string) bool {
 	content, ok := msg["content"]
 	if !ok {
 		return false
@@ -327,7 +504,7 @@ func hasToolUse(msg map[string]interface{}) bool {
 	}
 	for _, block := range blocks {
 		if blockMap, ok := block.(map[string]interface{}); ok {
-			if blockType, _ := blockMap["type"].(string); blockType == "tool_use" {
+			if blockType, _ := blockMap["type"].(string); blockType == want {
 				return true
 			}
 		}
@@ -414,8 +591,33 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+func parseMessageTime(v interface{}) (time.Time, bool) {
+	switch t := v.(type) {
+	case float64:
+		// Heuristic: ms vs seconds
+		if t > 1e12 {
+			return time.UnixMilli(int64(t)), true
+		}
+		if t > 0 {
+			return time.Unix(int64(t), 0), true
+		}
+	case string:
+		if t == "" {
+			return time.Time{}, false
+		}
+		if parsed, err := time.Parse(time.RFC3339Nano, t); err == nil {
+			return parsed, true
+		}
+		if parsed, err := time.Parse(time.RFC3339, t); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // ensure ClaudeCodeAdapter implements ClosableAdapter
 var _ ClosableAdapter = (*ClaudeCodeAdapter)(nil)
+
 // GetCommander returns the underlying ClaudeCommander for direct access.
 func (a *ClaudeCodeAdapter) GetCommander() *agentexec.ClaudeCommander {
 	return a.commander

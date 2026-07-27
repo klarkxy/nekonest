@@ -44,8 +44,13 @@ func (a *KiloAdapter) GetCommander() *agentexec.KiloCommander {
 	return a.commander
 }
 
-// Close is a no-op for Kilo (no long-lived file watchers).
-func (a *KiloAdapter) Close() error { return nil }
+// Close stops running kilo processes.
+func (a *KiloAdapter) Close() error {
+	if a.commander != nil {
+		a.commander.StopAll()
+	}
+	return nil
+}
 
 // resolveKiloDBPath finds ~/.local/share/kilo/kilo.db (and Windows equivalents).
 func resolveKiloDBPath() string {
@@ -85,15 +90,15 @@ func (a *KiloAdapter) Discover() ([]*SessionInfo, error) {
 	}
 	defer db.Close()
 
-	// time_updated is unix milliseconds.
-	cutoff := time.Now().Add(-24 * time.Hour).UnixMilli()
+	// time_updated is unix milliseconds. 7-day window + higher limit for phone history.
+	cutoff := time.Now().Add(-7 * 24 * time.Hour).UnixMilli()
 	rows, err := db.Query(`
 		SELECT id, title, directory, time_updated, agent
 		FROM session
 		WHERE time_archived IS NULL
 		  AND time_updated >= ?
 		ORDER BY time_updated DESC
-		LIMIT 50
+		LIMIT 100
 	`, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("query sessions: %w", err)
@@ -144,6 +149,7 @@ func (a *KiloAdapter) Discover() ([]*SessionInfo, error) {
 			Summary:      truncate(summary, 120),
 			LastActivity: last,
 			SessionPath:  directory,
+			ProjectDir:   directory,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -264,5 +270,72 @@ func (a *KiloAdapter) Interrupt(sessionID string) error {
 	return a.commander.Interrupt(sessionID)
 }
 
+// FetchHistory loads last N text turns from kilo.db (part + message).
+func (a *KiloAdapter) FetchHistory(sessionID string, limit int) ([]*HistoryMessage, error) {
+	limit = clampHistoryLimit(limit)
+	if _, err := os.Stat(a.dbPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("kilo db not found")
+	}
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(500)", filepath.ToSlash(a.dbPath))
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`
+		SELECT
+			p.id,
+			COALESCE(json_extract(m.data, '$.role'), ''),
+			COALESCE(json_extract(p.data, '$.text'), ''),
+			p.time_created
+		FROM part p
+		JOIN message m ON m.id = p.message_id
+		WHERE p.session_id = ?
+		  AND json_extract(p.data, '$.type') = 'text'
+		  AND COALESCE(json_extract(p.data, '$.text'), '') != ''
+		  AND COALESCE(json_extract(p.data, '$.ignored'), 0) = 0
+		  AND json_extract(m.data, '$.role') IN ('user', 'assistant')
+		ORDER BY p.time_created DESC
+		LIMIT ?
+	`, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("kilo history: %w", err)
+	}
+	defer rows.Close()
+
+	var rev []*HistoryMessage
+	for rows.Next() {
+		var id, role, content string
+		var tsMs int64
+		if err := rows.Scan(&id, &role, &content, &tsMs); err != nil {
+			continue
+		}
+		content = strings.TrimSpace(content)
+		if content == "" || (role != "user" && role != "assistant") {
+			continue
+		}
+		ts := tsMs / 1000
+		if ts <= 0 {
+			ts = time.Now().Unix()
+		}
+		rev = append(rev, &HistoryMessage{
+			ID:        id,
+			Role:      role,
+			Content:   truncateRunes(content, 4000),
+			Type:      "text",
+			Timestamp: ts,
+		})
+	}
+	// reverse DESC → ASC
+	for i, j := 0, len(rev)-1; i < j; i, j = i+1, j-1 {
+		rev[i], rev[j] = rev[j], rev[i]
+	}
+	return rev, rows.Err()
+}
+
 // ensure implements ClosableAdapter
 var _ ClosableAdapter = (*KiloAdapter)(nil)
+var _ Adapter = (*KiloAdapter)(nil)
+var _ Adapter = (*ClaudeCodeAdapter)(nil)
+var _ Adapter = (*CodexAdapter)(nil)
