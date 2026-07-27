@@ -9,20 +9,31 @@
     "build": "vue-tsc --noEmit && vite build",
     "build:only": "vite build",
     "preview": "vite preview",
-    "type-check": "vue-tsc --noEmit"
+    "type-check": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "dompurify": "^3.4.12",
+    "marked": "^18.0.7",
+    "naive-ui": "^2.38.2",
     "pinia": "^2.1.7",
     "vue": "^3.4.27",
-    "vue-router": "^4.3.2",
-    "naive-ui": "^2.38.2"
+    "vue-router": "^4.3.2"
   },
   "devDependencies": {
+    "@types/dompurify": "^3.2.0",
     "@vitejs/plugin-vue": "^5.0.4",
+    "jsdom": "^24.1.0",
+    "terser": "^5.31.0",
     "typescript": "^5.4.5",
     "vite": "^5.2.12",
     "vite-plugin-pwa": "^0.20.0",
+    "vitest": "^2.0.0",
     "vue-tsc": "^2.0.19",
-    "terser": "^5.31.0"
+    "workbox-core": "^7.4.1",
+    "workbox-precaching": "^7.4.1",
+    "workbox-routing": "^7.4.1",
+    "workbox-strategies": "^7.4.1"
   }
 }

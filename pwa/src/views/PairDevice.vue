@@ -6,18 +6,26 @@
     </div>
 
     <div class="pair-content">
-      <div class="pair-icon">🐱</div>
+      <div class="pair-icon">
+        <img src="/neko-avatar.webp" alt="NekoNest" width="96" height="96" />
+      </div>
       <p class="pair-desc">
         在 Windows 上执行 <code>nekonest-daemon -register</code> 或
         <code>-pair gen</code> 后会打印 6 位配对码，输入后即可在手机上看到该电脑。
       </p>
 
+      <label class="field-label" for="pair-code">配对码</label>
       <n-input
+        id="pair-code"
         v-model:value="pairCode"
+        name="one-time-code"
+        autocomplete="one-time-code"
+        inputmode="text"
         placeholder="输入 6 位配对码"
         size="large"
         maxlength="6"
         class="pair-input"
+        aria-describedby="pair-help"
       />
 
       <n-button
@@ -31,7 +39,7 @@
         配对！
       </n-button>
 
-      <div class="pair-help">
+      <div id="pair-help" class="pair-help">
         <p class="help-title">💡 步骤</p>
         <ol class="help-steps">
           <li>VPS 已部署 Server，并设置 <code>NEKONEST_PHONE_SECRET</code></li>
@@ -94,9 +102,17 @@ async function handlePair() {
   padding: 20px 0;
 }
 .pair-icon {
-  font-size: 64px;
   text-align: center;
   margin-bottom: 20px;
+}
+.pair-icon img {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 8px 24px rgba(184, 169, 232, 0.45);
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  background: linear-gradient(135deg, #F3EEFF, #FFE8F0);
 }
 .pair-desc {
   text-align: center;
@@ -104,6 +120,13 @@ async function handlePair() {
   font-size: 14px;
   line-height: 1.6;
   margin-bottom: 24px;
+}
+.field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #5a5a5a;
+  margin-bottom: 8px;
 }
 .pair-input {
   margin-bottom: 16px;

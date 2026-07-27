@@ -4,15 +4,31 @@ import { VitePWA } from 'vite-plugin-pwa'
 import { resolve } from 'path'
 
 export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.{test,spec}.ts']
+  },
   plugins: [
     vue(),
     VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+      injectRegister: false,
+      includeAssets: [
+        'favicon.svg',
+        'neko-mark.svg',
+        'neko-avatar.webp',
+        'pwa-192x192.png',
+        'pwa-512x512.png',
+        'apple-touch-icon.png'
+      ],
       manifest: {
         name: 'NekoNest 猫娘窝',
         short_name: 'NekoNest',
         description: '远程控制你的 AI Coding Agent',
+        lang: 'zh-CN',
         theme_color: '#B8A9E8',
         background_color: '#FAF8F5',
         display: 'standalone',
@@ -35,24 +51,20 @@ export default defineConfig({
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any maskable'
+          },
+          {
+            src: '/neko-mark.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
+            purpose: 'any'
           }
         ]
       },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365
-              }
-            }
-          }
-        ]
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff2}']
+      },
+      devOptions: {
+        enabled: false
       }
     })
   ],

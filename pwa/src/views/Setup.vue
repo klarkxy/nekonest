@@ -4,20 +4,25 @@
     <h1>NekoNest</h1>
     <p class="desc">连接你的猫娘窝前，请输入与 VPS 上相同的手机访问密钥。</p>
 
+    <label class="field-label" for="phone-secret">手机访问密钥</label>
     <n-input
+      id="phone-secret"
       v-model:value="secret"
       type="password"
+      name="password"
+      autocomplete="current-password"
       show-password-on="click"
       placeholder="NEKONEST_PHONE_SECRET"
       size="large"
       class="secret-input"
+      aria-describedby="secret-hint"
     />
 
     <n-button type="primary" block size="large" :disabled="!secret.trim()" @click="save">
       进入猫娘窝
     </n-button>
 
-    <p class="hint">
+    <p id="secret-hint" class="hint">
       在 VPS 上设置环境变量 <code>NEKONEST_PHONE_SECRET</code>。
       若未设置密钥，可随便填一个字符后进入（仅限内网调试）。
     </p>
@@ -58,6 +63,14 @@ h1 {
   font-size: 14px;
   line-height: 1.6;
   margin-bottom: 24px;
+}
+.field-label {
+  display: block;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  color: #5a5a5a;
+  margin-bottom: 8px;
 }
 .secret-input {
   margin-bottom: 16px;

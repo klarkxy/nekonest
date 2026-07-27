@@ -2,7 +2,7 @@
   <div class="device-list-page">
     <div class="page-header">
       <div class="logo">
-        <span class="cat-ear">🐱</span>
+        <img class="logo-mark" src="/neko-avatar.webp" alt="" width="40" height="40" />
         <h1>NekoNest</h1>
       </div>
       <p class="subtitle">猫娘窝 · 手机遥控家里的 AI Agent</p>
@@ -26,14 +26,16 @@
     </div>
 
     <div class="device-cards">
-      <div
+      <button
         v-for="device in visibleDevices"
         :key="device.id"
+        type="button"
         class="neko-card device-card"
+        :aria-label="`打开设备 ${device.name}`"
         @click="goToDevice(device)"
       >
         <div class="device-header">
-          <span class="status-dot" :class="device.status"></span>
+          <span class="status-dot" :class="device.status" aria-hidden="true"></span>
           <span class="device-name">{{ device.name }}</span>
           <span class="device-os">Windows</span>
         </div>
@@ -43,7 +45,7 @@
           </span>
           <span v-else class="offline-text">zzZ 休眠中...</span>
         </div>
-      </div>
+      </button>
 
       <div v-if="visibleDevices.length === 0 && !deviceStore.loading" class="empty-state">
         <div class="empty-icon">🐱</div>
@@ -119,11 +121,24 @@ function goSetup() {
 .logo {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+.logo-mark {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(184, 169, 232, 0.45);
+  border: 2px solid rgba(255,255,255,0.9);
 }
 .logo h1 {
   margin: 0;
   font-size: 24px;
+  background: linear-gradient(120deg, #7A68C0, #D070A0);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .subtitle {
   color: #6a6a6a;
@@ -152,9 +167,19 @@ function goSetup() {
   color: #bf360c;
 }
 .device-card {
+  display: block;
+  width: 100%;
   padding: 16px;
   margin-bottom: 12px;
   cursor: pointer;
+  border: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.device-card:focus-visible {
+  outline: 2px solid #B8A9E8;
+  outline-offset: 2px;
 }
 .device-header {
   display: flex;

@@ -9,6 +9,7 @@ export type MessageType =
   | 'session_message'
   | 'send_prompt'
   | 'prompt_sent'
+  | 'prompt_failed'
   | 'approve'
   | 'deny'
   | 'interrupt'
@@ -21,6 +22,9 @@ export type MessageType =
   | 'create_session'
   | 'session_created'
   | 'subscribe'
+  | 'fetch_history'
+  | 'session_history'
+  | 'subscribe_ack'
 
 export interface NekoMessage {
   type: MessageType
@@ -49,6 +53,10 @@ export interface AgentSession {
   status: AgentStatus
   summary: string
   last_activity: number
+  /** Full project/workspace path on the PC */
+  project_dir?: string
+  /** Short project folder name */
+  project?: string
   pending_approval?: PendingApproval
 }
 
@@ -59,11 +67,27 @@ export interface PendingApproval {
   parameters?: Record<string, unknown>
 }
 
+export interface AttachmentRef {
+  id?: string
+  url: string
+  name?: string
+  mime?: string
+  size?: number
+  key?: string
+}
+
 export interface SessionMessage {
   id: string
   role: 'assistant' | 'user' | 'tool' | 'system'
   content: string
   type?: 'thinking' | 'text' | 'tool_call' | 'tool_result' | 'error' | 'assistant' | 'system'
   timestamp: number
-  metadata?: Record<string, unknown>
+  metadata?: {
+    attachments?: AttachmentRef[]
+    /** Local delivery state for a prompt waiting on daemon acceptance. */
+    delivery_status?: 'queued' | 'sending' | 'failed'
+    delivery_error?: string
+    delivery_retry_allowed?: boolean
+    [key: string]: unknown
+  }
 }

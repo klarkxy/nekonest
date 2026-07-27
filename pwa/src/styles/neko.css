@@ -1,4 +1,16 @@
-/* NekoNest - 可爱风全局样式 */
+/* NekoNest - 猫娘窝全局样式 */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* ===== 状态指示器 ===== */
 .status-dot {
@@ -27,6 +39,12 @@
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.waiting { animation: none; }
+  .neko-card { transition: none; }
+  .neko-card:active { transform: none; }
 }
 
 /* ===== 猫耳装饰 ===== */
@@ -81,7 +99,7 @@
   font-size: 18px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 .approve-btn:active {
@@ -97,7 +115,7 @@
   font-size: 18px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 .deny-btn:active {

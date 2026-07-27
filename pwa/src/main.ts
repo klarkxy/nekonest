@@ -10,9 +10,10 @@ app.use(createPinia())
 app.use(router)
 app.mount('#app')
 
-// P2-C: Register Service Worker for offline support + push notifications
+// PWA: Workbox injectManifest SW (precache + push) — see src/sw.ts
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
+    // vite-plugin-pwa emits sw.js from src/sw.ts in production builds
     navigator.serviceWorker
       .register('/sw.js')
       .then((reg) => {
