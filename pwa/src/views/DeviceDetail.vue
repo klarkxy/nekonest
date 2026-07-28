@@ -1,45 +1,78 @@
 <template>
   <div class="device-detail-page">
-    <div class="page-header">
-      <n-button text @click="$router.back()">← 返回</n-button>
-      <h1>{{ device?.name || deviceId }}</h1>
-      <span v-if="device" class="status-dot" :class="device.status"></span>
-    </div>
-
-    <div class="hero-banner neko-card">
-      <div class="hero-cat" aria-hidden="true">
-        <img src="/neko-avatar.webp" alt="" width="72" height="72" />
+    <header class="device-nav">
+      <n-button text class="back-button" aria-label="返回设备列表" @click="goBack">
+        <span aria-hidden="true">‹</span>
+        设备列表
+      </n-button>
+      <div class="device-title">
+        <p>Current nest</p>
+        <h1>{{ device?.name || deviceId }}</h1>
       </div>
-      <div class="hero-text">
-        <div class="hero-title">猫娘窝 · 遥控台</div>
-        <div class="hero-sub">
-          {{ device?.status === 'online' ? '点会话可同步 PC 历史；右侧「归档」藏线程' : '设备离线，请检查家中 Daemon' }}
+      <span
+        class="device-status-mark"
+        :class="device?.status === 'online' ? 'device-status-mark--online' : ''"
+        :title="device?.status === 'online' ? '在线' : '离线'"
+      >
+        <span class="status-dot" :class="device?.status || 'waiting'" aria-hidden="true"></span>
+        <span class="sr-only">{{ device?.status === 'online' ? '在线' : '离线' }}</span>
+      </span>
+    </header>
+
+    <section class="welcome-scene" aria-labelledby="welcome-title">
+      <div class="scene-portrait">
+        <span class="portrait-backdrop" aria-hidden="true"></span>
+        <img
+          src="/brand/nekonest-duo.webp"
+          alt="NekoNest 的两位原创猫娘看板娘"
+          width="104"
+          height="104"
+        />
+      </div>
+      <div class="scene-dialogue">
+        <p class="speaker">NekoNest guide</p>
+        <h2 id="welcome-title">
+          {{ device?.status === 'online' ? '欢迎回来，目录已经整理好了。' : '这台电脑现在没有回应。' }}
+        </h2>
+        <p>
+          {{
+            device?.status === 'online'
+              ? '从工作目录进入对应智能体，继续本机已有线程。'
+              : '请检查家中 Daemon；恢复在线后，线程会在这里自动出现。'
+          }}
+        </p>
+        <span class="dialogue-tail" aria-hidden="true"></span>
+      </div>
+    </section>
+
+    <dl class="device-stats" aria-label="设备概况">
+      <div>
+        <dt>状态</dt>
+        <dd>
+          <span class="status-dot" :class="device?.status || 'waiting'" aria-hidden="true"></span>
+          {{ device ? (device.status === 'online' ? '在线' : '离线') : '读取中' }}
+        </dd>
+      </div>
+      <div>
+        <dt>智能体</dt>
+        <dd>{{ device?.active_agents ?? 0 }}</dd>
+      </div>
+      <div>
+        <dt>线程</dt>
+        <dd>{{ sessionStore.sessions.length }}</dd>
+      </div>
+    </dl>
+
+    <section class="sessions-section" aria-labelledby="sessions-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">Directory · Agent · Thread</p>
+          <h2 id="sessions-title">工作目录</h2>
         </div>
+        <span class="local-only">本机线程</span>
       </div>
-    </div>
-
-    <div v-if="device" class="device-info-card neko-card">
-      <div class="info-row">
-        <span class="info-label">状态</span>
-        <span class="info-value">
-          <span class="status-dot" :class="device.status"></span>
-          {{ device.status === 'online' ? '在线' : '离线' }}
-        </span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Agent 数</span>
-        <span class="info-value">{{ device.active_agents }} 个</span>
-      </div>
-    </div>
-
-    <div class="sessions-section">
-      <h2>Agent 会话</h2>
       <SessionThreadList :sessions="sessionStore.sessions" @open="goSession" />
-    </div>
-
-    <div class="actions-section">
-      <n-button block @click="$router.push(`/device/${deviceId}/sessions`)">📋 全部会话</n-button>
-    </div>
+    </section>
   </div>
 </template>
 
@@ -53,6 +86,10 @@ import { useBindingStore } from '@/stores/binding'
 import { apiFetch } from '@/api/http'
 import { ensurePushSubscription } from '@/api/push'
 import { nekoWS } from '@/api/websocket'
+import {
+  devicesLocation,
+  sessionDetailLocation
+} from '@/router/navigation'
 import SessionThreadList from '@/components/SessionThreadList.vue'
 
 const route = useRoute()
@@ -132,48 +169,247 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 }
 
 function goSession(id: string) {
-  router.push(`/device/${deviceId.value}/session/${encodeURIComponent(id)}`)
+  void router.push(sessionDetailLocation(deviceId.value, id))
+}
+
+function goBack() {
+  void router.push(devicesLocation())
 }
 </script>
 
 <style scoped>
 .device-detail-page {
-  padding: 20px;
-  padding-bottom: 40px;
-  min-height: 100vh;
+  min-height: var(--neko-content-block-size, 100dvh);
+  padding: 18px 20px 42px;
+}
+
+.device-nav {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.back-button span {
+  margin-right: 4px;
+  font-family: serif;
+  font-size: 21px;
+  line-height: 0;
+  transform: translateY(-1px);
+}
+
+.device-title {
+  min-width: 0;
+}
+
+.device-title p,
+.section-kicker,
+.speaker {
+  margin: 0;
+  color: var(--neko-rose);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.11em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.device-title h1 {
+  overflow: hidden;
+  margin: 1px 0 0;
+  color: var(--neko-ink);
+  font-family: var(--neko-display);
+  font-size: 17px;
+  font-weight: 720;
+  letter-spacing: -0.035em;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-status-mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(235, 229, 232, 0.8);
+}
+
+.device-status-mark--online {
+  background: rgba(226, 241, 233, 0.86);
+}
+
+.welcome-scene {
+  position: relative;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: end;
+  gap: 0;
+  min-height: 142px;
+  margin: 0 -4px 15px;
+}
+
+.scene-portrait {
+  position: relative;
+  z-index: 2;
+  align-self: center;
+  width: 104px;
+  transform: translate(3px, 4px);
+}
+
+.portrait-backdrop {
+  position: absolute;
+  inset: -13px;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.92), transparent 67%);
+}
+
+.scene-portrait img {
+  display: block;
+  width: 104px;
+  height: 104px;
+  border: 3px solid rgba(255, 253, 251, 0.92);
+  border-radius: 30px 30px 37px 19px;
+  box-shadow: 0 13px 28px rgba(92, 67, 92, 0.18);
+  object-fit: cover;
+}
+
+.scene-dialogue {
+  position: relative;
+  min-height: 119px;
+  padding: 16px 15px 15px 25px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 18px 18px 25px 12px;
   background:
-    radial-gradient(ellipse 90% 40% at 50% -10%, rgba(255, 182, 193, 0.22), transparent 55%),
-    radial-gradient(ellipse 60% 30% at 100% 40%, rgba(184, 169, 232, 0.15), transparent 50%),
-    #FAF8F5;
+    radial-gradient(circle at 96% 4%, rgba(225, 207, 237, 0.42), transparent 8rem),
+    rgba(255, 252, 250, 0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    var(--neko-shadow-soft);
 }
-.page-header {
-  display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
-}
-.page-header h1 {
-  font-size: 20px; font-weight: 600; color: #4A4A4A; margin: 0; flex: 1;
-}
-.hero-banner {
-  display: flex; align-items: center; gap: 14px; margin-bottom: 16px;
-  background: linear-gradient(135deg, #F3EEFF 0%, #FFE8F0 100%);
-  border: 1px solid rgba(184, 169, 232, 0.35);
-}
-.hero-cat img {
-  display: block; width: 72px; height: 72px; border-radius: 50%; object-fit: cover;
-  box-shadow: 0 4px 14px rgba(184, 169, 232, 0.45);
-  border: 2px solid rgba(255,255,255,0.95);
-}
-.hero-title { font-size: 16px; font-weight: 700; color: #5A4A8A; }
-.hero-sub { font-size: 13px; color: #7A6A9A; margin-top: 4px; }
 
-.device-info-card { margin-bottom: 20px; }
-.info-row {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 0; border-bottom: 1px solid #F5F3F0;
+.scene-dialogue h2 {
+  margin: 5px 0 0;
+  color: var(--neko-ink);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.42;
+  text-wrap: balance;
 }
-.info-row:last-child { border-bottom: none; }
-.info-label { font-size: 13px; color: #9E9E9E; }
-.info-value { font-size: 14px; color: #4A4A4A; display: flex; align-items: center; gap: 6px; }
 
-h2 { font-size: 16px; font-weight: 600; color: #4A4A4A; margin: 0 0 12px; }
-.actions-section { margin-top: 20px; }
+.scene-dialogue > p:last-of-type {
+  margin: 7px 0 0;
+  color: var(--neko-ink-soft);
+  font-size: 11px;
+  line-height: 1.58;
+  text-wrap: pretty;
+}
+
+.dialogue-tail {
+  position: absolute;
+  bottom: 13px;
+  left: -8px;
+  width: 16px;
+  height: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.82);
+  background: #fffaf8;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  transform: rotate(45deg);
+}
+
+.device-stats {
+  display: grid;
+  grid-template-columns: 1.25fr 0.8fr 0.8fr;
+  margin: 0 0 26px;
+  padding: 10px 4px;
+  border-block: 1px solid var(--neko-line);
+}
+
+.device-stats > div {
+  min-width: 0;
+  padding: 2px 12px;
+  border-left: 1px solid var(--neko-line);
+}
+
+.device-stats > div:first-child {
+  border-left: 0;
+}
+
+.device-stats dt {
+  color: var(--neko-ink-faint);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.device-stats dd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0 0;
+  color: var(--neko-ink);
+  font-size: 13px;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+}
+
+.sessions-section {
+  position: relative;
+}
+
+.section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-inline: 2px;
+}
+
+.section-heading h2 {
+  margin: 3px 0 0;
+  color: var(--neko-ink);
+  font-family: var(--neko-display);
+  font-size: 19px;
+  font-weight: 720;
+  letter-spacing: -0.035em;
+}
+
+.local-only {
+  padding: 4px 7px;
+  border-radius: 7px;
+  color: var(--neko-primary-deep);
+  background: rgba(236, 229, 245, 0.86);
+  font-size: 9px;
+  font-weight: 680;
+}
+
+@media (max-width: 370px) {
+  .device-detail-page {
+    padding-inline: 16px;
+  }
+
+  .welcome-scene {
+    grid-template-columns: 78px minmax(0, 1fr);
+  }
+
+  .scene-portrait,
+  .scene-portrait img {
+    width: 90px;
+  }
+
+  .scene-portrait img {
+    height: 90px;
+  }
+
+  .scene-dialogue {
+    padding-left: 20px;
+  }
+
+  .scene-dialogue h2 {
+    font-size: 13px;
+  }
+}
 </style>

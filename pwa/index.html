@@ -3,54 +3,59 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#B8A9E8" />
+  <meta name="theme-color" content="#8D75B8" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="NekoNest" />
-  <meta name="description" content="NekoNest 猫娘窝 - 远程控制你的 AI Coding Agent" />
-  
-  <!-- Favicon / PWA icons -->
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
-  
-  <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="猫娘窝" />
+  <meta name="description" content="NekoNest 猫娘窝：从手机继续家中电脑上的 AI Coding Agent 线程。" />
+  <meta property="og:title" content="NekoNest 猫娘窝" />
+  <meta property="og:description" content="按工作目录和智能体整理家中电脑上的本机线程。" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="/brand/nekonest-mark-1024.png" />
+  <meta name="twitter:card" content="summary" />
+
+  <link rel="icon" type="image/png" sizes="192x192" href="/brand/pwa-192x192.png" />
+  <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+
   <title>NekoNest 猫娘窝</title>
-  
+
   <style>
-    /* Critical CSS - prevents FOUC */
     body {
       margin: 0;
       padding: 0;
-      background-color: #FAF8F5;
-      font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f8f1ed;
+      font-family: "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
     }
     #app {
       min-height: 100vh;
+      min-height: 100dvh;
     }
-    /* Initial loading state */
     .nekonest-splash {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
-      color: #B8A9E8;
+      min-height: 100dvh;
+      color: #746975;
     }
-    .nekonest-splash .cat {
-      font-size: 48px;
-      animation: bounce 1.2s infinite;
+    .nekonest-splash img {
+      width: 84px;
+      height: 84px;
+      border-radius: 24px;
+      box-shadow: 0 14px 34px rgba(92, 67, 92, 0.18);
+      animation: breathe 1.4s ease-in-out infinite;
     }
-    @keyframes bounce {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-10px); }
+    .nekonest-splash p {
+      margin: 15px 0 0;
+      color: #746975;
+      font-size: 13px;
+    }
+    @keyframes breathe {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-4px) scale(1.015); }
     }
     @media (prefers-reduced-motion: reduce) {
-      .nekonest-splash .cat { animation: none; }
+      .nekonest-splash img { animation: none; }
       *, *::before, *::after {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
@@ -62,8 +67,8 @@
 <body>
   <div id="app">
     <div class="nekonest-splash">
-      <div class="cat">🐱</div>
-      <p style="margin-top: 16px; color: #9E9E9E; font-size: 14px;">猫娘窝加载中...</p>
+      <img src="/brand/nekonest-duo.webp" alt="" width="84" height="84" />
+      <p>正在整理猫窝里的线程…</p>
     </div>
   </div>
   <script type="module" src="/src/main.ts"></script>

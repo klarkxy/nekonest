@@ -1,4 +1,5 @@
 import type { AgentSession, AgentStatus, AgentType } from '@/types/protocol'
+import { agentOrder, getAgentMeta } from '@/config/agents'
 
 export type AgentGroup = {
   type: AgentType
@@ -8,33 +9,16 @@ export type AgentGroup = {
   sessions: AgentSession[]
 }
 
-const ORDER: AgentType[] = ['kilo', 'claude_code', 'codex']
-
 export function agentIcon(type: AgentType | string): string {
-  switch (type) {
-    case 'claude_code': return '🟣'
-    case 'kilo': return '🔴'
-    case 'codex': return '🟢'
-    default: return '🐱'
-  }
+  return getAgentMeta(type).symbol
 }
 
 export function agentLabel(type: AgentType | string): string {
-  switch (type) {
-    case 'claude_code': return 'Claude Code'
-    case 'kilo': return 'Kilo'
-    case 'codex': return 'Codex'
-    default: return String(type)
-  }
+  return getAgentMeta(type).label
 }
 
 export function agentColor(type: AgentType | string): string {
-  switch (type) {
-    case 'claude_code': return '#8B7EC8'
-    case 'kilo': return '#E07070'
-    case 'codex': return '#5BBF8A'
-    default: return '#B8A9E8'
-  }
+  return getAgentMeta(type).color
 }
 
 export function statusLabel(status: AgentStatus | string): string {
@@ -59,30 +43,18 @@ export function groupSessionsByAgent(
   for (const [k, list] of map) {
     map.set(k, sortFn ? sortFn(list) : [...list].sort((a, b) => (b.last_activity || 0) - (a.last_activity || 0)))
   }
-  const groups: AgentGroup[] = []
-  for (const t of ORDER) {
-    const list = map.get(t)
-    if (list?.length) {
-      groups.push({
-        type: t,
-        label: agentLabel(t),
-        icon: agentIcon(t),
-        color: agentColor(t),
-        sessions: list
-      })
-      map.delete(t)
-    }
-  }
-  for (const [t, list] of map) {
-    groups.push({
-      type: t as AgentType,
-      label: agentLabel(t),
-      icon: agentIcon(t),
-      color: agentColor(t),
+  return [...map.entries()]
+    .map<AgentGroup>(([type, list]) => ({
+      type,
+      label: agentLabel(type),
+      icon: agentIcon(type),
+      color: agentColor(type),
       sessions: list
+    }))
+    .sort((a, b) => {
+      const order = agentOrder(a.type) - agentOrder(b.type)
+      return order || a.label.localeCompare(b.label, 'zh-CN')
     })
-  }
-  return groups
 }
 
 export function shortSummary(text: string | undefined, max = 48): string {

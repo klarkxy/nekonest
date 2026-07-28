@@ -16,52 +16,50 @@ export default defineConfig({
       filename: 'sw.ts',
       registerType: 'autoUpdate',
       injectRegister: false,
-      includeAssets: [
-        'favicon.svg',
-        'neko-mark.svg',
-        'neko-avatar.webp',
-        'pwa-192x192.png',
-        'pwa-512x512.png',
-        'apple-touch-icon.png'
-      ],
       manifest: {
         name: 'NekoNest 猫娘窝',
-        short_name: 'NekoNest',
-        description: '远程控制你的 AI Coding Agent',
+        short_name: '猫娘窝',
+        description: '按工作目录和智能体整理家中电脑上的本机线程',
         lang: 'zh-CN',
-        theme_color: '#B8A9E8',
-        background_color: '#FAF8F5',
+        theme_color: '#8D75B8',
+        background_color: '#F8F1ED',
         display: 'standalone',
         orientation: 'portrait',
         scope: '/',
         start_url: '/',
         icons: [
           {
-            src: '/pwa-192x192.png',
+            src: '/brand/pwa-192x192.png',
             sizes: '192x192',
             type: 'image/png'
           },
           {
-            src: '/pwa-512x512.png',
+            src: '/brand/pwa-512x512.png',
             sizes: '512x512',
             type: 'image/png'
           },
           {
-            src: '/pwa-512x512.png',
+            src: '/brand/pwa-512x512-maskable.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any maskable'
           },
           {
-            src: '/neko-mark.svg',
-            sizes: 'any',
-            type: 'image/svg+xml',
-            purpose: 'any'
+            src: '/brand/apple-touch-icon.png',
+            sizes: '180x180',
+            type: 'image/png'
           }
         ]
       },
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff2}']
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff2}'],
+        globIgnores: [
+          'brand/nekonest-mark-1024.png',
+          'brand/apple-touch-icon.png',
+          'brand/pwa-192x192.png',
+          'brand/pwa-512x512.png',
+          'brand/pwa-512x512-maskable.png'
+        ]
       },
       devOptions: {
         enabled: false

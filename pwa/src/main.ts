@@ -11,7 +11,7 @@ app.use(router)
 app.mount('#app')
 
 // PWA: Workbox injectManifest SW (precache + push) — see src/sw.ts
-if ('serviceWorker' in navigator) {
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     // vite-plugin-pwa emits sw.js from src/sw.ts in production builds
     navigator.serviceWorker

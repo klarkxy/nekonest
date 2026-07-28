@@ -1,79 +1,78 @@
 import type { GlobalThemeOverrides } from 'naive-ui'
 
 /**
- * NekoNest 可爱风主题覆盖
- * 主色：淡紫 + 浅薄荷
- * 背景：米白
- * 风格：大圆角、柔和阴影
+ * NekoNest 的 Naive UI 主题。全局只用灰紫作为交互主色，
+ * 玫瑰色留给品牌装饰，避免功能状态与装饰色混在一起。
  */
 export const nekoThemeOverrides: GlobalThemeOverrides = {
   common: {
-    primaryColor: '#B8A9E8',
-    primaryColorHover: '#A594DB',
-    primaryColorPressed: '#9280CE',
-    primaryColorSuppl: '#C9BBEF',
-    
-    successColor: '#7ED4A6',
-    successColorHover: '#6BC495',
-    successColorPressed: '#5AB484',
-    
-    warningColor: '#F4D4A0',
-    warningColorHover: '#E8C890',
-    warningColorPressed: '#DCBC80',
-    
-    errorColor: '#F4A0A0',
-    errorColorHover: '#E89090',
-    errorColorPressed: '#DC8080',
-    
-    infoColor: '#A0C8F4',
-    infoColorHover: '#90B8E8',
-    infoColorPressed: '#80A8DC',
-    
-    textColorBase: '#4A4A4A',
-    textColor1: '#4A4A4A',
-    textColor2: '#6A6A6A',
-    textColor3: '#9E9E9E',
-    
-    borderColor: '#E8E4E0',
-    borderRadius: '12px',
-    borderRadiusSmall: '8px',
-    
-    boxShadow1: '0 2px 8px rgba(0, 0, 0, 0.06)',
-    boxShadow2: '0 4px 16px rgba(0, 0, 0, 0.08)',
-    
-    fontFamily: '"Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    
-    bodyColor: '#FAF8F5',
-    cardColor: '#FFFFFF',
-    modalColor: '#FFFFFF',
-    popoverColor: '#FFFFFF',
-    tableColor: '#FFFFFF',
+    primaryColor: '#725B9D',
+    primaryColorHover: '#7F66AB',
+    primaryColorPressed: '#65488E',
+    primaryColorSuppl: '#725B9D',
+
+    successColor: '#70A98E',
+    successColorHover: '#619B7F',
+    successColorPressed: '#528B70',
+
+    warningColor: '#BC8448',
+    warningColorHover: '#AC743B',
+    warningColorPressed: '#986431',
+
+    errorColor: '#BF6874',
+    errorColorHover: '#AF5966',
+    errorColorPressed: '#994B58',
+
+    infoColor: '#758EB4',
+    infoColorHover: '#667FA5',
+    infoColorPressed: '#596F91',
+
+    textColorBase: '#463B48',
+    textColor1: '#463B48',
+    textColor2: '#746975',
+    textColor3: '#766A75',
+
+    borderColor: 'rgba(110, 89, 119, 0.18)',
+    borderRadius: '14px',
+    borderRadiusSmall: '9px',
+
+    boxShadow1: '0 8px 24px rgba(92, 67, 92, 0.09)',
+    boxShadow2: '0 18px 46px rgba(92, 67, 92, 0.13)',
+
+    fontFamily:
+      '"Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Segoe UI Variable Text", system-ui, sans-serif',
+
+    bodyColor: '#F8F1ED',
+    cardColor: '#FFFAF8',
+    modalColor: '#FFFAF8',
+    popoverColor: '#FFFAF8',
+    tableColor: '#FFFAF8'
   },
-  
+
   Button: {
-    borderRadiusMedium: '20px',
-    borderRadiusLarge: '24px',
-    borderRadiusSmall: '16px',
-    
-    colorPrimary: '#B8A9E8',
-    colorHoverPrimary: '#A594DB',
-    colorPressedPrimary: '#9280CE',
-    
-    fontWeight: '500',
+    borderRadiusMedium: '13px',
+    borderRadiusLarge: '15px',
+    borderRadiusSmall: '10px',
+
+    colorPrimary: '#725B9D',
+    colorHoverPrimary: '#7F66AB',
+    colorPressedPrimary: '#65488E',
+
+    fontWeight: '650'
   },
-  
+
   Card: {
-    borderRadius: '16px',
-    borderColor: '#E8E4E0',
-    color: '#FFFFFF',
-    paddingMedium: '16px',
+    borderRadius: '18px',
+    borderColor: 'rgba(110, 89, 119, 0.15)',
+    color: '#FFFAF8',
+    paddingMedium: '16px'
   },
-  
+
   Tag: {
-    borderRadius: '12px',
+    borderRadius: '9px'
   },
-  
+
   Input: {
-    borderRadius: '12px',
-  },
+    borderRadius: '12px'
+  }
 }

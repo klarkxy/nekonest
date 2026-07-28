@@ -1,53 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import DeviceList from '../views/DeviceList.vue'
-import DeviceDetail from '../views/DeviceDetail.vue'
-import SessionList from '../views/SessionList.vue'
-import NewSession from '../views/NewSession.vue'
-import SessionDetail from '../views/SessionDetail.vue'
-import PairDevice from '../views/PairDevice.vue'
-import Setup from '../views/Setup.vue'
 import { getPhoneSecret } from '../api/http'
+import { appRoutes } from './routes'
 
 const router = createRouter({
   history: createWebHistory(),
-  routes: [
-    {
-      path: '/setup',
-      name: 'setup',
-      component: Setup,
-      meta: { public: true }
-    },
-    {
-      path: '/',
-      name: 'devices',
-      component: DeviceList
-    },
-    {
-      path: '/device/:deviceId',
-      name: 'device-detail',
-      component: DeviceDetail
-    },
-    {
-      path: '/device/:deviceId/sessions',
-      name: 'sessions',
-      component: SessionList
-    },
-    {
-      path: '/device/:deviceId/new-session',
-      name: 'new-session',
-      component: NewSession
-    },
-    {
-      path: '/device/:deviceId/session/:sessionId',
-      name: 'session-detail',
-      component: SessionDetail
-    },
-    {
-      path: '/pair',
-      name: 'pair',
-      component: PairDevice
-    }
-  ]
+  routes: appRoutes,
+  scrollBehavior: () => ({ top: 0 })
 })
 
 router.beforeEach((to) => {
@@ -62,6 +20,22 @@ router.beforeEach((to) => {
     }
   }
   return true
+})
+
+router.afterEach((to) => {
+  const pageTitle =
+    to.name === 'devices'
+      ? '猫娘窝'
+      : to.name === 'device-detail'
+        ? '工作目录'
+        : to.name === 'session-detail'
+          ? '智能体线程'
+          : to.name === 'pair'
+            ? '配对电脑'
+            : to.name === 'setup'
+              ? '连接设置'
+              : ''
+  document.title = pageTitle ? `${pageTitle} · NekoNest` : 'NekoNest 猫娘窝'
 })
 
 export default router

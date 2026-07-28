@@ -1,7 +1,17 @@
 <template>
   <div class="session-detail-page">
     <div class="page-header">
-      <n-button text @click="$router.back()">← 返回</n-button>
+      <n-button text @click="goBack">← 返回</n-button>
+      <img
+        class="header-agent-avatar"
+        :src="agentMeta.avatar"
+        alt=""
+        width="34"
+        height="34"
+        :style="{ borderColor: agentMeta.color }"
+        @load="onAgentAvatarLoad"
+        @error="onAgentAvatarError"
+      />
       <div class="header-mid">
         <h1>{{ agentLabel }}</h1>
         <div v-if="projectLine" class="header-project" :title="projectLine.path">
@@ -28,7 +38,13 @@
       >中断</n-button>
     </div>
 
-    <div v-if="sessionStore.currentSession?.pending_approval" class="approval-banner">
+    <div
+      v-if="sessionStore.currentSession?.pending_approval"
+      class="approval-banner"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
       <div class="approval-info">
         <div class="approval-title">⚠️ 工具调用请求</div>
         <div class="approval-tool">{{ sessionStore.currentSession.pending_approval.tool_name }}</div>
@@ -57,7 +73,15 @@
       </div>
     </div>
 
-    <div class="messages-area" ref="messagesRef">
+    <div
+      ref="messagesRef"
+      class="messages-area"
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions text"
+      aria-label="会话消息"
+      tabindex="0"
+    >
       <div
         v-for="msg in sessionStore.messages"
         :key="msg.id"
@@ -129,7 +153,14 @@
 
       <div v-if="sessionStore.messages.length === 0 && !sessionStore.importing" class="empty-messages">
         <div class="neko-mascot" aria-hidden="true">
-          <img src="/neko-avatar.webp" alt="" width="72" height="72" />
+          <img
+            :src="agentMeta.avatar"
+            alt=""
+            width="72"
+            height="72"
+            @load="onAgentAvatarLoad"
+            @error="onAgentAvatarError"
+          />
         </div>
         <p class="empty-title">暂无消息</p>
         <p class="empty-hint">打开时会尝试同步 PC 上 Agent 的历史。也可直接输入或发图续写～</p>
@@ -206,11 +237,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { NButton, NInput } from 'naive-ui'
+import { getAgentMeta, UNKNOWN_AGENT_META } from '@/config/agents'
+import { deviceDetailLocation } from '@/router/navigation'
 import { useSessionStore } from '@/stores/session'
 import { useDraftStore } from '@/stores/drafts'
-import { agentIcon, agentLabel as agentTypeLabel, projectDisplay } from '@/utils/agent'
+import { projectDisplay } from '@/utils/agent'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
 import {
   pickAndUpload,
@@ -221,12 +254,13 @@ import {
 import type { SessionMessage, AttachmentRef as ProtoAtt } from '@/types/protocol'
 
 const route = useRoute()
+const router = useRouter()
 const sessionStore = useSessionStore()
 const draftStore = useDraftStore()
 
-const deviceId = computed(() => route.params.deviceId as string)
+const deviceId = computed(() => String(route.params.deviceId || ''))
 // Vue Router already decodes params — do not decodeURIComponent again (breaks literal %).
-const sessionId = computed(() => route.params.sessionId as string)
+const sessionId = computed(() => String(route.params.sessionId || ''))
 const inputText = ref('')
 const sending = ref(false)
 const uploading = ref(false)
@@ -239,10 +273,9 @@ let draftSaveTimer: number | null = null
 let routeGeneration = 0
 let uploadController: AbortController | null = null
 
+const agentMeta = computed(() => getAgentMeta(sessionStore.currentSession?.agent_type))
 const agentLabel = computed(() => {
-  const session = sessionStore.currentSession
-  if (!session) return '会话详情'
-  return `${agentIcon(session.agent_type)} ${agentTypeLabel(session.agent_type)}`
+  return sessionStore.currentSession ? agentMeta.value.label : '会话详情'
 })
 
 const projectLine = computed(() => {
@@ -349,7 +382,7 @@ function bindSession() {
     sessionStore.setCurrentSession({
       id: sid,
       device_id: did,
-      agent_type: 'kilo',
+      agent_type: 'unknown',
       status: 'idle',
       summary: '',
       last_activity: 0
@@ -357,6 +390,22 @@ function bindSession() {
   }
   restoreDraft()
   boundDraftKey = { deviceId: did, sessionId: sid }
+}
+
+function onAgentAvatarLoad(event: Event) {
+  const image = event.currentTarget as HTMLImageElement
+  image.hidden = false
+  delete image.dataset.fallbackApplied
+}
+
+function onAgentAvatarError(event: Event) {
+  const image = event.currentTarget as HTMLImageElement
+  if (image.dataset.fallbackApplied === '1') {
+    image.hidden = true
+    return
+  }
+  image.dataset.fallbackApplied = '1'
+  image.src = UNKNOWN_AGENT_META.avatar
 }
 
 onMounted(() => {
@@ -580,13 +629,19 @@ function handleDeny() {
 function handleInterrupt() {
   sessionStore.interrupt(deviceId.value, sessionId.value)
 }
+
+function goBack() {
+  void router.push(deviceDetailLocation(deviceId.value))
+}
 </script>
 
 <style scoped>
 .session-detail-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: var(--neko-content-block-size, 100dvh);
+  min-height: 0;
+  overflow: hidden;
   padding: 0;
   background:
     radial-gradient(ellipse 80% 50% at 10% 0%, rgba(255, 182, 193, 0.18), transparent 50%),
@@ -604,6 +659,17 @@ function handleInterrupt() {
   backdrop-filter: blur(10px);
 }
 .header-mid { flex: 1; min-width: 0; }
+.header-agent-avatar {
+  display: block;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border: 2px solid #8f7fc2;
+  border-radius: 11px;
+  background: #eeeaf8;
+  box-shadow: 0 3px 9px rgba(104, 83, 121, 0.18);
+  object-fit: cover;
+}
 .page-header h1 {
   font-size: 17px; font-weight: 600; color: #4A4A4A; margin: 0;
 }
@@ -654,7 +720,7 @@ function handleInterrupt() {
 .approval-actions { display: flex; gap: 12px; }
 
 .messages-area {
-  flex: 1; overflow-y: auto; padding: 16px;
+  flex: 1; min-height: 0; overflow-y: auto; padding: 16px;
   display: flex; flex-direction: column;
 }
 
@@ -783,8 +849,9 @@ function handleInterrupt() {
 }
 
 .input-bar {
+  flex: 0 0 auto;
   padding: 12px 16px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: 12px;
   border-top: 1px solid #E8E4E0;
   background: rgba(250, 248, 245, 0.95);
   backdrop-filter: blur(10px);
@@ -807,4 +874,5 @@ function handleInterrupt() {
   cursor: pointer;
 }
 .attachment-file:disabled { cursor: not-allowed; }
+
 </style>

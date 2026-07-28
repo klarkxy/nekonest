@@ -9,6 +9,7 @@ import {
   statusLabel,
   statusTagType
 } from './agent'
+import { getAgentMeta } from '@/config/agents'
 import type { AgentSession } from '@/types/protocol'
 
 const s = (p: Partial<AgentSession> & Pick<AgentSession, 'id' | 'agent_type'>): AgentSession =>
@@ -23,8 +24,11 @@ const s = (p: Partial<AgentSession> & Pick<AgentSession, 'id' | 'agent_type'>): 
 describe('agent helpers', () => {
   it('labels icons colors', () => {
     expect(agentLabel('kilo')).toBe('Kilo')
-    expect(agentIcon('claude_code')).toBe('🟣')
+    expect(agentIcon('claude_code')).toBe('🟠')
     expect(agentColor('codex')).toMatch(/^#/)
+    expect(getAgentMeta('kimi_cli').avatar).toBe('/agents/kimi-cli.webp')
+    expect(getAgentMeta('grok_build').label).toBe('Grok Build')
+    expect(getAgentMeta('future_agent').avatar).toBe('/agents/unknown.webp')
     expect(agentLabel('other')).toBe('other')
   })
 
@@ -45,9 +49,9 @@ describe('agent helpers', () => {
       s({ id: '1', agent_type: 'codex', last_activity: 1 }),
       s({ id: '2', agent_type: 'kilo', last_activity: 2 }),
       s({ id: '3', agent_type: 'claude_code', last_activity: 3 }),
-      s({ id: '4', agent_type: 'other' as never, last_activity: 4 })
+      s({ id: '4', agent_type: 'other', last_activity: 4 })
     ])
-    expect(groups.map(g => g.type)).toEqual(['kilo', 'claude_code', 'codex', 'other'])
+    expect(groups.map(g => g.type)).toEqual(['claude_code', 'codex', 'kilo', 'other'])
   })
 
   it('projectDisplay', () => {

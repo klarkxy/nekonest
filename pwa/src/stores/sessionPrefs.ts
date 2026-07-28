@@ -9,7 +9,7 @@ import {
 } from '@/utils/sessionSort'
 
 const ARCHIVED_KEY = 'nekonest_archived_sessions'
-const COLLAPSED_KEY = 'nekonest_collapsed_agents'
+const COLLAPSED_KEY = 'nekonest_collapsed_nodes_v2'
 const SHOW_ARCHIVED_KEY = 'nekonest_show_archived'
 const SORT_KEY = 'nekonest_session_sort'
 const ORDER_KEY = 'nekonest_session_order'
@@ -42,14 +42,19 @@ function loadOrder(): string[] {
   }
 }
 
-/** Local-only session prefs: archive, collapse, sort, manual order (not agent-side). */
+function loadSortMode(): SessionSortMode {
+  const stored = localStorage.getItem(SORT_KEY)
+  return stored === 'name' || stored === 'manual' || stored === 'recent'
+    ? stored
+    : 'recent'
+}
+
+/** Local-only session prefs: archive, hierarchy collapse, sort, manual order. */
 export const useSessionPrefsStore = defineStore('sessionPrefs', () => {
   const archived = ref<Set<string>>(loadSet(ARCHIVED_KEY))
   const collapsed = ref<Set<string>>(loadSet(COLLAPSED_KEY))
   const showArchived = ref(localStorage.getItem(SHOW_ARCHIVED_KEY) === '1')
-  const sortMode = ref<SessionSortMode>(
-    (localStorage.getItem(SORT_KEY) as SessionSortMode) || 'recent'
-  )
+  const sortMode = ref<SessionSortMode>(loadSortMode())
   const manualOrder = ref<string[]>(loadOrder())
 
   watch(showArchived, (v) => localStorage.setItem(SHOW_ARCHIVED_KEY, v ? '1' : '0'))
@@ -79,22 +84,22 @@ export const useSessionPrefsStore = defineStore('sessionPrefs', () => {
     else archive(id)
   }
 
-  function isCollapsed(agentType: string) {
-    return collapsed.value.has(agentType)
+  function isCollapsed(nodeKey: string) {
+    return collapsed.value.has(nodeKey)
   }
 
-  function toggleCollapse(agentType: string) {
+  function toggleCollapse(nodeKey: string) {
     const next = new Set(collapsed.value)
-    if (next.has(agentType)) next.delete(agentType)
-    else next.add(agentType)
+    if (next.has(nodeKey)) next.delete(nodeKey)
+    else next.add(nodeKey)
     collapsed.value = next
     saveSet(COLLAPSED_KEY, next)
   }
 
-  function setCollapsed(agentType: string, value: boolean) {
+  function setCollapsed(nodeKey: string, value: boolean) {
     const next = new Set(collapsed.value)
-    if (value) next.add(agentType)
-    else next.delete(agentType)
+    if (value) next.add(nodeKey)
+    else next.delete(nodeKey)
     collapsed.value = next
     saveSet(COLLAPSED_KEY, next)
   }
