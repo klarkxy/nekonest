@@ -108,11 +108,12 @@ func main() {
 	}
 	log.Printf("   Prompt journal: %s", commandJournal.path)
 
-	// Initialize adapters
-	ccAdapter := adapters.NewClaudeCodeAdapter()
-	codexAdapter := adapters.NewCodexAdapter()
-	kiloAdapter := adapters.NewKiloAdapter()
-	adapterList := []adapters.Adapter{ccAdapter, codexAdapter, kiloAdapter}
+	// Initialize the built-in adapter registry.
+	adapterRegistry, err := adapters.NewDefaultRegistry()
+	if err != nil {
+		log.Fatalf("[daemon] initialize adapters: %v", err)
+	}
+	adapterList := adapterRegistry.All()
 
 	// Log available agents
 	for _, a := range adapterList {
@@ -126,8 +127,18 @@ func main() {
 	// Create server connection
 	client := connection.NewClient(ctx, initialCfg.ServerURL, deviceID, token)
 
-	// Wire up agent output callbacks — send session_message back to server
-	setupOutputCallbacks(ccAdapter, codexAdapter, kiloAdapter, client, deviceID)
+	// Wire every adapter through one normalized output stream.
+	adapterRegistry.SetOutputSink(func(event adapters.OutputEvent) {
+		sendSessionMessage(
+			client,
+			deviceID,
+			event.SessionID,
+			string(event.AgentType),
+			event.Type,
+			event.Content,
+			event.MessageID,
+		)
+	})
 
 	// Session discovery state
 	var (
@@ -162,11 +173,8 @@ func main() {
 		var targetAdapter adapters.Adapter
 		sessionMu.Lock()
 		if info, ok := lastSessions[sessionID]; ok {
-			for _, a := range adapterList {
-				if string(info.AgentType) == a.Name() {
-					targetAdapter = a
-					break
-				}
+			if adapter, exists := adapterRegistry.Get(string(info.AgentType)); exists {
+				targetAdapter = adapter
 			}
 		}
 		sessionMu.Unlock()
@@ -382,33 +390,12 @@ func main() {
 			if limit > 40 {
 				limit = 40
 			}
-			var (
-				hist   []*adapters.HistoryMessage
-				source string
-				err    error
+			hist, source, err := fetchHistoryForSession(
+				sessionID,
+				limit,
+				targetAdapter,
+				adapterList,
 			)
-			try := func(a adapters.Adapter) {
-				if a == nil || hist != nil {
-					return
-				}
-				h, e := a.FetchHistory(sessionID, limit)
-				if e == nil && h != nil {
-					hist = h
-					source = a.Name()
-					err = nil
-				} else if e != nil && err == nil {
-					err = e
-				}
-			}
-			try(targetAdapter)
-			if hist == nil {
-				for _, a := range adapterList {
-					try(a)
-					if hist != nil {
-						break
-					}
-				}
-			}
 			if hist == nil {
 				msg := "no history found for session"
 				if err != nil {
@@ -455,38 +442,6 @@ func main() {
 			} else {
 				log.Printf("[daemon] session_history %s source=%s n=%d", sessionID, source, len(msgs))
 			}
-
-		case "create_session":
-			// Experimental: prefer discovering existing sessions on the PC.
-			agentType, _ := payload["agent_type"].(string)
-			prompt, _ := payload["prompt"].(string)
-			workDir, _ := payload["work_dir"].(string)
-
-			log.Printf("[daemon] create_session (experimental): type=%s workDir=%s", agentType, workDir)
-
-			go func() {
-				cfgSnapshot := *currentConfig()
-				newSessionID, err := startNewSession(agentType, prompt, workDir, ccAdapter, codexAdapter, &cfgSnapshot)
-				if err != nil {
-					log.Printf("[daemon] create_session error: %v", err)
-					sendDaemonError(client, deviceID, "", "create_session failed: "+err.Error()+
-						" — prefer opening a session on the PC first, then use Discover/resume")
-					return
-				}
-
-				confirmMsg := map[string]interface{}{
-					"type":       "session_created",
-					"device_id":  deviceID,
-					"session_id": newSessionID,
-					"timestamp":  time.Now().Unix(),
-					"payload": map[string]interface{}{
-						"agent_type": agentType,
-						"status":     "running",
-					},
-				}
-				client.Send(confirmMsg)
-				log.Printf("[daemon] session created: %s", newSessionID)
-			}()
 
 		case "heartbeat":
 			// Server heartbeat, keep-alive handled by connection layer
@@ -680,68 +635,13 @@ func main() {
 	client.Close()
 
 	// 3. Cleanup all adapter resources (watchers, running processes)
-	for _, adapter := range adapterList {
-		if closer, ok := adapter.(interface{ Close() error }); ok {
-			if err := closer.Close(); err != nil {
-				log.Printf("[daemon] error closing adapter %s: %v", adapter.Name(), err)
-			}
-		}
+	if err := adapterRegistry.Close(); err != nil {
+		log.Printf("[daemon] error closing adapters: %v", err)
 	}
 
 	// 4. Wait a bit for goroutines to finish
 	time.Sleep(500 * time.Millisecond)
 	log.Println("[daemon] goodbye 🐱")
-}
-
-// setupOutputCallbacks wires the agent output from commanders through to the server connection.
-// When an agent produces output, it gets sent as a session_message back to the server.
-func setupOutputCallbacks(
-	ccAdapter *adapters.ClaudeCodeAdapter,
-	codexAdapter *adapters.CodexAdapter,
-	kiloAdapter *adapters.KiloAdapter,
-	client *connection.Client,
-	deviceID string,
-) {
-	// Claude Code output callback
-	ccCommander := ccAdapter.GetCommander()
-	ccCommander.OnAgentOutput = func(sessionID, msgType, content string) {
-		sendSessionMessage(client, deviceID, sessionID, "claude_code", msgType, content, "")
-	}
-
-	// Codex output callback
-	codexCommander := codexAdapter.GetCommander()
-	codexCommander.OnAgentOutput = func(sessionID, msgType, content string) {
-		sendSessionMessage(client, deviceID, sessionID, "codex", msgType, content, "")
-	}
-
-	// Kilo: stdout JSON + DB poll for near-live text growth
-	kiloCommander := kiloAdapter.GetCommander()
-	kiloCommander.OnAgentOutput = func(sessionID, msgType, content, msgID string) {
-		sendSessionMessage(client, deviceID, sessionID, "kilo", msgType, content, msgID)
-	}
-	var streamStops sync.Map // sessionID -> stop func
-	kiloCommander.OnStreamStart = func(sessionID string) {
-		if v, ok := streamStops.Load(sessionID); ok {
-			if stop, ok := v.(func()); ok {
-				stop()
-			}
-			streamStops.Delete(sessionID)
-		}
-		stop := kiloAdapter.StartDBStream(sessionID, func(sid, partID, msgType, content string) {
-			sendSessionMessage(client, deviceID, sid, "kilo", msgType, content, partID)
-		})
-		streamStops.Store(sessionID, stop)
-		log.Printf("[daemon] kilo DB stream started for %s", sessionID)
-	}
-	kiloCommander.OnStreamEnd = func(sessionID string) {
-		if v, ok := streamStops.Load(sessionID); ok {
-			if stop, ok := v.(func()); ok {
-				stop()
-			}
-			streamStops.Delete(sessionID)
-		}
-		log.Printf("[daemon] kilo DB stream stopped for %s", sessionID)
-	}
 }
 
 // projectLabel shortens a full path to the leaf folder name for UI.
@@ -835,20 +735,6 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 	if err := client.Send(msg); err != nil {
 		log.Printf("[daemon] send session_message error: %v", err)
 	}
-}
-
-// startNewSession is experimental. Preferred path: open a session on the PC,
-// let Discover report the real session id, then send_prompt with --resume.
-func startNewSession(agentType, prompt, workDir string, ccAdapter *adapters.ClaudeCodeAdapter, codexAdapter *adapters.CodexAdapter, cfg *config.Config) (string, error) {
-	_ = workDir
-	_ = cfg
-	_ = ccAdapter
-	_ = codexAdapter
-	_ = prompt
-	return "", fmt.Errorf(
-		"create_session is not reliable yet for %s; open Claude Code/Codex/Kilo on the PC first, wait for the session to appear in the phone list, then send prompts there",
-		agentType,
-	)
 }
 
 // handleRegistration registers this device with the server via REST and saves config.
@@ -1002,28 +888,61 @@ func stripNekoAttachSuffix(prompt string) string {
 
 // pickAdapterForSession chooses one adapter when Discover cache missed.
 func pickAdapterForSession(sessionID string, list []adapters.Adapter) adapters.Adapter {
-	// Kilo: ses_...
-	if strings.HasPrefix(sessionID, "ses_") {
-		for _, a := range list {
-			if a.Name() == "kilo" {
-				return a
-			}
+	// IDs can overlap across stores. Return an adapter only when exactly one
+	// authoritative local store positively claims the session. In particular,
+	// do not use FetchHistory as an existence probe: empty history is valid.
+	var match adapters.Adapter
+	for _, adapter := range list {
+		if !adapter.OwnsSession(sessionID) {
+			continue
 		}
-	}
-	// Claude and Codex both use UUID-shaped IDs. Probe their authoritative local
-	// stores instead of guessing from the ID shape, especially before the first
-	// discovery pass has populated lastSessions.
-	for _, name := range []string{"claude_code", "codex", "kilo"} {
-		for _, a := range list {
-			if a.Name() == name {
-				// Probe: FetchHistory cheap existence check
-				if _, err := a.FetchHistory(sessionID, 1); err == nil {
-					return a
-				}
-			}
+		if match != nil {
+			return nil
 		}
+		match = adapter
 	}
-	return nil
+	return match
+}
+
+// fetchHistoryForSession keeps a successful empty history associated with its
+// owning adapter. A nil slice with a nil error is a valid empty transcript,
+// not a signal to probe unrelated agent stores.
+func fetchHistoryForSession(
+	sessionID string,
+	limit int,
+	preferred adapters.Adapter,
+	list []adapters.Adapter,
+) ([]*adapters.HistoryMessage, string, error) {
+	var firstErr error
+	read := func(adapter adapters.Adapter) ([]*adapters.HistoryMessage, string, bool) {
+		if adapter == nil {
+			return nil, "", false
+		}
+		history, err := adapter.FetchHistory(sessionID, limit)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			return nil, "", false
+		}
+		if history == nil {
+			history = []*adapters.HistoryMessage{}
+		}
+		return history, adapter.Name(), true
+	}
+
+	if history, source, ok := read(preferred); ok {
+		return history, source, nil
+	}
+	owner := pickAdapterForSession(sessionID, list)
+	if owner == nil ||
+		(preferred != nil && owner.Name() == preferred.Name()) {
+		return nil, "", firstErr
+	}
+	if history, source, ok := read(owner); ok {
+		return history, source, nil
+	}
+	return nil, "", firstErr
 }
 
 func parseAttachmentRefs(raw interface{}) []attach.Ref {

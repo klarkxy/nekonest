@@ -72,6 +72,7 @@ func TestClaudeDiscoverExcludesSubagents(t *testing.T) {
 	mainID := "22ed6069-1ecd-4b37-9faa-25964612dad0"
 	sidechainID := "agent-a256850a5fc06544c"
 	topLevelSidechainID := "agent-future-layout"
+	oldRootID := "old-visible-root"
 
 	writeClaudeTranscript(t, filepath.Join(project, mainID+".jsonl"), map[string]interface{}{
 		"type":        "assistant",
@@ -103,6 +104,20 @@ func TestClaudeDiscoverExcludesSubagents(t *testing.T) {
 			"content": "future child task",
 		},
 	})
+	oldTime := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	oldRootPath := filepath.Join(project, oldRootID+".jsonl")
+	writeClaudeTranscript(t, oldRootPath, map[string]interface{}{
+		"type":      "assistant",
+		"sessionId": oldRootID,
+		"timestamp": oldTime.Format(time.RFC3339Nano),
+		"message": map[string]interface{}{
+			"role":    "assistant",
+			"content": "old but visible",
+		},
+	})
+	if err := os.Chtimes(oldRootPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
 
 	adapter := NewClaudeCodeAdapter()
 	adapter.projectsDir = root
@@ -117,11 +132,28 @@ func TestClaudeDiscoverExcludesSubagents(t *testing.T) {
 	if sessions[0].ID != mainID {
 		t.Fatalf("Discover() returned %q, want %q", sessions[0].ID, mainID)
 	}
+	if !adapter.OwnsSession(mainID) ||
+		!adapter.OwnsSession(oldRootID) ||
+		adapter.OwnsSession(sidechainID) ||
+		adapter.OwnsSession(topLevelSidechainID) {
+		t.Fatal("Claude ownership leaked a subagent or rejected the main session")
+	}
+	if _, err := adapter.FetchHistory(mainID, 10); err != nil {
+		t.Fatalf("main history: %v", err)
+	}
+	if _, err := adapter.FetchHistory(oldRootID, 10); err != nil {
+		t.Fatalf("old root history: %v", err)
+	}
+	for _, hiddenID := range []string{sidechainID, topLevelSidechainID} {
+		if _, err := adapter.FetchHistory(hiddenID, 10); err == nil {
+			t.Fatalf("FetchHistory exposed Claude subagent %q", hiddenID)
+		}
+	}
 
 	adapter.watcherMu.Lock()
 	defer adapter.watcherMu.Unlock()
-	if len(adapter.lastPaths) != 1 {
-		t.Fatalf("lastPaths contains %d entries, want 1", len(adapter.lastPaths))
+	if len(adapter.lastPaths) != 2 {
+		t.Fatalf("lastPaths contains %d entries, want 2 visible roots", len(adapter.lastPaths))
 	}
 	if _, ok := adapter.lastPaths[sidechainID]; ok {
 		t.Fatal("nested subagent leaked into lastPaths")

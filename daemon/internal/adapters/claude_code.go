@@ -114,9 +114,21 @@ func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 	return sessions, nil
 }
 
+// OwnsSession checks the Claude transcript store for an exact session ID.
+func (a *ClaudeCodeAdapter) OwnsSession(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	return a.resolveSessionPath(sessionID) != ""
+}
+
 // FetchHistory imports the last N user/assistant turns from the session JSONL.
 func (a *ClaudeCodeAdapter) FetchHistory(sessionID string, limit int) ([]*HistoryMessage, error) {
 	limit = clampHistoryLimit(limit)
+	if !a.OwnsSession(sessionID) {
+		return nil, fmt.Errorf("claude session not found: %s", sessionID)
+	}
 	path := a.resolveSessionPath(sessionID)
 	if path == "" {
 		return nil, fmt.Errorf("claude session not found: %s", sessionID)
@@ -186,8 +198,13 @@ func (a *ClaudeCodeAdapter) resolveSessionPath(sessionID string) string {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
+		a.watcherMu.Lock()
+		delete(a.lastPaths, sessionID)
+		a.watcherMu.Unlock()
 	}
-	// Fallback walk
+	// Fallback walk validates the transcript marker rather than relying on the
+	// filename alone. Old visible root sessions remain addressable by direct
+	// link even after they age out of the discovery list.
 	var found string
 	_ = filepath.Walk(a.projectsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil {
@@ -199,12 +216,22 @@ func (a *ClaudeCodeAdapter) resolveSessionPath(sessionID string) string {
 			}
 			return nil
 		}
-		if strings.TrimSuffix(info.Name(), ".jsonl") == sessionID {
+		if !strings.HasSuffix(info.Name(), ".jsonl") ||
+			strings.TrimSuffix(info.Name(), ".jsonl") != sessionID {
+			return nil
+		}
+		session, parseErr := a.parseSessionFile(path, info)
+		if parseErr == nil && session != nil && session.ID == sessionID {
 			found = path
 			return filepath.SkipAll
 		}
 		return nil
 	})
+	if found != "" {
+		a.watcherMu.Lock()
+		a.lastPaths[sessionID] = found
+		a.watcherMu.Unlock()
+	}
 	return found
 }
 
@@ -504,6 +531,13 @@ func contentToText(content interface{}) string {
 			}
 		}
 		return strings.Join(parts, " ")
+	case map[string]interface{}:
+		if text, ok := v["text"].(string); ok {
+			return text
+		}
+		if nested, ok := v["content"]; ok {
+			return contentToText(nested)
+		}
 	}
 	return ""
 }
@@ -647,8 +681,28 @@ func parseMessageTime(v interface{}) (time.Time, bool) {
 
 // ensure ClaudeCodeAdapter implements ClosableAdapter
 var _ ClosableAdapter = (*ClaudeCodeAdapter)(nil)
+var _ OutputAdapter = (*ClaudeCodeAdapter)(nil)
 
 // GetCommander returns the underlying ClaudeCommander for direct access.
 func (a *ClaudeCodeAdapter) GetCommander() *agentexec.ClaudeCommander {
 	return a.commander
+}
+
+// SetOutputSink normalizes Claude commander output for the daemon registry.
+func (a *ClaudeCodeAdapter) SetOutputSink(sink OutputSink) {
+	if a.commander == nil {
+		return
+	}
+	if sink == nil {
+		a.commander.OnAgentOutput = nil
+		return
+	}
+	a.commander.OnAgentOutput = func(sessionID, msgType, content string) {
+		sink(OutputEvent{
+			SessionID: sessionID,
+			AgentType: AgentClaudeCode,
+			Type:      msgType,
+			Content:   content,
+		})
+	}
 }

@@ -14,7 +14,7 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "send" {
 		if len(os.Args) < 5 {
-			fmt.Fprintln(os.Stderr, "usage: adapter_smoke send <claude_code|codex|kilo> <sessionID> <prompt>")
+			fmt.Fprintln(os.Stderr, "usage: adapter_smoke send <claude_code|codex|kilo|kimi_cli|grok_build> <sessionID> <prompt>")
 			os.Exit(2)
 		}
 		runSend(os.Args[2], os.Args[3], strings.Join(os.Args[4:], " "))
@@ -24,22 +24,16 @@ func main() {
 }
 
 func runDiscover() {
-	type named struct {
-		name string
-		a    adapters.Adapter
+	registry, err := adapters.NewDefaultRegistry()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "initialize adapters: %v\n", err)
+		os.Exit(1)
 	}
-	list := []named{
-		{"claude_code", adapters.NewClaudeCodeAdapter()},
-		{"codex", adapters.NewCodexAdapter()},
-		{"kilo", adapters.NewKiloAdapter()},
-	}
+	defer registry.Close()
 	out := map[string]any{}
-	for _, n := range list {
-		entry := map[string]any{"available": n.a.IsAvailable()}
-		if k, ok := n.a.(*adapters.KiloAdapter); ok {
-			entry["cli"] = k.GetCommander().CLIPath()
-		}
-		sessions, err := n.a.Discover()
+	for _, adapter := range registry.All() {
+		entry := map[string]any{"available": adapter.IsAvailable()}
+		sessions, err := adapter.Discover()
 		if err != nil {
 			entry["error"] = err.Error()
 		} else {
@@ -52,17 +46,18 @@ func runDiscover() {
 			for i := 0; i < max; i++ {
 				s := sessions[i]
 				samples = append(samples, map[string]any{
-					"id":      s.ID,
-					"status":  s.Status,
-					"summary": s.Summary,
-					"path":    s.SessionPath,
-					"agent":   s.AgentType,
-					"age_s":   int(time.Since(s.LastActivity).Seconds()),
+					"id":          s.ID,
+					"status":      s.Status,
+					"summary":     s.Summary,
+					"path":        s.SessionPath,
+					"project_dir": s.ProjectDir,
+					"agent":       s.AgentType,
+					"age_s":       int(time.Since(s.LastActivity).Seconds()),
 				})
 			}
 			entry["samples"] = samples
 		}
-		out[n.name] = entry
+		out[adapter.Name()] = entry
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -70,28 +65,22 @@ func runDiscover() {
 }
 
 func runSend(agent, sessionID, prompt string) {
-	var a adapters.Adapter
-	switch agent {
-	case "claude_code":
-		ad := adapters.NewClaudeCodeAdapter()
-		ad.GetCommander().OnAgentOutput = logOut3
-		a = ad
-	case "codex":
-		ad := adapters.NewCodexAdapter()
-		ad.GetCommander().OnAgentOutput = logOut3
-		a = ad
-	case "kilo":
-		ad := adapters.NewKiloAdapter()
-		ad.GetCommander().OnAgentOutput = logOut4
-		// warm dir cache via Discover
-		_, _ = ad.Discover()
-		a = ad
-	default:
+	registry, err := adapters.NewDefaultRegistry()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "initialize adapters: %v\n", err)
+		os.Exit(1)
+	}
+	defer registry.Close()
+	adapter, ok := registry.Get(agent)
+	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown agent %s\n", agent)
 		os.Exit(2)
 	}
-	fmt.Fprintf(os.Stderr, "send %s %s available=%v\n", agent, sessionID, a.IsAvailable())
-	err := a.SendPrompt(sessionID, prompt)
+	registry.SetOutputSink(logEvent)
+	// Warm adapter path caches and reject sessions absent from the local store.
+	_, _ = adapter.Discover()
+	fmt.Fprintf(os.Stderr, "send %s %s available=%v\n", agent, sessionID, adapter.IsAvailable())
+	err = adapter.SendPrompt(sessionID, prompt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "SendPrompt error: %v\n", err)
 		os.Exit(1)
@@ -103,16 +92,20 @@ func runSend(agent, sessionID, prompt string) {
 
 var outMu sync.Mutex
 
-func logOut3(sessionID, msgType, content string) {
-	logOut4(sessionID, msgType, content, "")
-}
-
-func logOut4(sessionID, msgType, content, msgID string) {
+func logEvent(event adapters.OutputEvent) {
 	outMu.Lock()
 	defer outMu.Unlock()
-	c := content
+	c := event.Content
 	if len(c) > 200 {
 		c = c[:200] + "..."
 	}
-	fmt.Fprintf(os.Stderr, "[out] sid=%s type=%s id=%s content=%q\n", sessionID, msgType, msgID, c)
+	fmt.Fprintf(
+		os.Stderr,
+		"[out] sid=%s agent=%s type=%s id=%s content=%q\n",
+		event.SessionID,
+		event.AgentType,
+		event.Type,
+		event.MessageID,
+		c,
+	)
 }

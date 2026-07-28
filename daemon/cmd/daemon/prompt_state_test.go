@@ -86,15 +86,22 @@ func TestSessionLockMapSerializesAndReleasesKeys(t *testing.T) {
 }
 
 type routingAdapter struct {
-	name   string
-	hasID  string
-	probed bool
+	name           string
+	hasID          string
+	ownershipProbe bool
+	historyProbe   bool
+	nilHistory     bool
+	denyOwnership  bool
 }
 
 func (a *routingAdapter) Name() string      { return a.name }
 func (a *routingAdapter) IsAvailable() bool { return true }
 func (a *routingAdapter) Discover() ([]*adapters.SessionInfo, error) {
 	return nil, nil
+}
+func (a *routingAdapter) OwnsSession(sessionID string) bool {
+	a.ownershipProbe = true
+	return !a.denyOwnership && sessionID == a.hasID
 }
 func (a *routingAdapter) Watch(string) (<-chan *adapters.SessionInfo, error) {
 	return nil, fmt.Errorf("unused")
@@ -104,23 +111,111 @@ func (a *routingAdapter) Approve(string, string) error    { return nil }
 func (a *routingAdapter) Deny(string, string) error       { return nil }
 func (a *routingAdapter) Interrupt(string) error          { return nil }
 func (a *routingAdapter) FetchHistory(sessionID string, _ int) ([]*adapters.HistoryMessage, error) {
-	a.probed = true
+	a.historyProbe = true
 	if sessionID != a.hasID {
 		return nil, fmt.Errorf("not found")
+	}
+	if a.nilHistory {
+		return nil, nil
 	}
 	return []*adapters.HistoryMessage{}, nil
 }
 
-func TestPickAdapterProbesUUIDInsteadOfAssumingCodex(t *testing.T) {
+func TestPickAdapterUsesPositiveOwnershipInsteadOfHistory(t *testing.T) {
 	const id = "019f9c8f-21bb-7203-899f-9d855fe9505d"
-	codex := &routingAdapter{name: "codex", hasID: id}
+	codex := &routingAdapter{name: "codex"}
 	claude := &routingAdapter{name: "claude_code", hasID: id}
 
 	got := pickAdapterForSession(id, []adapters.Adapter{codex, claude})
 	if got != claude {
 		t.Fatalf("UUID routed to %v, want Claude local-store match", got)
 	}
-	if !claude.probed {
-		t.Fatal("Claude store was not probed")
+	if !claude.ownershipProbe {
+		t.Fatal("Claude ownership was not checked")
+	}
+	if codex.historyProbe || claude.historyProbe {
+		t.Fatal("routing probed history instead of OwnsSession")
+	}
+}
+
+func TestPickAdapterRejectsAmbiguousLegacyID(t *testing.T) {
+	const id = "shared-id"
+	first := &routingAdapter{name: "codex", hasID: id}
+	second := &routingAdapter{name: "claude_code", hasID: id}
+	if got := pickAdapterForSession(id, []adapters.Adapter{first, second}); got != nil {
+		t.Fatalf("ambiguous ID routed to %s", got.Name())
+	}
+}
+
+func TestPickAdapterRequiresOwnershipForNamespacedID(t *testing.T) {
+	const id = "grok_build:native-id"
+	grok := &routingAdapter{name: "grok_build", hasID: id}
+	if got := pickAdapterForSession("grok_build:native-id", []adapters.Adapter{grok}); got != grok {
+		t.Fatalf("namespaced ID routed to %v", got)
+	}
+	if !grok.ownershipProbe || grok.historyProbe {
+		t.Fatal("namespaced ID was not positively owned")
+	}
+
+	unknown := &routingAdapter{name: "grok_build"}
+	if got := pickAdapterForSession(id, []adapters.Adapter{unknown}); got != nil {
+		t.Fatalf("unknown namespaced ID routed to %v", got)
+	}
+}
+
+func TestFetchHistoryKeepsKnownEmptySource(t *testing.T) {
+	const id = "kimi_cli:empty"
+	preferred := &routingAdapter{
+		name:       "kimi_cli",
+		hasID:      id,
+		nilHistory: true,
+	}
+	unrelated := &routingAdapter{name: "codex", hasID: id}
+
+	history, source, err := fetchHistoryForSession(
+		id,
+		40,
+		preferred,
+		[]adapters.Adapter{preferred, unrelated},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history == nil || len(history) != 0 {
+		t.Fatalf("empty history = %#v", history)
+	}
+	if source != "kimi_cli" {
+		t.Fatalf("source = %q, want kimi_cli", source)
+	}
+	if unrelated.historyProbe {
+		t.Fatal("empty owned history fell through to an unrelated adapter")
+	}
+}
+
+func TestFetchHistoryDoesNotProbeUnownedStores(t *testing.T) {
+	const id = "hidden-child"
+	leaky := &routingAdapter{
+		name:          "codex",
+		hasID:         id,
+		denyOwnership: true,
+	}
+
+	history, source, err := fetchHistoryForSession(
+		id,
+		40,
+		nil,
+		[]adapters.Adapter{leaky},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history != nil || source != "" {
+		t.Fatalf("unowned history was returned: source=%q history=%#v", source, history)
+	}
+	if !leaky.ownershipProbe {
+		t.Fatal("history routing skipped positive ownership")
+	}
+	if leaky.historyProbe {
+		t.Fatal("history was read from an unowned store")
 	}
 }

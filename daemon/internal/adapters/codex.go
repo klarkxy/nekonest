@@ -117,9 +117,21 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 	return sessions, nil
 }
 
+// OwnsSession checks the Codex rollout store for an exact session ID.
+func (a *CodexAdapter) OwnsSession(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	return a.resolveSessionPath(sessionID) != ""
+}
+
 // FetchHistory imports last N chat turns from the rollout file.
 func (a *CodexAdapter) FetchHistory(sessionID string, limit int) ([]*HistoryMessage, error) {
 	limit = clampHistoryLimit(limit)
+	if !a.OwnsSession(sessionID) {
+		return nil, fmt.Errorf("codex session not found: %s", sessionID)
+	}
 	path := a.resolveSessionPath(sessionID)
 	if path == "" {
 		return nil, fmt.Errorf("codex session not found: %s", sessionID)
@@ -194,6 +206,9 @@ func (a *CodexAdapter) resolveSessionPath(sessionID string) string {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
+		a.watcherMu.Lock()
+		delete(a.lastPaths, sessionID)
+		a.watcherMu.Unlock()
 	}
 	var found string
 	var foundTime time.Time
@@ -209,12 +224,21 @@ func (a *CodexAdapter) resolveSessionPath(sessionID string) string {
 		if id == "" || id != sessionID {
 			return nil
 		}
+		session, parseErr := a.parseRolloutFile(path, info)
+		if parseErr != nil || session == nil || session.ID != sessionID {
+			return nil
+		}
 		if found == "" || info.ModTime().After(foundTime) {
 			found = path
 			foundTime = info.ModTime()
 		}
 		return nil
 	})
+	if found != "" {
+		a.watcherMu.Lock()
+		a.lastPaths[sessionID] = found
+		a.watcherMu.Unlock()
+	}
 	return found
 }
 
@@ -588,8 +612,28 @@ func extractCodexContent(msg map[string]interface{}) string {
 
 // ensure CodexAdapter implements ClosableAdapter
 var _ ClosableAdapter = (*CodexAdapter)(nil)
+var _ OutputAdapter = (*CodexAdapter)(nil)
 
 // GetCommander returns the underlying CodexCommander for direct access.
 func (a *CodexAdapter) GetCommander() *agentexec.CodexCommander {
 	return a.commander
+}
+
+// SetOutputSink normalizes Codex commander output for the daemon registry.
+func (a *CodexAdapter) SetOutputSink(sink OutputSink) {
+	if a.commander == nil {
+		return
+	}
+	if sink == nil {
+		a.commander.OnAgentOutput = nil
+		return
+	}
+	a.commander.OnAgentOutput = func(sessionID, msgType, content string) {
+		sink(OutputEvent{
+			SessionID: sessionID,
+			AgentType: AgentCodex,
+			Type:      msgType,
+			Content:   content,
+		})
+	}
 }

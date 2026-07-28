@@ -54,7 +54,7 @@ func (c *ClaudeCommander) SendPromptInDir(sessionID, prompt, workDir string) err
 		return fmt.Errorf("claude session %s is still running; wait for it to finish", sessionID)
 	}
 
-	// Reject obviously fake IDs from older create_session experiments
+	// Reject synthetic IDs left by older experimental builds.
 	if strings.HasPrefix(sessionID, "nekonest_") || strings.HasPrefix(sessionID, "new_") {
 		return fmt.Errorf("invalid session id %q — use a session discovered from the PC", sessionID)
 	}

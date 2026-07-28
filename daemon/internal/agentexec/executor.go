@@ -26,8 +26,9 @@ type AgentExecutor struct {
 	platformJob uintptr
 
 	// Callbacks
-	OnOutput func(line string) // called for each complete line of stdout/stderr
-	OnExit   func(exitCode int)
+	OnOutput       func(line string)                // compatibility callback for stdout/stderr
+	OnOutputSource func(source string, line string) // source is "stdout" or "stderr"
+	OnExit         func(exitCode int)
 }
 
 // NewAgentExecutor creates a new executor for a given agent type.
@@ -273,7 +274,9 @@ func (e *AgentExecutor) readLineOutput(r io.ReadCloser, source string) {
 		if line == "" {
 			continue
 		}
-		if e.OnOutput != nil {
+		if e.OnOutputSource != nil {
+			e.OnOutputSource(source, line)
+		} else if e.OnOutput != nil {
 			e.OnOutput(line)
 		}
 	}

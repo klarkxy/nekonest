@@ -10,19 +10,29 @@ import (
 
 func writeCodexRollout(t *testing.T, dir, id string, meta map[string]interface{}) string {
 	t.Helper()
+	return writeCodexRolloutAt(t, dir, id, meta, time.Now().UTC())
+}
+
+func writeCodexRolloutAt(
+	t *testing.T,
+	dir, id string,
+	meta map[string]interface{},
+	at time.Time,
+) string {
+	t.Helper()
 
 	meta["id"] = id
 	meta["session_id"] = id
-	meta["timestamp"] = time.Now().UTC().Format(time.RFC3339Nano)
+	meta["timestamp"] = at.Format(time.RFC3339Nano)
 
 	lines := []map[string]interface{}{
 		{
-			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"timestamp": at.Format(time.RFC3339Nano),
 			"type":      "session_meta",
 			"payload":   meta,
 		},
 		{
-			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"timestamp": at.Format(time.RFC3339Nano),
 			"type":      "event_msg",
 			"payload": map[string]interface{}{
 				"type":    "agent_message",
@@ -44,6 +54,9 @@ func writeCodexRollout(t *testing.T, dir, id string, meta map[string]interface{}
 		}
 	}
 	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, at, at); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -105,6 +118,7 @@ func TestCodexDiscoverExcludesSubagents(t *testing.T) {
 	lineageID := "019fa2b7-231d-7983-a157-c80c8f12b181"
 	threadSourceID := "019fa2b7-5a7f-7a93-b6d9-f37fc8ca2672"
 	structuredSourceID := "019fa2b7-9c42-7ae3-aabd-b147b2b2dc65"
+	oldRootID := "019fa2b7-c09d-74bf-b5cb-f08f1dd2a51e"
 
 	writeCodexRollout(t, dir, mainID, map[string]interface{}{
 		"thread_source": "user",
@@ -125,6 +139,10 @@ func TestCodexDiscoverExcludesSubagents(t *testing.T) {
 			"subagent": map[string]interface{}{"other": "guardian"},
 		},
 	})
+	writeCodexRolloutAt(t, dir, oldRootID, map[string]interface{}{
+		"thread_source": "user",
+		"source":        "vscode",
+	}, time.Now().UTC().Add(-30*24*time.Hour))
 
 	adapter := NewCodexAdapter()
 	adapter.sessionsDir = dir
@@ -147,11 +165,29 @@ func TestCodexDiscoverExcludesSubagents(t *testing.T) {
 	if got[threadSourceID] || got[structuredSourceID] {
 		t.Fatalf("Discover() leaked subagents %#v", got)
 	}
+	if !adapter.OwnsSession(mainID) ||
+		!adapter.OwnsSession(lineageID) ||
+		!adapter.OwnsSession(oldRootID) ||
+		adapter.OwnsSession(threadSourceID) ||
+		adapter.OwnsSession(structuredSourceID) {
+		t.Fatal("Codex ownership leaked a subagent or rejected a visible session")
+	}
+	if _, err := adapter.FetchHistory(mainID, 10); err != nil {
+		t.Fatalf("main history: %v", err)
+	}
+	if _, err := adapter.FetchHistory(oldRootID, 10); err != nil {
+		t.Fatalf("old root history: %v", err)
+	}
+	for _, hiddenID := range []string{threadSourceID, structuredSourceID} {
+		if _, err := adapter.FetchHistory(hiddenID, 10); err == nil {
+			t.Fatalf("FetchHistory exposed Codex subagent %q", hiddenID)
+		}
+	}
 
 	adapter.watcherMu.Lock()
 	defer adapter.watcherMu.Unlock()
-	if len(adapter.lastPaths) != 2 {
-		t.Fatalf("lastPaths contains %d entries, want 2", len(adapter.lastPaths))
+	if len(adapter.lastPaths) != 3 {
+		t.Fatalf("lastPaths contains %d entries, want 3 visible roots", len(adapter.lastPaths))
 	}
 	if _, ok := adapter.lastPaths[threadSourceID]; ok {
 		t.Fatal("thread_source subagent leaked into lastPaths")

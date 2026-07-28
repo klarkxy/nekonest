@@ -19,8 +19,9 @@ type KiloAdapter struct {
 	dbPath    string
 	watcherMu sync.Mutex
 	// lastDirs caches session_id -> project directory for SendPrompt.
-	lastDirs  map[string]string
-	commander *agentexec.KiloCommander
+	lastDirs    map[string]string
+	commander   *agentexec.KiloCommander
+	streamStops sync.Map // sessionID -> stop func for kilo.db polling
 }
 
 // NewKiloAdapter creates a new Kilo adapter.
@@ -49,6 +50,7 @@ func (a *KiloAdapter) Close() error {
 	if a.commander != nil {
 		a.commander.StopAll()
 	}
+	a.stopAllDBStreams()
 	return nil
 }
 
@@ -168,6 +170,28 @@ func (a *KiloAdapter) Discover() ([]*SessionInfo, error) {
 	return sessions, nil
 }
 
+// OwnsSession checks the authoritative Kilo session table. It deliberately
+// does not use FetchHistory: a known session may legitimately have no text
+// parts yet.
+func (a *KiloAdapter) OwnsSession(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	if _, err := os.Stat(a.dbPath); err != nil {
+		return false
+	}
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(500)", filepath.ToSlash(a.dbPath))
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+
+	exists, err := kiloVisibleSessionExists(db, sessionID)
+	return err == nil && exists
+}
+
 // kiloSessionHasParentID keeps discovery compatible with older Kilo schemas.
 // Current Kilo/OpenCode versions use session.parent_id as the authoritative
 // child-agent marker.
@@ -195,6 +219,33 @@ func kiloSessionHasParentID(db *sql.DB) bool {
 		}
 	}
 	return false
+}
+
+// kiloVisibleSessionExists applies the same durable visibility boundary used
+// by discovery, while deliberately allowing an old but otherwise valid root
+// session to remain addressable from an existing direct link.
+func kiloVisibleSessionExists(db *sql.DB, sessionID string) (bool, error) {
+	query := `
+		SELECT 1
+		FROM session
+		WHERE id = ?
+		  AND time_archived IS NULL`
+	if kiloSessionHasParentID(db) {
+		query += `
+		  AND parent_id IS NULL`
+	}
+	query += `
+		LIMIT 1`
+
+	var exists int
+	err := db.QueryRow(query, sessionID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (a *KiloAdapter) latestTextSummary(db *sql.DB, sessionID string) string {
@@ -317,6 +368,14 @@ func (a *KiloAdapter) FetchHistory(sessionID string, limit int) ([]*HistoryMessa
 	}
 	defer db.Close()
 
+	exists, err := kiloVisibleSessionExists(db, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("check kilo session: %w", err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("kilo session not found: %s", sessionID)
+	}
+
 	rows, err := db.Query(`
 		SELECT
 			p.id,
@@ -371,5 +430,66 @@ func (a *KiloAdapter) FetchHistory(sessionID string, limit int) ([]*HistoryMessa
 // ensure implements ClosableAdapter
 var _ ClosableAdapter = (*KiloAdapter)(nil)
 var _ Adapter = (*KiloAdapter)(nil)
+var _ OutputAdapter = (*KiloAdapter)(nil)
 var _ Adapter = (*ClaudeCodeAdapter)(nil)
 var _ Adapter = (*CodexAdapter)(nil)
+
+// SetOutputSink normalizes both Kilo CLI JSON and the progressive DB stream.
+func (a *KiloAdapter) SetOutputSink(sink OutputSink) {
+	if a.commander == nil {
+		return
+	}
+	if sink == nil {
+		a.commander.OnAgentOutput = nil
+		a.commander.OnStreamStart = nil
+		a.commander.OnStreamEnd = nil
+		a.stopAllDBStreams()
+		return
+	}
+
+	a.commander.OnAgentOutput = func(sessionID, msgType, content, msgID string) {
+		sink(OutputEvent{
+			SessionID: sessionID,
+			AgentType: AgentKilo,
+			Type:      msgType,
+			Content:   content,
+			MessageID: msgID,
+		})
+	}
+	a.commander.OnStreamStart = func(sessionID string) {
+		a.stopDBStream(sessionID)
+		stop := a.StartDBStream(sessionID, func(sid, partID, msgType, content string) {
+			sink(OutputEvent{
+				SessionID: sid,
+				AgentType: AgentKilo,
+				Type:      msgType,
+				Content:   content,
+				MessageID: partID,
+			})
+		})
+		a.streamStops.Store(sessionID, stop)
+	}
+	a.commander.OnStreamEnd = func(sessionID string) {
+		a.stopDBStream(sessionID)
+	}
+}
+
+func (a *KiloAdapter) stopDBStream(sessionID string) {
+	value, ok := a.streamStops.LoadAndDelete(sessionID)
+	if !ok {
+		return
+	}
+	if stop, ok := value.(func()); ok {
+		stop()
+	}
+}
+
+func (a *KiloAdapter) stopAllDBStreams() {
+	a.streamStops.Range(func(key, value any) bool {
+		if stop, ok := value.(func()); ok {
+			stop()
+		}
+		a.streamStops.Delete(key)
+		return true
+	})
+}
