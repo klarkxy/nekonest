@@ -11,6 +11,11 @@ go-sdk/
 gocache/
 node_modules/
 .kilo/
+.art-staging/
+.release-cache/
+__pycache__/
+*.py[cod]
+pwa/vite.config.ts.timestamp-*.mjs
 
 # Coverage / local test artifacts
 coverage
