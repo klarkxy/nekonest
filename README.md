@@ -1,6 +1,6 @@
 # 🐱 NekoNest（猫娘窝）
 
-> 自托管：在外面用手机，通过 VPS 遥控家里 Windows 上的 Claude Code / Codex
+> 自托管：在外面用手机，通过 VPS 续写家里 Windows 上已有的编码智能体线程
 
 ```
 手机 PWA  ──WSS──►  VPS Server  ◄──出站 WSS──  家 PC Daemon  ──► Agent CLI
@@ -40,7 +40,7 @@ $env:NEKONEST_SERVER="https://你的域名"
 1. 浏览器打开 `https://你的域名`  
 2. 输入与 VPS 相同的 `NEKONEST_PHONE_SECRET`  
 3. 「配对电脑」输入 6 位码  
-4. 在 PC 上先开 Claude/Codex → 手机选会话发指令  
+4. 在 PC 上先开一个受支持的智能体线程 → 手机按「目录 → 智能体 → 线程」进入并续写
 
 冒烟清单：[docs/e2e-smoke.md](docs/e2e-smoke.md)
 
@@ -75,11 +75,12 @@ cd pwa && pnpm install && pnpm dev
 | 能力 | 状态 |
 |------|------|
 | 设备注册 / 配对码 | ✅ |
-| Daemon 长连接 + 会话发现 | ✅ |
+| Daemon 长连接 + 会话发现 | ✅ Claude Code / Codex / Kilo / Kimi CLI / Grok Build |
 | 手机续写已有会话 | ✅ 主路径 |
+| 目录 → 智能体 → 线程归类 | ✅ 无目录线程统一进入「未分类」 |
 | 手机密钥 | ✅ `NEKONEST_PHONE_SECRET` |
-| 新建会话 | ⚠️ 实验性，不推荐 |
-| 工具审批 | ⚠️ 依赖进程仍在跑 |
+| 手机远程新建线程 | — 本阶段不提供；请先在 PC 创建 |
+| 工具审批 | ⚠️ 取决于智能体的非交互 CLI 能力；不支持时回到 PC 处理 |
 | 托盘 / 开机安装包 | ⏳ 可选后续 |
 
 ## License

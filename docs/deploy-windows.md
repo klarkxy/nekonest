@@ -65,8 +65,22 @@ Add-MpPreference -ExclusionProcess "nekonest-daemon.exe"
 
 ## 5. 主路径用法
 
-1. PC 上正常使用 Claude Code / Codex（产生会话）  
-2. Daemon 每几秒 Discover，上报会话列表  
-3. 手机打开对应会话，发送指令（resume）  
+1. PC 上正常使用 Claude Code、Codex、Kilo、Kimi CLI 或 Grok Build（产生线程）
+2. Daemon 每几秒 Discover，上报会话列表
+3. 手机按「目录 → 智能体 → 线程」打开已有线程，发送指令（resume）
 
-**不要依赖「手机新建会话」作为主路径**（仍为实验性）。
+没有可识别工作目录的线程会进入唯一的「未分类」目录。某个目录下没有某类智能体线程时，不显示该智能体分组。
+
+手机端不提供远程新建线程；请先在 PC 端创建。Daemon 会按本机实际存在的会话存储自动发现，未安装或没有线程的智能体会被忽略。
+
+### 智能体说明
+
+| 智能体 | 本地续写入口 | 备注 |
+|---|---|---|
+| Claude Code | `claude --resume` | 发现 `~/.claude/projects` |
+| Codex | `codex exec resume` | 发现 `~/.codex/sessions` |
+| Kilo | `kilo run --session` | 发现本地 Kilo/OpenCode 数据库 |
+| Kimi CLI | `kimi --session` | 兼容 `.kimi-code` 当前布局与 `.kimi` 旧布局 |
+| Grok Build | `grok --resume` | 发现 `~/.grok/sessions`；手机续写使用非交互安全模式 |
+
+非交互命令不能承载的审批不会在手机端伪装成成功；请回到 PC 终端完成。
