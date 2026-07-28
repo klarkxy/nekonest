@@ -28,9 +28,7 @@ const (
 	MsgAuthResponse      MessageType = "auth_response"
 	MsgPairRequest       MessageType = "pair_request"
 	MsgPairConfirm       MessageType = "pair_confirm"
-	MsgCreateSession     MessageType = "create_session"  // P2-B: phone requests new session
-	MsgSessionCreated    MessageType = "session_created" // P2-B: server confirms session created
-	MsgSubscribe         MessageType = "subscribe"       // phone subscribes to a device
+	MsgSubscribe         MessageType = "subscribe" // phone subscribes to a device
 	MsgSubscribeAck      MessageType = "subscribe_ack"
 	MsgFetchHistory      MessageType = "fetch_history"   // phone asks daemon for PC-side transcript
 	MsgSessionHistory    MessageType = "session_history" // daemon returns imported transcript
@@ -72,6 +70,8 @@ const (
 	AgentClaudeCode AgentType = "claude_code"
 	AgentCodex      AgentType = "codex"
 	AgentKilo       AgentType = "kilo"
+	AgentKimiCLI    AgentType = "kimi_cli"
+	AgentGrokBuild  AgentType = "grok_build"
 )
 
 // AgentSession represents an active agent session on a device.

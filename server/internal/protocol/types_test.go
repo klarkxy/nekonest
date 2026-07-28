@@ -39,3 +39,25 @@ func TestNekoMessageJSONRoundTrip(t *testing.T) {
 		t.Fatalf("%#v", out)
 	}
 }
+
+func TestSupportedAgentTypes(t *testing.T) {
+	got := []AgentType{
+		AgentClaudeCode,
+		AgentCodex,
+		AgentKilo,
+		AgentKimiCLI,
+		AgentGrokBuild,
+	}
+	want := []AgentType{
+		"claude_code",
+		"codex",
+		"kilo",
+		"kimi_cli",
+		"grok_build",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("agent[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

@@ -268,10 +268,6 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 			s.sendPushNotification(dc.DeviceID, msg.SessionID, "⚠️ 操作需要审批", "点击查看详情")
 		}
 
-	case protocol.MsgSessionCreated:
-		// Daemon confirmed new session creation — forward to phones
-		s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
-
 	case protocol.MsgSessionHistory:
 		// Imported PC transcript — persist (best-effort) then forward
 		if raw, ok := msg.Payload["messages"].([]any); ok {
@@ -918,15 +914,6 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 		msg.DeviceID = deviceID
 		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
 			errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID)
-			errMsg.Payload = map[string]any{"message": "device offline"}
-			s.connMgr.BroadcastToPhones(deviceID, errMsg)
-		}
-
-	case protocol.MsgCreateSession:
-		// P2-B: Forward create session request to daemon
-		msg.DeviceID = deviceID
-		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
-			errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, "")
 			errMsg.Payload = map[string]any{"message": "device offline"}
 			s.connMgr.BroadcastToPhones(deviceID, errMsg)
 		}

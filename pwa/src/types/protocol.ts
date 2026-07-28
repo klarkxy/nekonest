@@ -19,8 +19,6 @@ export type MessageType =
   | 'auth_response'
   | 'pair_request'
   | 'pair_confirm'
-  | 'create_session'
-  | 'session_created'
   | 'subscribe'
   | 'fetch_history'
   | 'session_history'
@@ -43,7 +41,15 @@ export interface Device {
   active_agents: number
 }
 
-export type AgentType = 'claude_code' | 'codex' | 'kilo'
+export type KnownAgentType =
+  | 'claude_code'
+  | 'codex'
+  | 'kilo'
+  | 'kimi_cli'
+  | 'grok_build'
+
+/** Known agents keep editor completion while future daemon adapters remain wire-compatible. */
+export type AgentType = KnownAgentType | (string & {})
 export type AgentStatus = 'running' | 'idle' | 'waiting_approval'
 
 export interface AgentSession {

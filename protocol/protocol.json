@@ -30,8 +30,6 @@
         "auth_response",
         "pair_request",
         "pair_confirm",
-        "create_session",
-        "session_created",
         "subscribe",
         "subscribe_ack",
         "fetch_history",
@@ -80,7 +78,10 @@
       "properties": {
         "id": { "type": "string" },
         "device_id": { "type": "string" },
-        "agent_type": { "type": "string", "enum": ["claude_code", "codex", "kilo"] },
+        "agent_type": {
+          "type": "string",
+          "enum": ["claude_code", "codex", "kilo", "kimi_cli", "grok_build"]
+        },
         "status": { "type": "string", "enum": ["running", "idle", "waiting_approval"] },
         "summary": { "type": "string" },
         "last_activity": { "type": "integer" },
