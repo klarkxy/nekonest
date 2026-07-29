@@ -2,12 +2,12 @@
   <div class="device-list-page">
     <header class="brand-hero">
       <div class="brand-copy">
-        <p class="eyebrow">Remote agent atelier</p>
+        <p class="eyebrow">猫娘值守中</p>
         <h1>
           猫娘窝
           <span>NekoNest</span>
         </h1>
-        <p class="brand-intro">回到熟悉的工作目录，叫醒正在待命的猫娘智能体。</p>
+        <p class="brand-intro">回到熟悉的工作目录，继续家里已经开着的线团。</p>
       </div>
 
       <figure class="mascot-stage">
@@ -40,35 +40,32 @@
         <span class="connection-label">
           {{
             deviceStore.authError
-              ? '手机密钥不匹配'
+              ? '钥匙对不上'
               : deviceStore.connected
-                ? '通道已连接'
-                : '正在寻找家里的猫窝'
+                ? '猫窝通道已接通'
+                : '正在找家里的猫窝…'
           }}
         </span>
       </div>
-      <n-button text size="small" class="setup-link" @click="goSetup">密钥设置</n-button>
+      <RouterLink class="setup-link" :to="setupLocation()">钥匙设置</RouterLink>
     </section>
 
     <div v-if="deviceStore.authError" class="auth-banner" role="alert">
-      <strong>无法连接到 NekoNest。</strong>
-      <span>
-        请重新设置手机密钥，并确认它与 VPS 的
-        <code>NEKONEST_PHONE_SECRET</code> 一致。
-      </span>
+      <strong>进不了猫窝。</strong>
+      <span>请重新设置手机钥匙，并确认与部署时记下的那串一致。</span>
     </div>
 
     <section class="device-section" aria-labelledby="device-section-title">
       <div class="section-heading">
         <div>
-          <p class="section-kicker">Your nests</p>
+          <p class="section-kicker">你的猫窝</p>
           <h2 id="device-section-title">选择一台电脑</h2>
         </div>
         <span class="device-total">{{ visibleDevices.length }} 台</span>
       </div>
 
       <div v-if="deviceStore.loading && visibleDevices.length === 0" class="device-skeletons" role="status">
-        <span class="sr-only">正在读取设备</span>
+        <span class="sr-only">正在读取电脑列表</span>
         <div v-for="index in 2" :key="index" class="device-skeleton" aria-hidden="true">
           <span class="skeleton-line skeleton-line--title"></span>
           <span class="skeleton-line skeleton-line--meta"></span>
@@ -76,30 +73,43 @@
       </div>
 
       <div v-else class="device-cards">
-        <button
+        <article
           v-for="device in visibleDevices"
           :key="device.id"
-          type="button"
-          class="device-entry"
-          :class="{ 'device-entry--offline': device.status !== 'online' }"
-          :aria-label="`打开设备 ${device.name}，${device.status === 'online' ? '在线' : '离线'}`"
-          @click="goToDevice(device)"
+          class="device-card"
         >
-          <span class="device-entry__accent" aria-hidden="true"></span>
-          <span class="device-entry__body">
-            <span class="device-entry__topline">
-              <span class="device-name">{{ device.name }}</span>
-              <span class="device-os">{{ osLabel(device.os) }}</span>
+          <RouterLink
+            class="device-entry"
+            :class="{ 'device-entry--offline': device.status !== 'online' }"
+            :to="deviceDetailLocation(device.id)"
+            :aria-label="`打开 ${device.name}，${device.status === 'online' ? '在线' : '离线'}`"
+            @click="onOpenDevice(device)"
+          >
+            <span class="device-entry__accent" aria-hidden="true"></span>
+            <span class="device-entry__body">
+              <span class="device-entry__topline">
+                <span class="device-name">{{ device.name }}</span>
+                <span class="device-os">{{ osLabel(device.os) }}</span>
+              </span>
+              <span class="device-entry__meta">
+                <span class="status-dot" :class="device.status" aria-hidden="true"></span>
+                <span>{{ device.status === 'online' ? '在线' : '离线' }}</span>
+                <span class="meta-divider" aria-hidden="true"></span>
+                <span class="agent-count">{{ device.active_agents }} 位猫娘</span>
+              </span>
             </span>
-            <span class="device-entry__meta">
-              <span class="status-dot" :class="device.status" aria-hidden="true"></span>
-              <span>{{ device.status === 'online' ? '在线待命' : '暂时离线' }}</span>
-              <span class="meta-divider" aria-hidden="true"></span>
-              <span class="agent-count">{{ device.active_agents }} 位 Agent</span>
-            </span>
-          </span>
-          <span class="device-arrow" aria-hidden="true">›</span>
-        </button>
+            <span class="device-arrow" aria-hidden="true">›</span>
+          </RouterLink>
+          <button
+            v-if="binding.boundIds.has(device.id)"
+            type="button"
+            class="unbind-btn"
+            :aria-label="`把 ${device.name} 移出手机猫窝`"
+            @click="confirmUnbind(device)"
+          >
+            移出
+          </button>
+        </article>
 
         <div v-if="visibleDevices.length === 0" class="empty-state">
           <img
@@ -109,26 +119,26 @@
             height="88"
             aria-hidden="true"
           />
-          <h3>猫窝里还没有电脑</h3>
-          <p>先在家里的电脑上完成配对，这里就会出现它的工作目录。</p>
-          <n-button type="primary" @click="goPair">开始配对</n-button>
+          <h3>还没有配对的电脑</h3>
+          <p>在家里电脑上生成配对码，这里就会出现它的工作目录和线团。</p>
+          <RouterLink class="empty-pair-link" :to="pairLocation()">去配对</RouterLink>
         </div>
       </div>
     </section>
 
-    <nav class="bottom-dock" aria-label="设备操作">
-      <n-button type="primary" block size="large" @click="goPair">
+    <nav class="bottom-dock" aria-label="电脑操作">
+      <RouterLink class="dock-pair" :to="pairLocation()">
         <span class="add-mark" aria-hidden="true">＋</span>
         配对新电脑
-      </n-button>
+      </RouterLink>
     </nav>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { NButton } from 'naive-ui'
+import { RouterLink } from 'vue-router'
+import { useMessage } from 'naive-ui'
 import { useDeviceStore } from '@/stores/device'
 import { useBindingStore } from '@/stores/binding'
 import {
@@ -137,47 +147,36 @@ import {
   setupLocation
 } from '@/router/navigation'
 import type { Device } from '@/types/protocol'
+import { selectVisibleDevices } from '@/utils/deviceVisibility'
 
-const router = useRouter()
+const message = useMessage()
 const deviceStore = useDeviceStore()
 const binding = useBindingStore()
 
-/** Prefer bound devices; if none are bound, show the server list for self-hosted installs. */
-const visibleDevices = computed(() => {
-  if (binding.bound.length === 0) return deviceStore.devices
-  const ids = binding.boundIds
-  const filtered = deviceStore.devices.filter(device => ids.has(device.id))
-  for (const boundDevice of binding.bound) {
-    if (!filtered.find(device => device.id === boundDevice.id)) {
-      filtered.push({
-        id: boundDevice.id,
-        name: boundDevice.name,
-        os: 'windows',
-        status: 'offline',
-        last_seen: 0,
-        active_agents: 0
-      })
-    }
-  }
-  return filtered
-})
+const visibleDevices = computed(() =>
+  selectVisibleDevices(
+    deviceStore.devices,
+    binding.bound,
+    binding.bindingConfigured
+  )
+)
 
 onMounted(() => {
   deviceStore.initWebSocket()
   void deviceStore.fetchDevices()
 })
 
-function goToDevice(device: Device) {
+function onOpenDevice(device: Device) {
   binding.setLastDevice(device.id)
-  void router.push(deviceDetailLocation(device.id))
 }
 
-function goSetup() {
-  void router.push(setupLocation())
-}
-
-function goPair() {
-  void router.push(pairLocation())
+function confirmUnbind(device: Device) {
+  const ok = window.confirm(
+    `把「${device.name}」移出这台手机？\n不会关掉家里的电脑，只是手机不再记住它。`
+  )
+  if (!ok) return
+  binding.removeBinding(device.id)
+  message.success('已从手机移出')
 }
 
 function osLabel(os: string): string {
@@ -185,7 +184,7 @@ function osLabel(os: string): string {
   if (normalized === 'windows') return 'Windows'
   if (normalized === 'darwin' || normalized === 'macos') return 'macOS'
   if (normalized === 'linux') return 'Linux'
-  return os || 'Computer'
+  return os || '电脑'
 }
 </script>
 
@@ -344,7 +343,20 @@ function osLabel(os: string): string {
 }
 
 .setup-link {
+  display: inline-flex;
   flex: 0 0 auto;
+  min-height: 44px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--neko-primary-deep);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.setup-link:hover {
+  background: rgba(114, 91, 157, 0.1);
 }
 
 .auth-banner {
@@ -362,11 +374,6 @@ function osLabel(os: string): string {
 
 .auth-banner strong {
   font-size: 13px;
-}
-
-.auth-banner code {
-  font-size: 10px;
-  overflow-wrap: anywhere;
 }
 
 .device-section {
@@ -403,6 +410,13 @@ function osLabel(os: string): string {
   gap: 10px;
 }
 
+.device-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
+}
+
 .device-entry {
   position: relative;
   display: grid;
@@ -424,6 +438,7 @@ function osLabel(os: string): string {
     var(--neko-shadow-soft);
   cursor: pointer;
   text-align: left;
+  text-decoration: none;
   transition: transform 190ms ease, box-shadow 190ms ease, background-color 190ms ease;
 }
 
@@ -512,6 +527,24 @@ function osLabel(os: string): string {
   transform: scale(0.985);
 }
 
+.unbind-btn {
+  align-self: center;
+  min-width: 52px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid rgba(191, 104, 116, 0.28);
+  border-radius: 12px;
+  color: var(--neko-danger);
+  background: rgba(249, 231, 233, 0.72);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.unbind-btn:hover {
+  background: rgba(249, 231, 233, 0.95);
+}
+
 .device-skeleton {
   display: grid;
   gap: 11px;
@@ -585,6 +618,22 @@ function osLabel(os: string): string {
   line-height: 1.6;
 }
 
+.empty-pair-link,
+.dock-pair {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 14px;
+  color: #fff;
+  background: var(--neko-primary);
+  font-size: 15px;
+  font-weight: 650;
+  text-decoration: none;
+  box-shadow: 0 8px 20px rgba(114, 91, 157, 0.28);
+}
+
 .bottom-dock {
   position: fixed;
   right: 0;
@@ -601,6 +650,12 @@ function osLabel(os: string): string {
   -webkit-backdrop-filter: blur(18px);
 }
 
+.dock-pair {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 16px;
+}
+
 .add-mark {
   margin-right: 5px;
   font-size: 17px;
@@ -613,6 +668,11 @@ function osLabel(os: string): string {
     background-color: rgba(255, 255, 255, 0.96);
     box-shadow: 0 13px 28px rgba(92, 67, 92, 0.13);
     transform: translateY(-2px);
+  }
+
+  .dock-pair:hover,
+  .empty-pair-link:hover {
+    background: var(--neko-primary-deep);
   }
 }
 
@@ -644,6 +704,14 @@ function osLabel(os: string): string {
 
   .bottom-dock {
     padding-inline: 16px;
+  }
+
+  .device-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .unbind-btn {
+    justify-self: end;
   }
 }
 </style>

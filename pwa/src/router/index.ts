@@ -29,13 +29,13 @@ router.afterEach((to) => {
       : to.name === 'device-detail'
         ? '工作目录'
         : to.name === 'session-detail'
-          ? '智能体线程'
+          ? '线团'
           : to.name === 'pair'
             ? '配对电脑'
             : to.name === 'setup'
-              ? '连接设置'
+              ? '手机钥匙'
               : ''
-  document.title = pageTitle ? `${pageTitle} · NekoNest` : 'NekoNest 猫娘窝'
+  document.title = pageTitle ? `${pageTitle} · 猫娘窝` : '猫娘窝'
 })
 
 export default router

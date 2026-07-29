@@ -1,7 +1,11 @@
 <template>
   <div class="session-detail-page">
-    <div class="page-header">
-      <n-button text @click="goBack">← 返回</n-button>
+    <header class="page-header">
+      <RouterLink
+        class="back-link"
+        :to="deviceDetailLocation(deviceId)"
+        aria-label="返回工作目录"
+      >← 返回</RouterLink>
       <img
         class="header-agent-avatar"
         :src="agentMeta.avatar"
@@ -13,19 +17,18 @@
         @error="onAgentAvatarError"
       />
       <div class="header-mid">
-        <h1>{{ agentLabel }}</h1>
+        <h1>{{ agentLabelText }}</h1>
         <div v-if="projectLine" class="header-project" :title="projectLine.path">
-          📁 {{ projectLine.name }}
+          {{ projectLine.name }}
         </div>
       </div>
       <span
-        v-if="showThreadActivity"
+        v-if="showHeaderActivity"
         class="thread-state-pill"
         :class="`thread-state-pill--${threadActivity.tone}`"
         :title="threadActivity.detail"
         aria-hidden="true"
       >
-        <span>{{ threadActivity.icon }}</span>
         <span class="thread-state-label">{{ threadActivity.label }}</span>
       </span>
       <span
@@ -34,29 +37,32 @@
         aria-live="polite"
         aria-atomic="true"
       >{{ liveStatusText }}</span>
-      <span class="ws-pill" :class="sessionStore.wsStatus" aria-hidden="true">{{ wsLabel }}</span>
+      <span
+        v-if="sessionStore.wsStatus !== 'connected'"
+        class="ws-pill"
+        :class="sessionStore.wsStatus"
+        aria-hidden="true"
+      >{{ wsLabel }}</span>
       <n-button
-        v-if="sessionStore.currentSession?.status === 'running' || sessionStore.streaming"
+        v-if="canInterrupt"
         size="tiny"
         quaternary
         :disabled="sessionStore.wsStatus !== 'connected'"
         aria-label="中断当前任务"
         @click="handleInterrupt"
       >中断</n-button>
-    </div>
+    </header>
 
     <section
-      v-if="showThreadActivity"
+      v-if="showActivityBanner"
       class="thread-activity"
       :class="`thread-activity--${threadActivity.tone}`"
       aria-hidden="true"
     >
-      <span class="thread-activity-icon">{{ threadActivity.icon }}</span>
       <span class="thread-activity-copy">
         <strong>{{ threadActivity.headline }}</strong>
         <span>{{ threadActivity.detail }}</span>
       </span>
-      <span class="thread-activity-trail">…</span>
     </section>
 
     <div
@@ -66,32 +72,17 @@
       aria-live="polite"
       aria-atomic="true"
     >
-      <div class="approval-info">
-        <div class="approval-title">⚠️ 工具调用请求</div>
-        <div class="approval-tool">{{ sessionStore.currentSession.pending_approval.tool_name }}</div>
-        <div class="approval-desc">{{ sessionStore.currentSession.pending_approval.description }}</div>
-        <pre
-          v-if="approvalParamsText"
-          class="approval-params"
-        >{{ approvalParamsText }}</pre>
-        <p class="approval-note">
-          当前远程审批不可用（Agent 以非交互 print/exec 运行，stdin 已关闭）。请在 PC 终端批准或拒绝。
-        </p>
-      </div>
-      <div class="approval-actions">
-        <button
-          type="button"
-          class="deny-btn"
-          :disabled="!canApprove"
-          @click="handleDeny"
-        >拒绝</button>
-        <button
-          type="button"
-          class="approve-btn"
-          :disabled="!canApprove"
-          @click="handleApprove"
-        >批准</button>
-      </div>
+      <div class="approval-title">等电脑点头</div>
+      <div class="approval-tool">{{ sessionStore.currentSession.pending_approval.tool_name }}</div>
+      <div
+        v-if="sessionStore.currentSession.pending_approval.description"
+        class="approval-desc"
+      >{{ sessionStore.currentSession.pending_approval.description }}</div>
+      <pre
+        v-if="approvalParamsText"
+        class="approval-params"
+      >{{ approvalParamsText }}</pre>
+      <p class="approval-note">请到家里电脑的终端批准或拒绝。手机不能代点。</p>
     </div>
 
     <div
@@ -100,7 +91,7 @@
       role="log"
       aria-live="polite"
       aria-relevant="additions text"
-      aria-label="会话消息"
+      aria-label="线团消息"
       tabindex="0"
     >
       <div
@@ -110,13 +101,13 @@
         :class="[msg.role, msg.type]"
       >
         <div v-if="msg.type === 'thinking'" class="thinking-indicator">
-          💭 {{ msg.content }}
+          {{ msg.content }}
         </div>
         <div v-else-if="msg.role === 'system'" class="system-msg">
           {{ msg.content }}
         </div>
         <div v-else-if="msg.type === 'tool_call'" class="tool-call-info">
-          🔧 {{ msg.content }}
+          {{ msg.content }}
         </div>
         <template v-else>
           <div
@@ -136,7 +127,7 @@
               >
                 <img
                   :src="a.url"
-                  :alt="a.name || 'image'"
+                  :alt="a.name || '图片附件'"
                   width="240"
                   height="180"
                   loading="lazy"
@@ -148,7 +139,7 @@
                 :href="a.url"
                 target="_blank"
                 rel="noopener"
-              >📎 {{ a.name || '附件' }}</a>
+              >{{ a.name || '附件' }}</a>
             </template>
           </div>
         </template>
@@ -169,7 +160,7 @@
       </div>
 
       <div v-if="sessionStore.importing" class="import-banner" role="status" aria-live="polite">
-        🐱 正在从本机同步会话历史…
+        正在同步家里的记录…
       </div>
 
       <div v-if="sessionStore.messages.length === 0 && !sessionStore.importing" class="empty-messages">
@@ -183,9 +174,11 @@
             @error="onAgentAvatarError"
           />
         </div>
-        <p class="empty-title">暂无消息</p>
-        <p class="empty-hint">打开时会尝试同步 PC 上 Agent 的历史。也可直接输入或发图续写～</p>
-        <n-button size="small" @click="reloadHistory">重新同步历史</n-button>
+        <p class="empty-title">线团还是空的</p>
+        <p class="empty-hint">
+          打开时会试着同步家里的记录。也可以直接说一句继续；新线团请先在电脑上开。
+        </p>
+        <n-button size="small" @click="reloadHistory">重新同步</n-button>
       </div>
     </div>
 
@@ -198,18 +191,21 @@
           width="40"
           height="40"
         />
-        <span v-else>📎</span>
+        <span v-else class="chip-file" aria-hidden="true">文件</span>
         <span class="chip-name">{{ a.name }}</span>
         <button type="button" class="chip-x" :aria-label="`移除附件 ${a.name || ''}`" @click="removeAtt(i)">×</button>
       </div>
     </div>
-    <div v-if="uploadError" class="upload-error" role="alert" aria-live="assertive">{{ uploadError }}</div>
+
     <div
-      v-if="sessionStore.lastError"
-      class="upload-error"
+      v-if="uploadError || sessionStore.lastError"
+      class="error-banner"
       role="alert"
       aria-live="assertive"
-    >{{ sessionStore.lastError }}</div>
+    >
+      <p>{{ uploadError || sessionStore.lastError }}</p>
+      <button type="button" class="error-dismiss" aria-label="关闭提示" @click="dismissErrors">×</button>
+    </div>
 
     <div class="input-bar">
       <label
@@ -218,7 +214,7 @@
         :class="{ disabled: sending || uploading }"
         :aria-disabled="sending || uploading ? 'true' : undefined"
       >
-        <span class="attachment-picker-icon" aria-hidden="true">📎</span>
+        <span class="attachment-picker-icon" aria-hidden="true">＋</span>
         <span class="sr-only">添加附件</span>
         <input
           id="session-attachment-input"
@@ -233,11 +229,11 @@
       </label>
       <n-input
         v-model:value="inputText"
-        placeholder="输入指令，或点 📎 加图/附件…"
+        placeholder="跟猫娘说点什么…"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 4 }"
         :disabled="sending || uploading"
-        aria-label="指令输入"
+        aria-label="消息输入"
         @keydown.enter.exact="onEnterKey"
         @paste="onPaste"
       />
@@ -249,7 +245,7 @@
         :disabled="(!inputText.trim() && !pendingAtts.length) || sending || uploading"
         :loading="sending || uploading"
       >
-        <template #icon>🐾</template>
+        <template #icon>↑</template>
       </n-button>
     </div>
   </div>
@@ -257,7 +253,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, RouterLink } from 'vue-router'
 import { NButton, NInput } from 'naive-ui'
 import { getAgentMeta, UNKNOWN_AGENT_META } from '@/config/agents'
 import { deviceDetailLocation } from '@/router/navigation'
@@ -274,7 +270,6 @@ import {
 import type { SessionMessage, AttachmentRef as ProtoAtt } from '@/types/protocol'
 
 const route = useRoute()
-const router = useRouter()
 const sessionStore = useSessionStore()
 const draftStore = useDraftStore()
 
@@ -294,8 +289,8 @@ let routeGeneration = 0
 let uploadController: AbortController | null = null
 
 const agentMeta = computed(() => getAgentMeta(sessionStore.currentSession?.agent_type))
-const agentLabel = computed(() => {
-  return sessionStore.currentSession ? agentMeta.value.label : '会话详情'
+const agentLabelText = computed(() => {
+  return sessionStore.currentSession ? agentMeta.value.label : '线团'
 })
 
 const projectLine = computed(() => {
@@ -309,30 +304,42 @@ const threadActivity = computed(() => sessionActivityPresentation(
   sessionStore.streaming
 ))
 
-const showThreadActivity = computed(() => {
+const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
+
+const showHeaderActivity = computed(() => {
+  if (hasPendingApproval.value) return true
   const status = sessionStore.currentSession?.status
   return sessionStore.streaming || status === 'running' || status === 'waiting_approval'
 })
 
+/** Full banner only when busy and not already covered by approval card. */
+const showActivityBanner = computed(() => {
+  if (hasPendingApproval.value) return false
+  const status = sessionStore.currentSession?.status
+  return sessionStore.streaming || status === 'running'
+})
+
+const canInterrupt = computed(() =>
+  sessionStore.currentSession?.status === 'running' || sessionStore.streaming
+)
+
 const wsLabel = computed(() => {
   switch (sessionStore.wsStatus) {
-    case 'connected': return '中转已连接'
-    case 'connecting': return '中转连接中'
-    case 'auth_error': return '中转认证失败'
-    default: return '中转未连接'
+    case 'connected': return '通道畅通'
+    case 'connecting': return '接通中…'
+    case 'auth_error': return '钥匙不对'
+    default: return '通道断开'
   }
 })
 
-// Remote approve requires live interactive stdin — print/exec mode does not support it.
-const canApprove = computed(() => false)
-
 const liveStatusText = computed(() => {
   const parts = [wsLabel.value]
-  if (showThreadActivity.value) {
+  if (showHeaderActivity.value) {
     parts.push(threadActivity.value.headline, threadActivity.value.detail)
   }
   if (sessionStore.importing) parts.push('正在同步历史')
   if (sessionStore.lastError) parts.push(sessionStore.lastError)
+  if (uploadError.value) parts.push(uploadError.value)
   return parts.join('，')
 })
 
@@ -347,6 +354,11 @@ const approvalParamsText = computed(() => {
 })
 /** Last session we bound drafts to (route may already have changed when saving). */
 let boundDraftKey: { deviceId: string; sessionId: string } | null = null
+
+function dismissErrors() {
+  uploadError.value = ''
+  sessionStore.lastError = null
+}
 
 function saveDraftFor(did: string, sid: string) {
   if (!did || !sid) return
@@ -374,7 +386,6 @@ function restoreDraft() {
   restoringDraft = true
   const d = draftStore.get(deviceId.value, sessionId.value)
   inputText.value = d?.text || ''
-  // revoke old previews
   for (const a of pendingAtts.value) {
     if (a.previewUrl) URL.revokeObjectURL(a.previewUrl)
   }
@@ -385,7 +396,6 @@ function restoreDraft() {
     mime: a.mime,
     size: a.size,
     key: a.key,
-    // images can preview from server url
     previewUrl: a.mime?.startsWith('image/') ? a.url : undefined
   }))
   restoringDraft = false
@@ -399,7 +409,6 @@ function bindSession() {
   uploadError.value = ''
   const did = deviceId.value
   const sid = sessionId.value
-  // Persist draft under the previous session key (not the new route ids).
   if (
     boundDraftKey &&
     (boundDraftKey.deviceId !== did || boundDraftKey.sessionId !== sid)
@@ -497,9 +506,9 @@ function deliveryStatus(msg: SessionMessage) {
 
 function deliveryLabel(msg: SessionMessage) {
   switch (deliveryStatus(msg)) {
-    case 'queued': return '等待连接后发送'
-    case 'sending': return '正在等待 Agent 接收'
-    case 'failed': return msg.metadata?.delivery_error || '发送失败'
+    case 'queued': return '排队中…'
+    case 'sending': return '发送中…'
+    case 'failed': return msg.metadata?.delivery_error || '没送出去'
     default: return ''
   }
 }
@@ -539,7 +548,6 @@ async function onPaste(ev: ClipboardEvent) {
     }
   }
   if (!files.length) return
-  // Only block default paste when clipboard is file-only; keep text when both present.
   if (!hasText) {
     ev.preventDefault()
   }
@@ -550,7 +558,7 @@ async function addFiles(fileList: FileList | File[]) {
   if (uploading.value) return
   uploadError.value = ''
   if (pendingAtts.value.length >= MAX_COUNT) {
-    uploadError.value = `最多 ${MAX_COUNT} 个附件`
+    uploadError.value = `一次最多 ${MAX_COUNT} 个附件`
     return
   }
   const generation = routeGeneration
@@ -602,7 +610,6 @@ function onEnterKey(event: KeyboardEvent) {
 
 async function handleSend() {
   let prompt = inputText.value.trim()
-  // Only strip our exact injected suffix (not arbitrary user text containing the phrase)
   const mark = '\n\n[NekoNest attachments — local files on this PC]\n'
   const mi = prompt.indexOf(mark)
   if (mi >= 0) {
@@ -618,7 +625,6 @@ async function handleSend() {
     mime: a.mime,
     size: a.size
   }))
-  // Clear UI first so a second enter/tap cannot double-fire same payload
   inputText.value = ''
   const attsSnapshot = [...pendingAtts.value]
   pendingAtts.value = []
@@ -626,7 +632,6 @@ async function handleSend() {
 
   const ok = sessionStore.sendPrompt(deviceId.value, sessionId.value, prompt, atts)
   if (!ok) {
-    // restore on failure
     inputText.value = prompt
     pendingAtts.value = attsSnapshot
     scheduleSaveDraft()
@@ -637,7 +642,6 @@ async function handleSend() {
       }
     }
   }
-  // brief lockout against double-tap
   await new Promise(r => setTimeout(r, 400))
   sending.value = false
 }
@@ -646,24 +650,8 @@ function reloadHistory() {
   sessionStore.requestNativeHistory(deviceId.value, sessionId.value)
 }
 
-function handleApprove() {
-  if (!canApprove.value) return
-  const approval = sessionStore.currentSession?.pending_approval
-  if (approval) sessionStore.approve(deviceId.value, sessionId.value, approval.id)
-}
-
-function handleDeny() {
-  if (!canApprove.value) return
-  const approval = sessionStore.currentSession?.pending_approval
-  if (approval) sessionStore.deny(deviceId.value, sessionId.value, approval.id)
-}
-
 function handleInterrupt() {
   sessionStore.interrupt(deviceId.value, sessionId.value)
-}
-
-function goBack() {
-  void router.push(deviceDetailLocation(deviceId.value))
 }
 </script>
 
@@ -676,45 +664,69 @@ function goBack() {
   overflow: hidden;
   padding: 0;
   background:
-    radial-gradient(ellipse 80% 50% at 10% 0%, rgba(255, 182, 193, 0.18), transparent 50%),
-    radial-gradient(ellipse 70% 40% at 90% 100%, rgba(184, 169, 232, 0.2), transparent 55%),
-    #FAF8F5;
+    radial-gradient(ellipse 80% 50% at 10% 0%, rgba(201, 137, 152, 0.12), transparent 50%),
+    radial-gradient(ellipse 70% 40% at 90% 100%, rgba(114, 91, 157, 0.12), transparent 55%),
+    var(--neko-bg);
 }
 
 .page-header {
-  padding: 12px 16px;
+  flex: 0 0 auto;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid #E8E4E0;
-  background: rgba(250, 248, 245, 0.92);
+  gap: 8px;
+  border-bottom: 1px solid var(--neko-line);
+  background: rgba(255, 252, 250, 0.92);
   backdrop-filter: blur(10px);
 }
+
+.back-link {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 44px;
+  align-items: center;
+  padding: 4px 2px;
+  color: var(--neko-primary-deep);
+  font-size: 14px;
+  font-weight: 620;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 .header-mid { flex: 1; min-width: 0; }
 .header-agent-avatar {
   display: block;
   width: 34px;
   height: 34px;
   flex: 0 0 34px;
-  border: 2px solid #8f7fc2;
+  border: 2px solid var(--neko-primary);
   border-radius: 11px;
-  background: #eeeaf8;
-  box-shadow: 0 3px 9px rgba(104, 83, 121, 0.18);
+  background: var(--neko-primary-soft);
+  box-shadow: 0 3px 9px rgba(104, 83, 121, 0.14);
   object-fit: cover;
 }
 .page-header h1 {
-  font-size: 17px; font-weight: 600; color: #4A4A4A; margin: 0;
+  font-size: 16px;
+  font-weight: 680;
+  color: var(--neko-ink);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .header-project {
-  font-size: 11px; color: #8A7AA8; margin-top: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px;
+  color: var(--neko-ink-soft);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .thread-state-pill {
   display: inline-flex;
   min-height: 26px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
   padding: 3px 8px;
   border: 1px solid #ded7dc;
   border-radius: 999px;
@@ -735,17 +747,20 @@ function goBack() {
   color: #8a642f;
 }
 .ws-pill {
-  font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #EEE; color: #888;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--neko-surface-muted);
+  color: var(--neko-ink-soft);
+  white-space: nowrap;
 }
-.ws-pill.connected { background: #E6F7EE; color: #3A9B6A; }
 .ws-pill.connecting { background: #FFF5E0; color: #C09040; }
-.ws-pill.auth_error { background: #FDE8E8; color: #C05050; }
+.ws-pill.auth_error,
+.ws-pill.disconnected { background: #FDE8E8; color: #C05050; }
 
 .thread-activity {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  flex: 0 0 auto;
+  padding: 8px 16px;
   border-bottom: 1px solid #d8e9dd;
   background: #f2f8f4;
   color: #3e7654;
@@ -755,26 +770,14 @@ function goBack() {
   background: #fff8e9;
   color: #815e2f;
 }
-.thread-activity-icon {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
-  place-items: center;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.72);
-  font-size: 17px;
-}
 .thread-activity-copy {
   display: grid;
-  min-width: 0;
-  flex: 1;
   gap: 1px;
+  min-width: 0;
 }
 .thread-activity-copy strong {
-  font-size: 13px;
-  font-weight: 750;
+  font-size: 12px;
+  font-weight: 720;
 }
 .thread-activity-copy > span {
   color: #68736b;
@@ -782,30 +785,36 @@ function goBack() {
   line-height: 1.35;
   text-wrap: pretty;
 }
-.thread-activity--waiting .thread-activity-copy > span {
-  color: #796d5a;
-}
-.thread-activity-trail {
-  flex: 0 0 auto;
-  font-size: 12px;
-  opacity: 0.55;
-}
 
 .approval-banner {
-  background: #FFF8E8; border-bottom: 1px solid #F4D4A0; padding: 16px;
+  flex: 0 0 auto;
+  background: #FFF8E8;
+  border-bottom: 1px solid #F4D4A0;
+  padding: 12px 16px;
 }
-.approval-info { margin-bottom: 12px; }
-.approval-title { font-weight: 600; font-size: 14px; color: #4A4A4A; margin-bottom: 4px; }
+.approval-title {
+  font-weight: 680;
+  font-size: 14px;
+  color: var(--neko-ink);
+  margin-bottom: 4px;
+}
 .approval-tool {
-  font-family: monospace; font-size: 13px; color: #6A6A6A;
-  background: #F5F3F0; padding: 4px 8px; border-radius: 6px;
-  display: inline-block; margin-bottom: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--neko-ink-soft);
+  background: var(--neko-surface-muted);
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-block;
+  margin-bottom: 4px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
-.approval-desc { font-size: 13px; color: #6A6A6A; }
+.approval-desc { font-size: 13px; color: var(--neko-ink-soft); line-height: 1.45; }
 .approval-params {
   margin: 8px 0 0;
   padding: 8px;
-  max-height: 120px;
+  max-height: 100px;
   overflow: auto;
   font-size: 11px;
   background: rgba(0,0,0,0.04);
@@ -815,71 +824,110 @@ function goBack() {
 }
 .approval-note {
   margin: 8px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: #9E8A6A;
-  line-height: 1.4;
+  line-height: 1.45;
 }
-.approval-actions { display: flex; gap: 12px; }
 
 .messages-area {
-  flex: 1; min-height: 0; overflow-y: auto; padding: 16px;
-  display: flex; flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
 }
 
 .message-bubble.system {
-  background: transparent; color: #9E9E9E; font-size: 12px;
-  text-align: center; padding: 4px 8px; max-width: 100%;
+  background: transparent;
+  color: var(--neko-ink-faint);
+  font-size: 12px;
+  text-align: center;
+  padding: 4px 8px;
+  max-width: 100%;
 }
-.message-bubble.tool_call {
-  background: #FFF8E8; border: 1px solid #F4D4A0; color: #6A6A6A; font-size: 13px;
+.message-bubble.tool_call,
+.message-bubble.thinking {
+  background: var(--neko-surface-muted);
+  border: 1px solid var(--neko-line);
+  color: var(--neko-ink-soft);
+  font-size: 12px;
 }
-.message-bubble .system-msg { color: #9E9E9E; font-size: 12px; }
-.message-bubble .tool-call-info { font-family: monospace; font-size: 12px; }
+.message-bubble .system-msg { color: var(--neko-ink-faint); font-size: 12px; }
+.message-bubble .tool-call-info,
+.message-bubble .thinking-indicator {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .msg-body { white-space: pre-wrap; word-break: break-word; }
 
-/* Markdown */
 .msg-body.md { white-space: normal; }
 .msg-body.md :deep(p) { margin: 0 0 0.6em; }
 .msg-body.md :deep(p:last-child) { margin-bottom: 0; }
 .msg-body.md :deep(ul), .msg-body.md :deep(ol) { margin: 0.4em 0; padding-left: 1.4em; }
 .msg-body.md :deep(li) { margin: 0.15em 0; }
 .msg-body.md :deep(pre) {
-  overflow-x: auto; background: rgba(0,0,0,0.06); padding: 10px 12px;
-  border-radius: 8px; font-size: 12px; margin: 0.5em 0;
+  overflow-x: auto;
+  background: rgba(0,0,0,0.06);
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 0.5em 0;
 }
 .message-bubble.user .msg-body.md :deep(pre) { background: rgba(255,255,255,0.18); }
 .msg-body.md :deep(code) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
-  background: rgba(0,0,0,0.06); padding: 0.1em 0.35em; border-radius: 4px;
+  background: rgba(0,0,0,0.06);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
 }
 .msg-body.md :deep(pre code) { background: none; padding: 0; }
 .message-bubble.user .msg-body.md :deep(code) { background: rgba(255,255,255,0.2); }
-.msg-body.md :deep(a) { color: #6B5BB8; word-break: break-all; }
+.msg-body.md :deep(a) { color: var(--neko-primary-deep); word-break: break-all; }
 .message-bubble.user .msg-body.md :deep(a) { color: #fff; text-decoration: underline; }
 .msg-body.md :deep(blockquote) {
-  margin: 0.4em 0; padding-left: 0.8em; border-left: 3px solid #D0C8E8; color: #666;
+  margin: 0.4em 0;
+  padding-left: 0.8em;
+  border-left: 3px solid #D0C8E8;
+  color: var(--neko-ink-soft);
 }
 .msg-body.md :deep(h1), .msg-body.md :deep(h2), .msg-body.md :deep(h3) {
-  font-size: 1.05em; margin: 0.6em 0 0.3em; font-weight: 600;
+  font-size: 1.05em;
+  margin: 0.6em 0 0.3em;
+  font-weight: 600;
 }
 .msg-body.md :deep(table) {
-  border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 12px;
+  display: block;
+  overflow-x: auto;
 }
 .msg-body.md :deep(th), .msg-body.md :deep(td) {
-  border: 1px solid #E0DCE8; padding: 4px 8px;
+  border: 1px solid #E0DCE8;
+  padding: 4px 8px;
 }
 
 .attach-row {
-  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
 }
 .attach-img-wrap img {
-  max-width: 200px; max-height: 200px; border-radius: 10px;
-  object-fit: cover; display: block;
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 10px;
+  object-fit: cover;
+  display: block;
   border: 1px solid rgba(0,0,0,0.06);
 }
 .attach-file {
-  font-size: 13px; color: inherit; text-decoration: underline;
+  font-size: 13px;
+  color: inherit;
+  text-decoration: underline;
   word-break: break-all;
 }
 .delivery-state {
@@ -891,9 +939,7 @@ function goBack() {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.78);
 }
-.delivery-state.failed {
-  color: #FFF1F1;
-}
+.delivery-state.failed { color: #FFF1F1; }
 .retry-btn {
   border: 1px solid rgba(255, 255, 255, 0.65);
   border-radius: 999px;
@@ -904,64 +950,141 @@ function goBack() {
 }
 
 .empty-messages {
-  text-align: center; color: #9E9E9E; padding: 48px 24px; margin: auto;
+  text-align: center;
+  color: var(--neko-ink-faint);
+  padding: 40px 24px;
+  margin: auto;
 }
 .import-banner {
-  text-align: center; font-size: 13px; color: #7A6A9A; padding: 8px;
-  background: rgba(243, 238, 255, 0.8); border-radius: 10px; margin-bottom: 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--neko-primary-deep);
+  padding: 8px;
+  background: rgba(236, 229, 245, 0.85);
+  border-radius: 10px;
+  margin-bottom: 8px;
 }
 .neko-mascot {
-  filter: drop-shadow(0 4px 12px rgba(184, 169, 232, 0.45));
+  filter: drop-shadow(0 4px 12px rgba(114, 91, 157, 0.2));
   animation: neko-float 2.4s ease-in-out infinite;
 }
 .neko-mascot img {
-  width: 72px; height: 72px; border-radius: 50%; object-fit: cover;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
   border: 2px solid rgba(255,255,255,0.95);
 }
-.empty-title { font-size: 15px; color: #6A6A6A; font-weight: 600; margin: 12px 0 6px; }
-.empty-hint { font-size: 13px; line-height: 1.5; margin: 0 0 12px; color: #A0A0A0; }
+.empty-title {
+  font-size: 15px;
+  color: var(--neko-ink-soft);
+  font-weight: 650;
+  margin: 12px 0 6px;
+}
+.empty-hint {
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0 0 14px;
+  color: var(--neko-ink-faint);
+  text-wrap: pretty;
+}
 
 @keyframes neko-float {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
+  50% { transform: translateY(-6px); }
 }
 
 .pending-atts {
-  display: flex; flex-wrap: wrap; gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 8px 16px 0;
-  background: rgba(250, 248, 245, 0.95);
+  background: rgba(255, 252, 250, 0.95);
 }
 .pending-chip {
-  display: flex; align-items: center; gap: 6px;
-  background: #F0ECF8; border-radius: 10px; padding: 4px 8px 4px 4px;
-  font-size: 12px; color: #5A4A8A; max-width: 160px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--neko-primary-soft);
+  border-radius: 10px;
+  padding: 4px 8px 4px 4px;
+  font-size: 12px;
+  color: var(--neko-primary-deep);
+  max-width: 160px;
 }
 .pending-chip img {
-  width: 32px; height: 32px; border-radius: 6px; object-fit: cover;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.chip-file {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: rgba(114, 91, 157, 0.12);
+  font-size: 10px;
+  font-weight: 700;
 }
 .chip-name {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 .chip-x {
-  border: none; background: transparent; cursor: pointer;
-  font-size: 16px; line-height: 1; color: #888; padding: 0 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--neko-ink-soft);
+  padding: 0 2px;
 }
-.upload-error {
-  padding: 4px 16px 0; font-size: 12px; color: #C05050;
+
+.error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px 8px 16px;
+  border-top: 1px solid rgba(191, 104, 116, 0.2);
+  background: rgba(249, 231, 233, 0.95);
+  color: #784951;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.error-banner p {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+}
+.error-dismiss {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .input-bar {
   flex: 0 0 auto;
   padding: 12px 16px;
-  padding-bottom: 12px;
-  border-top: 1px solid #E8E4E0;
-  background: rgba(250, 248, 245, 0.95);
+  border-top: 1px solid var(--neko-line);
+  background: rgba(255, 252, 250, 0.96);
   backdrop-filter: blur(10px);
   display: flex;
   gap: 8px;
   align-items: flex-end;
 }
-.input-bar :deep(.n-input) { flex: 1; }
+.input-bar :deep(.n-input) { flex: 1; min-width: 0; }
 .attachment-picker {
   position: relative;
   display: inline-flex;
@@ -971,16 +1094,17 @@ function goBack() {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  color: #4A4A4A;
+  color: var(--neko-ink);
+  background: var(--neko-surface-muted);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 .attachment-picker:hover {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(114, 91, 157, 0.12);
 }
 .attachment-picker:focus-within {
-  outline: 2px solid #8D75B8;
+  outline: 2px solid var(--neko-primary);
   outline-offset: 2px;
 }
 .attachment-picker.disabled {
@@ -990,6 +1114,7 @@ function goBack() {
 .attachment-picker-icon {
   font-size: 20px;
   line-height: 1;
+  font-weight: 500;
 }
 .attachment-file {
   position: absolute;
@@ -1007,22 +1132,20 @@ function goBack() {
 
 @media (max-width: 430px) {
   .page-header {
-    gap: 7px;
+    gap: 6px;
     padding-inline: 10px;
   }
 
-  .thread-state-pill {
-    padding-inline: 6px;
-  }
-
-  .thread-state-label,
-  .thread-activity-trail {
-    display: none;
-  }
-
-  .ws-pill {
-    padding-inline: 6px;
+  .thread-state-label {
+    max-width: 4.5em;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .neko-mascot {
+    animation: none;
+  }
+}
 </style>

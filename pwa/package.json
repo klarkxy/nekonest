@@ -2,7 +2,7 @@
   "name": "nekonest-pwa",
   "private": true,
   "version": "0.1.0",
-  "description": "NekoNest 猫娘窝 - AI Agent 远程控制 PWA",
+  "description": "猫娘窝 - 从手机续写家里电脑上的线团",
   "type": "module",
   "scripts": {
     "dev": "vite",

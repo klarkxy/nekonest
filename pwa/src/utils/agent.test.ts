@@ -30,29 +30,30 @@ describe('agent helpers', () => {
     expect(getAgentMeta('kimi_cli').avatar).toBe('/agents/kimi-cli.webp')
     expect(getAgentMeta('grok_build').label).toBe('Grok Build')
     expect(getAgentMeta('future_agent').avatar).toBe('/agents/unknown.webp')
+    expect(getAgentMeta('unknown').label).toBe('未知猫娘')
     expect(agentLabel('other')).toBe('other')
   })
 
   it('status maps', () => {
-    expect(statusLabel('running')).toBe('猫爪忙碌中')
+    expect(statusLabel('running')).toBe('忙碌中')
     expect(sessionActivityPresentation('running')).toEqual({
       icon: '🐾',
-      label: '猫爪忙碌中',
-      headline: '这条线程还在跑',
-      detail: '猫娘仍在本机忙碌，状态与新消息会自动同步回来。',
+      label: '忙碌中',
+      headline: '线团还在转',
+      detail: '家里的猫娘还在干活，新消息会同步过来。',
       tone: 'active'
     })
-    expect(sessionActivityPresentation('idle').label).toBe('猫窝待命')
-    expect(sessionActivityPresentation('waiting_approval').label).toBe('等你点头')
-    expect(sessionActivityPresentation('waiting_approval', true).label).toBe('等你点头')
-    expect(sessionActivityPresentation('idle', true).label).toBe('正在衔回消息')
+    expect(sessionActivityPresentation('idle').label).toBe('待命')
+    expect(sessionActivityPresentation('waiting_approval').label).toBe('电脑待批')
+    expect(sessionActivityPresentation('waiting_approval', true).label).toBe('电脑待批')
+    expect(sessionActivityPresentation('idle', true).label).toBe('回复中')
     expect(sessionActivityPresentation('nope').tone).toBe('unknown')
     expect(statusTagType('waiting_approval')).toBe('warning')
     expect(statusTagType('nope')).toBe('default')
   })
 
   it('shortSummary', () => {
-    expect(shortSummary(undefined)).toBe('空闲会话')
+    expect(shortSummary(undefined)).toBe('未命名线团')
     expect(shortSummary('  a   b  ')).toBe('a b')
     expect(shortSummary('x'.repeat(60), 10)).toBe('x'.repeat(10) + '…')
   })

@@ -1,52 +1,66 @@
 <template>
   <div class="pair-page">
     <div class="page-header">
-      <n-button text @click="$router.back()">← 返回</n-button>
+      <RouterLink class="back-link" :to="devicesLocation()" aria-label="返回猫窝">← 返回</RouterLink>
       <h1>配对电脑</h1>
     </div>
 
     <div class="pair-content">
       <div class="pair-icon">
-        <img src="/neko-avatar.webp" alt="NekoNest" width="96" height="96" />
+        <img
+          src="/brand/nekonest-duo.webp"
+          alt="NekoNest 看板娘"
+          width="96"
+          height="96"
+        />
       </div>
       <p class="pair-desc">
-        在 Windows 上执行 <code>nekonest-daemon -register</code> 或
-        <code>-pair gen</code> 后会打印 6 位配对码，输入后即可在手机上看到该电脑。
+        在家里电脑上生成 6 位配对码，填到这里，手机就能看见那台电脑的线团。
       </p>
 
-      <label class="field-label" for="pair-code">配对码</label>
-      <n-input
-        id="pair-code"
-        v-model:value="pairCode"
-        name="one-time-code"
-        autocomplete="one-time-code"
-        inputmode="text"
-        placeholder="输入 6 位配对码"
-        size="large"
-        maxlength="6"
-        class="pair-input"
-        aria-describedby="pair-help"
-      />
+      <form class="pair-form" @submit.prevent="handlePair">
+        <label class="field-label" for="pair-code">配对码</label>
+        <n-input
+          id="pair-code"
+          v-model:value="pairCode"
+          name="one-time-code"
+          autocomplete="one-time-code"
+          inputmode="text"
+          spellcheck="false"
+          placeholder="输入 6 位配对码…"
+          size="large"
+          maxlength="6"
+          class="pair-input"
+          aria-describedby="pair-help"
+          :status="fieldError ? 'error' : undefined"
+        />
+        <p v-if="fieldError" class="field-error" role="alert">{{ fieldError }}</p>
 
-      <n-button
-        type="primary"
-        block
-        size="large"
-        :loading="pairing"
-        @click="handlePair"
-        :disabled="pairCode.length !== 6"
-      >
-        配对！
-      </n-button>
+        <n-button
+          type="primary"
+          attr-type="submit"
+          block
+          size="large"
+          :loading="pairing"
+          :disabled="pairCode.trim().length !== 6"
+        >
+          完成配对
+        </n-button>
+      </form>
 
       <div id="pair-help" class="pair-help">
-        <p class="help-title">💡 步骤</p>
+        <p class="help-title">怎么拿到配对码</p>
         <ol class="help-steps">
-          <li>VPS 已部署 Server，并设置 <code>NEKONEST_PHONE_SECRET</code></li>
-          <li>PC：<code>set NEKONEST_SERVER=https://你的域名</code></li>
-          <li>PC：<code>nekonest-daemon -register -name "书房"</code></li>
-          <li>把打印的 6 位码填到上方</li>
-          <li>PC：再运行 <code>nekonest-daemon</code> 保持在线</li>
+          <li>
+            已注册的电脑运行
+            <code translate="no">{{ WINDOWS_PAIR_COMMANDS.pair }}</code>
+          </li>
+          <li>
+            首次使用时，设置好服务器地址与注册令牌后运行
+            <code translate="no">{{ WINDOWS_PAIR_COMMANDS.register }}</code>
+          </li>
+          <li>把码填到上方，点完成配对</li>
+          <li>让本机服务保持在线</li>
         </ol>
       </div>
     </div>
@@ -55,39 +69,46 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, RouterLink } from 'vue-router'
 import { NButton, NInput, useMessage } from 'naive-ui'
 import { apiFetch } from '@/api/http'
 import { useBindingStore } from '@/stores/binding'
+import { devicesLocation } from '@/router/navigation'
+import { WINDOWS_PAIR_COMMANDS } from '@/utils/onboarding'
 
 const router = useRouter()
 const message = useMessage()
 const binding = useBindingStore()
 const pairCode = ref('')
 const pairing = ref(false)
+const fieldError = ref('')
 
 async function handlePair() {
+  fieldError.value = ''
+  const code = pairCode.value.trim()
+  if (code.length !== 6 || pairing.value) return
   pairing.value = true
   try {
     const res = await apiFetch('/api/pair/consume', {
       method: 'POST',
-      body: JSON.stringify({ code: pairCode.value.trim() })
+      body: JSON.stringify({ code })
     })
 
     if (res.status === 401) {
-      throw new Error('密钥无效，请回到设置页检查 NEKONEST_PHONE_SECRET')
+      fieldError.value = '手机钥匙不对，请先去钥匙设置。'
+      return
     }
     if (!res.ok) {
-      throw new Error('配对码无效或已过期')
+      fieldError.value = '配对码无效或已过期，请在电脑上重新生成。'
+      return
     }
 
     const data = await res.json()
     binding.addBinding(data.device_id, data.name || data.device_id)
-    message.success('配对成功！🎉')
-    router.push('/')
-  } catch (err: unknown) {
-    const m = err instanceof Error ? err.message : '配对失败'
-    message.error(m)
+    message.success('配对成功')
+    void router.push(devicesLocation())
+  } catch {
+    fieldError.value = '配对没成功，检查网络后再试。'
   } finally {
     pairing.value = false
   }
@@ -96,68 +117,123 @@ async function handlePair() {
 
 <style scoped>
 .pair-page {
-  padding: 20px;
+  padding: 20px 20px calc(28px + var(--neko-safe-bottom, 0px));
 }
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.back-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 4px 2px;
+  color: var(--neko-primary-deep);
+  font-size: 14px;
+  font-weight: 620;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.page-header h1 {
+  margin: 0;
+  color: var(--neko-ink);
+  font-family: var(--neko-display);
+  font-size: 22px;
+  font-weight: 720;
+}
+
 .pair-content {
-  padding: 20px 0;
+  padding: 12px 0 20px;
 }
+
 .pair-icon {
   text-align: center;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
+
 .pair-icon img {
   width: 96px;
   height: 96px;
-  border-radius: 50%;
+  border-radius: 28px 28px 34px 18px;
   object-fit: cover;
-  box-shadow: 0 8px 24px rgba(184, 169, 232, 0.45);
+  box-shadow: 0 12px 28px rgba(104, 74, 105, 0.2);
   border: 3px solid rgba(255, 255, 255, 0.9);
   background: linear-gradient(135deg, #F3EEFF, #FFE8F0);
 }
+
 .pair-desc {
   text-align: center;
-  color: #6a6a6a;
+  color: var(--neko-ink-soft);
   font-size: 14px;
   line-height: 1.6;
-  margin-bottom: 24px;
+  margin: 0 0 22px;
+  text-wrap: pretty;
 }
+
 .field-label {
   display: block;
+  text-align: left;
   font-size: 13px;
   font-weight: 600;
-  color: #5a5a5a;
+  color: var(--neko-ink-soft);
   margin-bottom: 8px;
 }
+
 .pair-input {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
-.pair-input :deep(.n-input-wrapper) {
-  text-align: center;
-  font-size: 24px;
-  font-family: monospace;
-  letter-spacing: 8px;
+
+.field-error {
+  margin: 0 0 12px;
+  color: var(--neko-danger);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
 }
+
 .pair-help {
-  margin-top: 32px;
-  padding: 16px;
-  background: #f5f3f0;
-  border-radius: 12px;
+  margin-top: 28px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(255, 252, 250, 0.82);
+  border: 1px solid var(--neko-line);
 }
+
 .help-title {
-  font-weight: 600;
-  margin: 0 0 8px;
+  margin: 0 0 10px;
+  color: var(--neko-ink);
+  font-size: 13px;
+  font-weight: 680;
 }
+
 .help-steps {
   margin: 0;
-  padding-left: 20px;
-  font-size: 13px;
-  color: #555;
+  padding-left: 1.2em;
+  color: var(--neko-ink-soft);
+  font-size: 12px;
   line-height: 1.7;
 }
-code {
-  background: #e8e4df;
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 12px;
+
+.help-steps li + li {
+  margin-top: 8px;
+}
+
+.help-steps code {
+  display: block;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 7px 8px;
+  overflow-x: auto;
+  border-radius: 7px;
+  color: var(--neko-primary-deep);
+  background: rgba(114, 91, 157, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
 }
 </style>

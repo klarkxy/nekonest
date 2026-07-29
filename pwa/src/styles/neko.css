@@ -261,34 +261,6 @@ textarea:focus-visible {
   -webkit-backdrop-filter: blur(14px);
 }
 
-.approve-btn,
-.deny-btn {
-  min-height: 48px;
-  padding: 12px 24px;
-  border: 0;
-  border-radius: 15px;
-  color: #fff;
-  cursor: pointer;
-  font-size: 16px;
-  font-weight: 650;
-  transition: transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
-}
-
-.approve-btn {
-  background: var(--neko-mint);
-  box-shadow: 0 8px 20px rgba(83, 137, 111, 0.2);
-}
-
-.deny-btn {
-  background: var(--neko-danger);
-  box-shadow: 0 8px 20px rgba(172, 83, 96, 0.18);
-}
-
-.approve-btn:active,
-.deny-btn:active {
-  transform: scale(0.98);
-}
-
 .message-bubble {
   max-width: 86%;
   padding: 11px 14px;
@@ -382,13 +354,6 @@ textarea:focus-visible {
 .page-header .subtitle {
   color: var(--neko-ink-soft);
   font-size: 13px;
-}
-
-@media (hover: hover) {
-  .approve-btn:hover,
-  .deny-btn:hover {
-    transform: translateY(-1px);
-  }
 }
 
 @media (min-width: 600px) {

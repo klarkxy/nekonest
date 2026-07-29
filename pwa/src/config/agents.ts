@@ -62,7 +62,7 @@ export const AGENT_CATALOG: Readonly<Record<KnownAgentType, AgentMeta>> = {
 
 export const UNKNOWN_AGENT_META: AgentMeta = {
   id: 'unknown',
-  label: '未知智能体',
+  label: '未知猫娘',
   avatar: '/agents/unknown.webp',
   color: '#8F7FC2',
   softColor: '#EEEAF8',

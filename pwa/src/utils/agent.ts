@@ -22,32 +22,32 @@ export type SessionActivityPresentation = {
 const SESSION_ACTIVITY: Record<AgentStatus, SessionActivityPresentation> = {
   running: {
     icon: '🐾',
-    label: '猫爪忙碌中',
-    headline: '这条线程还在跑',
-    detail: '猫娘仍在本机忙碌，状态与新消息会自动同步回来。',
+    label: '忙碌中',
+    headline: '线团还在转',
+    detail: '家里的猫娘还在干活，新消息会同步过来。',
     tone: 'active'
   },
   idle: {
     icon: '🌙',
-    label: '猫窝待命',
-    headline: '已经回到猫窝',
-    detail: '线程现在空闲，随时可以继续。',
+    label: '待命',
+    headline: '线团空闲',
+    detail: '随时可以继续说一句。',
     tone: 'idle'
   },
   waiting_approval: {
     icon: '🔔',
-    label: '等你点头',
-    headline: '猫娘停在门口啦',
-    detail: '线程正在等待审批；当前需要回到 PC 终端处理。',
+    label: '电脑待批',
+    headline: '等电脑点头',
+    detail: '请到家里电脑的终端批准或拒绝；手机不能代点。',
     tone: 'waiting'
   }
 }
 
 const STREAMING_ACTIVITY: SessionActivityPresentation = {
   icon: '🐾',
-  label: '正在衔回消息',
-  headline: '猫爪还在敲键盘',
-  detail: '线程仍在运行，新的回复会自动出现在这里。',
+  label: '回复中',
+  headline: '正在回复',
+  detail: '新内容会陆续出现在这里。',
   tone: 'active'
 }
 
@@ -71,9 +71,9 @@ export function sessionActivityPresentation(
   if (streaming) return STREAMING_ACTIVITY
   return SESSION_ACTIVITY[status as AgentStatus] || {
     icon: '✦',
-    label: status || '状态未知',
-    headline: '还没看清猫窝里的动静',
-    detail: '等待下一次状态同步。',
+    label: status || '未知',
+    headline: '状态还不清楚',
+    detail: '等下一次同步。',
     tone: 'unknown'
   }
 }
@@ -115,7 +115,7 @@ export function groupSessionsByAgent(
 }
 
 export function shortSummary(text: string | undefined, max = 48): string {
-  if (!text) return '空闲会话'
+  if (!text) return '未命名线团'
   const t = text.replace(/\s+/g, ' ').trim()
   if (t.length <= max) return t
   return t.slice(0, max) + '…'

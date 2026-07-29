@@ -1,12 +1,12 @@
 <template>
   <div class="device-detail-page">
     <header class="device-nav">
-      <n-button text class="back-button" aria-label="返回设备列表" @click="goBack">
+      <RouterLink class="back-link" :to="devicesLocation()" aria-label="返回猫窝">
         <span aria-hidden="true">‹</span>
-        设备列表
-      </n-button>
+        猫窝
+      </RouterLink>
       <div class="device-title">
-        <p>Current nest</p>
+        <p>当前电脑</p>
         <h1>{{ device?.name || deviceId }}</h1>
       </div>
       <span
@@ -19,7 +19,12 @@
       </span>
     </header>
 
-    <section class="welcome-scene" aria-labelledby="welcome-title">
+    <section
+      v-if="showWelcome"
+      class="welcome-scene"
+      :class="{ 'welcome-scene--compact': compactWelcome }"
+      aria-labelledby="welcome-title"
+    >
       <div class="scene-portrait">
         <span class="portrait-backdrop" aria-hidden="true"></span>
         <img
@@ -30,22 +35,14 @@
         />
       </div>
       <div class="scene-dialogue">
-        <p class="speaker">NekoNest guide</p>
-        <h2 id="welcome-title">
-          {{ device?.status === 'online' ? '欢迎回来，目录已经整理好了。' : '这台电脑现在没有回应。' }}
-        </h2>
-        <p>
-          {{
-            device?.status === 'online'
-              ? '从工作目录进入对应智能体，继续本机已有线程。'
-              : '请检查家中 Daemon；恢复在线后，线程会在这里自动出现。'
-          }}
-        </p>
+        <p class="speaker">看板娘</p>
+        <h2 id="welcome-title">{{ welcomeTitle }}</h2>
+        <p>{{ welcomeBody }}</p>
         <span class="dialogue-tail" aria-hidden="true"></span>
       </div>
     </section>
 
-    <dl class="device-stats" aria-label="设备概况">
+    <dl class="device-stats" aria-label="电脑概况">
       <div>
         <dt>状态</dt>
         <dd>
@@ -54,11 +51,11 @@
         </dd>
       </div>
       <div>
-        <dt>智能体</dt>
+        <dt>猫娘</dt>
         <dd>{{ device?.active_agents ?? 0 }}</dd>
       </div>
       <div>
-        <dt>线程</dt>
+        <dt>线团</dt>
         <dd>{{ sessionStore.sessions.length }}</dd>
       </div>
     </dl>
@@ -66,44 +63,59 @@
     <section class="sessions-section" aria-labelledby="sessions-title">
       <div class="section-heading">
         <div>
-          <p class="section-kicker">Directory · Agent · Thread</p>
+          <p class="section-kicker">目录 · 猫娘 · 线团</p>
           <h2 id="sessions-title">工作目录</h2>
         </div>
         <div class="session-overview" role="status" aria-live="polite">
           <span v-if="runningSessionCount" class="session-count-badge session-count-badge--active">
-            <span aria-hidden="true">🐾</span>
-            {{ runningSessionCount }} 条线程还在跑
+            {{ runningSessionCount }} 条忙碌中
           </span>
           <span v-if="waitingApprovalCount" class="session-count-badge session-count-badge--waiting">
-            <span aria-hidden="true">🔔</span>
-            {{ waitingApprovalCount }} 条等你点头
+            {{ waitingApprovalCount }} 条电脑待批
           </span>
-          <span class="local-only">本机线程</span>
+          <span v-if="device?.status !== 'online'" class="session-count-badge session-count-badge--offline">
+            电脑离线
+          </span>
         </div>
       </div>
-      <SessionThreadList :sessions="sessionStore.sessions" @open="goSession" />
+
+      <div v-if="loadError" class="load-error" role="alert">
+        <p>{{ loadError }}</p>
+        <button type="button" class="retry-load" :disabled="loadingSessions" @click="retryFetch">
+          {{ loadingSessions ? '重试中…' : '再试一次' }}
+        </button>
+      </div>
+
+      <div
+        v-if="loadingSessions && sessionStore.sessions.length === 0 && !loadError"
+        class="load-pending"
+        role="status"
+      >
+        正在读取线团…
+      </div>
+
+      <SessionThreadList
+        v-if="sessionStore.sessions.length > 0 || (!loadingSessions && !loadError)"
+        :sessions="sessionStore.sessions"
+        :device-id="deviceId"
+      />
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { NButton } from 'naive-ui'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, RouterLink } from 'vue-router'
 import { useDeviceStore } from '@/stores/device'
 import { useSessionStore } from '@/stores/session'
 import { useBindingStore } from '@/stores/binding'
 import { apiFetch } from '@/api/http'
 import { ensurePushSubscription } from '@/api/push'
 import { nekoWS } from '@/api/websocket'
-import {
-  devicesLocation,
-  sessionDetailLocation
-} from '@/router/navigation'
+import { devicesLocation } from '@/router/navigation'
 import SessionThreadList from '@/components/SessionThreadList.vue'
 
 const route = useRoute()
-const router = useRouter()
 const deviceStore = useDeviceStore()
 const sessionStore = useSessionStore()
 const binding = useBindingStore()
@@ -116,6 +128,33 @@ const runningSessionCount = computed(
 const waitingApprovalCount = computed(
   () => sessionStore.sessions.filter(session => session.status === 'waiting_approval').length
 )
+const loadError = ref('')
+const loadingSessions = ref(false)
+
+const isOnline = computed(() => device.value?.status === 'online')
+const compactWelcome = computed(
+  () => isOnline.value && sessionStore.sessions.length > 0
+)
+const showWelcome = computed(
+  () => !isOnline.value || sessionStore.sessions.length === 0 || compactWelcome.value
+)
+
+const welcomeTitle = computed(() => {
+  if (!isOnline.value) return '这台电脑现在没有回应。'
+  if (sessionStore.sessions.length === 0) return '还没有可续写的线团。'
+  return '欢迎回来。'
+})
+
+const welcomeBody = computed(() => {
+  if (!isOnline.value) {
+    return '请确认家里的猫窝服务还在跑；恢复在线后，线团会自己出现。'
+  }
+  if (sessionStore.sessions.length === 0) {
+    return '请先在电脑上打开或新建会话，这里只续写家里已有的线团。'
+  }
+  return '从工作目录走进对应猫娘，继续家里已有的线团。'
+})
+
 let fetchGen = 0
 let fetchController: AbortController | null = null
 let mounted = false
@@ -148,29 +187,41 @@ function activateDevice(want: string) {
   void ensurePushSubscription(want)
 }
 
+function retryFetch() {
+  void fetchSessions(deviceId.value)
+}
+
 async function fetchSessions(want: string) {
   const gen = ++fetchGen
   fetchController?.abort()
   const controller = new AbortController()
   fetchController = controller
+  loadError.value = ''
+  loadingSessions.value = true
   try {
     const res = await apiFetch(
       `/api/devices/sessions?device_id=${encodeURIComponent(want)}`,
       { signal: controller.signal }
     )
-    if (!res.ok) return
     if (!isCurrentRequest(want, gen, controller)) return
+    if (!res.ok) {
+      loadError.value = '线团清单没读到，稍后再试。'
+      return
+    }
     const data = await res.json()
     if (!isCurrentRequest(want, gen, controller)) return
     if (data.sessions) {
       sessionStore.sessions = data.sessions
     }
+    loadError.value = ''
   } catch (error) {
-    if (!controller.signal.aborted) {
+    if (!controller.signal.aborted && isCurrentRequest(want, gen, controller)) {
+      loadError.value = '网络不顺，线团清单没拿到。'
       console.warn('[device] session fetch failed:', error)
     }
   } finally {
     if (fetchController === controller) fetchController = null
+    if (gen === fetchGen) loadingSessions.value = false
   }
 }
 
@@ -182,14 +233,6 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
     deviceId.value === want &&
     nekoWS().getSubscribedDevice() === want
   )
-}
-
-function goSession(id: string) {
-  void router.push(sessionDetailLocation(deviceId.value, id))
-}
-
-function goBack() {
-  void router.push(devicesLocation())
 }
 </script>
 
@@ -204,10 +247,22 @@ function goBack() {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  margin-bottom: 22px;
+  margin-bottom: 18px;
 }
 
-.back-button span {
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 0 4px;
+  color: var(--neko-primary-deep);
+  font-size: 14px;
+  font-weight: 620;
+  text-decoration: none;
+}
+
+.back-link span {
   margin-right: 4px;
   font-family: serif;
   font-size: 21px;
@@ -265,6 +320,35 @@ function goBack() {
   gap: 0;
   min-height: 142px;
   margin: 0 -4px 15px;
+}
+
+.welcome-scene--compact {
+  min-height: 0;
+  margin-bottom: 12px;
+}
+
+.welcome-scene--compact .scene-portrait {
+  width: 72px;
+  transform: translate(2px, 2px);
+}
+
+.welcome-scene--compact .scene-portrait img {
+  width: 72px;
+  height: 72px;
+  border-radius: 22px 22px 28px 14px;
+}
+
+.welcome-scene--compact .scene-dialogue {
+  min-height: 0;
+  padding: 12px 14px 12px 20px;
+}
+
+.welcome-scene--compact .scene-dialogue h2 {
+  font-size: 13px;
+}
+
+.welcome-scene--compact .scene-dialogue > p:last-of-type {
+  font-size: 11px;
 }
 
 .scene-portrait {
@@ -339,7 +423,7 @@ function goBack() {
 .device-stats {
   display: grid;
   grid-template-columns: 1.25fr 0.8fr 0.8fr;
-  margin: 0 0 26px;
+  margin: 0 0 22px;
   padding: 10px 4px;
   border-block: 1px solid var(--neko-line);
 }
@@ -400,19 +484,15 @@ function goBack() {
   gap: 5px;
 }
 
-.session-count-badge,
-.local-only {
+.session-count-badge {
   padding: 4px 7px;
+  border: 1px solid transparent;
   border-radius: 7px;
   color: var(--neko-primary-deep);
   background: rgba(236, 229, 245, 0.86);
   font-size: 9px;
   font-weight: 680;
   font-variant-numeric: tabular-nums;
-}
-
-.session-count-badge {
-  border: 1px solid transparent;
 }
 
 .session-count-badge--active {
@@ -427,30 +507,73 @@ function goBack() {
   color: #8a642f;
 }
 
+.session-count-badge--offline {
+  border-color: #ddd;
+  background: #f1ecee;
+  color: #7a7076;
+}
+
+.load-error,
+.load-pending {
+  padding: 18px 16px;
+  border-radius: 16px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.55;
+  margin-bottom: 12px;
+}
+
+.load-error {
+  border: 1px solid rgba(191, 104, 116, 0.22);
+  color: #784951;
+  background: rgba(249, 231, 233, 0.72);
+}
+
+.load-error p {
+  margin: 0 0 12px;
+}
+
+.retry-load {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  background: var(--neko-primary);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.retry-load:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.load-pending {
+  color: var(--neko-ink-soft);
+  background: rgba(255, 252, 250, 0.72);
+}
+
 @media (max-width: 370px) {
   .device-detail-page {
     padding-inline: 16px;
   }
 
-  .welcome-scene {
+  .welcome-scene:not(.welcome-scene--compact) {
     grid-template-columns: 78px minmax(0, 1fr);
   }
 
-  .scene-portrait,
-  .scene-portrait img {
+  .welcome-scene:not(.welcome-scene--compact) .scene-portrait,
+  .welcome-scene:not(.welcome-scene--compact) .scene-portrait img {
     width: 90px;
   }
 
-  .scene-portrait img {
+  .welcome-scene:not(.welcome-scene--compact) .scene-portrait img {
     height: 90px;
   }
 
   .scene-dialogue {
     padding-left: 20px;
-  }
-
-  .scene-dialogue h2 {
-    font-size: 13px;
   }
 
   .section-heading {

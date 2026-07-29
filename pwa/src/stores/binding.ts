@@ -12,6 +12,7 @@ export interface BoundDevice {
 
 export const useBindingStore = defineStore('binding', () => {
   const bound = ref<BoundDevice[]>(loadBound())
+  const bindingConfigured = ref(hasSavedBindings())
   const lastDeviceId = ref<string | null>(localStorage.getItem(LAST_KEY))
 
   const boundIds = computed(() => new Set(bound.value.map(d => d.id)))
@@ -26,8 +27,17 @@ export const useBindingStore = defineStore('binding', () => {
     }
   }
 
+  function hasSavedBindings(): boolean {
+    try {
+      return localStorage.getItem(BOUND_KEY) !== null
+    } catch {
+      return false
+    }
+  }
+
   function persist() {
     localStorage.setItem(BOUND_KEY, JSON.stringify(bound.value))
+    bindingConfigured.value = true
   }
 
   function addBinding(id: string, name: string) {
@@ -57,5 +67,13 @@ export const useBindingStore = defineStore('binding', () => {
     localStorage.setItem(LAST_KEY, id)
   }
 
-  return { bound, boundIds, lastDeviceId, addBinding, removeBinding, setLastDevice }
+  return {
+    bound,
+    boundIds,
+    bindingConfigured,
+    lastDeviceId,
+    addBinding,
+    removeBinding,
+    setLastDevice
+  }
 })

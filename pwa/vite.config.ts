@@ -19,9 +19,9 @@ export default defineConfig({
       manifest: {
         name: 'NekoNest 猫娘窝',
         short_name: '猫娘窝',
-        description: '按工作目录和智能体整理家中电脑上的本机线程',
+        description: '按工作目录和猫娘，整理家里电脑上的线团',
         lang: 'zh-CN',
-        theme_color: '#8D75B8',
+        theme_color: '#F8F1ED',
         background_color: '#F8F1ED',
         display: 'standalone',
         orientation: 'portrait',

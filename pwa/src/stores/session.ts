@@ -226,7 +226,7 @@ export const useSessionStore = defineStore('sessions', () => {
     it.status = sent ? 'sending' : 'queued'
     delete it.error
     if (!persistOutboxItem(it)) {
-      lastError.value = '待发送消息状态无法保存，请勿关闭页面'
+      lastError.value = '待发消息没存住，先别关页面'
     }
     patchDeliveryMessage(it.clientMsgId, it.status)
     if (sent && scheduleAck) {
@@ -382,7 +382,7 @@ export const useSessionStore = defineStore('sessions', () => {
         ) {
           upsertMessage(sessionMessage)
           if (sessionMessage.type === 'error') {
-            lastError.value = sessionMessage.content.trim() || 'Agent 执行失败'
+            lastError.value = sessionMessage.content.trim() || '猫娘这边出错了'
             importing.value = false
             streaming.value = false
             stopStreamPoll()
@@ -459,8 +459,8 @@ export const useSessionStore = defineStore('sessions', () => {
         const cid = (p?.client_msg_id || '').trim()
         const retryAllowed = p?.retry_allowed !== false && p?.outcome !== 'indeterminate'
         const failure = retryAllowed
-          ? p?.message || p?.error || p?.reason || 'Agent 未接受该指令'
-          : '执行结果不确定，为避免重复已禁用重试'
+          ? p?.message || p?.error || p?.reason || '猫娘没接下这条指令'
+          : '结果不确定，为避免重复已关掉重试'
         if (cid) syncOutboxFromStorage()
         const item = cid ? outbox.get(cid) : undefined
         if (cid) clearAckTimer(cid)
@@ -538,7 +538,7 @@ export const useSessionStore = defineStore('sessions', () => {
       0
     )
     if (latestError.timestamp <= latestUserTimestamp) return
-    lastError.value = latestError.content.trim() || 'Agent 执行失败'
+    lastError.value = latestError.content.trim() || '猫娘这边出错了'
     importing.value = false
     streaming.value = false
     stopStreamPoll()
@@ -557,7 +557,7 @@ export const useSessionStore = defineStore('sessions', () => {
       syncOutboxFromStorage()
       if (session.device_id && activeDeviceId && session.device_id !== activeDeviceId) {
         // Refuse to open a session from another device while subscribed elsewhere.
-        lastError.value = '会话属于其他设备，请先切换设备'
+        lastError.value = '这条线团属于别的电脑，请先回去换猫窝'
         currentSession.value = null
         return
       }
@@ -585,7 +585,7 @@ export const useSessionStore = defineStore('sessions', () => {
         const history = (data.messages as SessionMessage[]) || []
         mergeHistory(history)
       } else {
-        lastError.value = `加载历史失败 (${res.status})`
+        lastError.value = `历史没叼回来（${res.status}）`
       }
     } catch (err) {
       console.warn('[session] rest history failed:', err)
@@ -703,12 +703,12 @@ export const useSessionStore = defineStore('sessions', () => {
     lastError.value = null
     const atts = attachments?.filter(a => a?.url) || []
     if (!prompt.trim() && atts.length === 0) {
-      lastError.value = '请输入内容或添加附件'
+      lastError.value = '先说点什么，或塞个附件'
       return false
     }
     syncOutboxFromStorage()
     if (outbox.size >= MAX_OUTBOX) {
-      lastError.value = `待发送消息已达上限（${MAX_OUTBOX} 条），请等待现有消息确认后再发送`
+      lastError.value = `待发已满（${MAX_OUTBOX} 条），等前面的确认后再发`
       return false
     }
     // Stable wire id (msg_*) — server persists it; not "optimistic-only" prefix.
@@ -725,7 +725,7 @@ export const useSessionStore = defineStore('sessions', () => {
       createdAt: Math.floor(Date.now() / 1000)
     }
     if (!persistOutboxItem(item)) {
-      lastError.value = '无法安全保存待发送消息，请检查浏览器存储空间后重试'
+      lastError.value = '浏览器存不下待发消息，清点空间后再试'
       return false
     }
     outbox.set(clientMsgId, item)
@@ -744,7 +744,7 @@ export const useSessionStore = defineStore('sessions', () => {
     })
     const sent = sendOutboxItem(item)
     if (!sent) {
-      lastError.value = '未连接，消息已排队，恢复连接后自动发送'
+      lastError.value = '通道还没通，消息已排队，接通后会自动送出'
     }
     return true
   }
@@ -759,11 +759,11 @@ export const useSessionStore = defineStore('sessions', () => {
     const item = outbox.get(clientMsgId)
     if (!item || item.status !== 'failed') return false
     if (!item.retryAllowed) {
-      lastError.value = '执行结果不确定，为避免重复已禁用重试'
+      lastError.value = '结果不确定，为避免重复已关掉重试'
       return false
     }
     if (!nekoWS().isConnected()) {
-      lastError.value = '未连接，请恢复连接后再重试'
+      lastError.value = '通道还没通，接通后再重试'
       return false
     }
     item.status = 'queued'
@@ -774,7 +774,7 @@ export const useSessionStore = defineStore('sessions', () => {
     persistOutboxItem(item)
     const sent = sendOutboxItem(item, true)
     if (!sent) {
-      const failure = '连接已中断，请恢复连接后再次重试'
+      const failure = '通道又断了，接通后再点重试'
       item.status = 'failed'
       item.error = failure
       persistOutboxItem(item)
@@ -792,7 +792,7 @@ export const useSessionStore = defineStore('sessions', () => {
       timestamp: Math.floor(Date.now() / 1000),
       payload: { approval_id: approvalId }
     })
-    if (!ok) lastError.value = '未连接，无法发送审批'
+    if (!ok) lastError.value = '通道还没通，没法代传审批'
     return ok
   }
 
@@ -804,7 +804,7 @@ export const useSessionStore = defineStore('sessions', () => {
       timestamp: Math.floor(Date.now() / 1000),
       payload: { approval_id: approvalId }
     })
-    if (!ok) lastError.value = '未连接，无法发送拒绝'
+    if (!ok) lastError.value = '通道还没通，没法代传拒绝'
     return ok
   }
 
@@ -816,7 +816,7 @@ export const useSessionStore = defineStore('sessions', () => {
       timestamp: Math.floor(Date.now() / 1000),
       payload: {}
     })
-    if (!ok) lastError.value = '未连接，无法中断'
+    if (!ok) lastError.value = '通道还没通，没法中断'
     return ok
   }
 

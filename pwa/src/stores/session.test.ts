@@ -437,7 +437,7 @@ describe('session prompt outbox', () => {
 
     expect(store.sendPrompt('device-a', 'session-a', 'must not disappear')).toBe(false)
     expect(store.messages).toHaveLength(0)
-    expect(store.lastError).toContain('无法安全保存')
+    expect(store.lastError).toContain('存不下待发')
     expect(errorSpy).toHaveBeenCalled()
   })
 
@@ -565,7 +565,7 @@ describe('session prompt outbox', () => {
     expect(store.messages[0].metadata?.delivery_status).toBe('failed')
     expect(store.messages[0].metadata?.delivery_retry_allowed).toBe(false)
     expect(store.messages[0].metadata?.delivery_error).toBe(
-      '执行结果不确定，为避免重复已禁用重试'
+      '结果不确定，为避免重复已关掉重试'
     )
     expect(store.retryPrompt(clientMsgId)).toBe(false)
     expect(sentPrompts()).toHaveLength(1)
