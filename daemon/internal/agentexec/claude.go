@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/nekonest/daemon/internal/attach"
 )
 
 // ClaudeCommander handles Claude Code CLI interactions.
@@ -37,15 +39,44 @@ func (c *ClaudeCommander) IsAvailable() bool {
 	return err == nil
 }
 
+func claudeResumeArgs(
+	sessionID string,
+	prompt string,
+	attachments []attach.LocalFile,
+) []string {
+	args := []string{"--resume", sessionID}
+	if dirs := attachmentDirs(attachments); len(dirs) > 0 {
+		args = append(args, "--add-dir")
+		args = append(args, dirs...)
+	}
+	return append(
+		args,
+		"-p", prompt,
+		"--output-format", "stream-json",
+		"--verbose",
+	)
+}
+
 // SendPrompt resumes a Claude Code session with a new prompt.
 // Uses: claude --resume <session-id> -p "<prompt>" --output-format stream-json
 // sessionID must be a real Claude session id (from Discover / JSONL basename).
-func (c *ClaudeCommander) SendPrompt(sessionID, prompt string) error {
-	return c.SendPromptInDir(sessionID, prompt, "")
+func (c *ClaudeCommander) SendPrompt(
+	sessionID string,
+	prompt string,
+	attachments []attach.LocalFile,
+	onComplete func(),
+) error {
+	return c.SendPromptInDir(sessionID, prompt, "", attachments, onComplete)
 }
 
 // SendPromptInDir is like SendPrompt but sets the process working directory.
-func (c *ClaudeCommander) SendPromptInDir(sessionID, prompt, workDir string) error {
+func (c *ClaudeCommander) SendPromptInDir(
+	sessionID string,
+	prompt string,
+	workDir string,
+	attachments []attach.LocalFile,
+	onComplete func(),
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -59,19 +90,16 @@ func (c *ClaudeCommander) SendPromptInDir(sessionID, prompt, workDir string) err
 		return fmt.Errorf("invalid session id %q — use a session discovered from the PC", sessionID)
 	}
 
-	// Resume existing Claude session (print mode, JSON stream)
-	args := []string{
-		"--resume", sessionID,
-		"-p", prompt,
-		"--output-format", "stream-json",
-		"--verbose",
-	}
+	// Claude's --file expects remote Files API ids, not local paths. Grant
+	// Read access only to the materialized attachment directories instead.
+	args := claudeResumeArgs(sessionID, prompt, attachments)
 
 	executor := NewAgentExecutor("claude_code", sessionID)
 	executor.OnOutput = func(line string) {
 		c.parseAndForwardOutput(sessionID, line)
 	}
 	executor.OnExit = func(exitCode int) {
+		defer completePrompt(onComplete)
 		log.Printf("[claude] session %s process exited with code %d", sessionID, exitCode)
 		c.mu.Lock()
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {

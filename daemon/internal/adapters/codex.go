@@ -559,11 +559,16 @@ func (a *CodexAdapter) Watch(sessionID string) (<-chan *SessionInfo, error) {
 	return ch, nil
 }
 
-func (a *CodexAdapter) SendPrompt(sessionID string, prompt string) error {
+func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error {
 	if !a.commander.IsAvailable() {
 		return fmt.Errorf("codex CLI not found in PATH")
 	}
-	return a.commander.SendPrompt(sessionID, prompt)
+	return a.commander.SendPrompt(
+		sessionID,
+		request.Prompt,
+		request.Attachments,
+		request.OnComplete,
+	)
 }
 
 func (a *CodexAdapter) Approve(sessionID string, approvalID string) error {

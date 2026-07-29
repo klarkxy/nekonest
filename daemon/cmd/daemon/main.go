@@ -224,25 +224,46 @@ func main() {
 				return
 			}
 
+			var (
+				localAttachments []attach.LocalFile
+				releaseFiles     func()
+				runOwnsFiles     bool
+			)
+			defer func() {
+				if releaseFiles != nil && !runOwnsFiles {
+					releaseFiles()
+				}
+			}()
+
 			if len(refs) > 0 {
-				attDir, _, suffix, aerr := attach.Materialize(currentConfig().ServerURL, sessionID, refs)
+				attDir, files, suffix, aerr := attach.Materialize(
+					currentConfig().ServerURL,
+					sessionID,
+					refs,
+				)
 				if aerr != nil {
 					log.Printf("[daemon] attach materialize: %v", aerr)
 					sendPromptFailed(client, deviceID, sessionID, clientMsgID, "attachment download failed: "+aerr.Error())
 					return
 				}
-				// Agent may read files during the run; remove after a few hours.
-				if attDir != "" {
-					go func(dir string) {
-						time.Sleep(2 * time.Hour)
-						_ = os.RemoveAll(dir)
-					}(attDir)
+				localAttachments = files
+				var cleanupOnce sync.Once
+				releaseFiles = func() {
+					cleanupOnce.Do(func() {
+						if err := os.RemoveAll(attDir); err != nil {
+							log.Printf("[daemon] remove attachment directory %s: %v", attDir, err)
+						}
+					})
 				}
 				if prompt == "" {
 					prompt = "(user sent attachments)"
 				}
 				prompt = prompt + suffix
-				log.Printf("[daemon] attached %d file(s) into prompt for %s", len(refs), sessionID)
+				log.Printf(
+					"[daemon] materialized %d attachment(s) for %s",
+					len(localAttachments),
+					sessionID,
+				)
 			}
 
 			if targetAdapter == nil {
@@ -262,7 +283,12 @@ func main() {
 				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "prompt was not executed because its durable dispatch record could not be written: "+err.Error())
 				return
 			}
-			if err := targetAdapter.SendPrompt(sessionID, prompt); err != nil {
+			request := adapters.PromptRequest{
+				Prompt:      prompt,
+				Attachments: localAttachments,
+				OnComplete:  releaseFiles,
+			}
+			if err := targetAdapter.SendPrompt(sessionID, request); err != nil {
 				log.Printf("[daemon] send_prompt error via %s: %v", targetAdapter.Name(), err)
 				// The adapter API cannot prove whether a failing Start/Send
 				// crossed into the agent. Preserve the ambiguity instead of
@@ -278,6 +304,9 @@ func main() {
 					promptOutcomeIndeterminate+"; agent returned: "+err.Error(),
 				)
 			} else {
+				// The resumed process now owns the temporary files and invokes
+				// OnComplete only after its output readers and process exit.
+				runOwnsFiles = true
 				if err := commandJournal.markAccepted(sessionID, clientMsgID); err != nil {
 					log.Printf("[daemon] persist prompt acceptance failed session=%s client_msg_id=%s: %v", sessionID, clientMsgID, err)
 					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate+"; acceptance journal update failed")

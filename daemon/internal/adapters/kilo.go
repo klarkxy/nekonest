@@ -331,15 +331,26 @@ func (a *KiloAdapter) Watch(sessionID string) (<-chan *SessionInfo, error) {
 }
 
 // SendPrompt resumes a Kilo session.
-func (a *KiloAdapter) SendPrompt(sessionID string, prompt string) error {
+func (a *KiloAdapter) SendPrompt(sessionID string, request PromptRequest) error {
 	if !a.commander.IsAvailable() {
 		return fmt.Errorf("kilo CLI not found in PATH or VS Code extension")
 	}
 	dir := a.sessionDir(sessionID)
 	if dir != "" {
-		return a.commander.SendPromptInDir(sessionID, prompt, dir)
+		return a.commander.SendPromptInDir(
+			sessionID,
+			request.Prompt,
+			dir,
+			request.Attachments,
+			request.OnComplete,
+		)
 	}
-	return a.commander.SendPrompt(sessionID, prompt)
+	return a.commander.SendPrompt(
+		sessionID,
+		request.Prompt,
+		request.Attachments,
+		request.OnComplete,
+	)
 }
 
 func (a *KiloAdapter) sessionDir(sessionID string) string {

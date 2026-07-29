@@ -145,6 +145,43 @@ describe('mergeHistoryLists', () => {
     expect(out.map(m => m.id)).toEqual(['msg_ping', 'msg_pong'])
   })
 
+  it('maps an imported attachment-path copy to the canonical prompt', () => {
+    const current = [
+      msg({
+        id: 'msg_attachment',
+        role: 'user',
+        content: '请读取附件',
+        timestamp: 100,
+        metadata: {
+          agent_type: 'codex',
+          attachments: [{
+            url: '/api/attachments/a1',
+            name: 'note.txt',
+            mime: 'text/plain'
+          }]
+        }
+      })
+    ]
+    const hist = [
+      msg({
+        id: 'codex_attachment',
+        role: 'user',
+        content:
+          '请读取附件\n\n' +
+          '[NekoNest attachments — local files on this PC]\n' +
+          '- note.txt (text/plain) → C:\\Temp\\nekonest-att-1\\note.txt\n' +
+          'Please inspect these local files if relevant to the user request.\n',
+        timestamp: 101,
+        metadata: { imported: true, agent_type: 'codex' }
+      })
+    ]
+
+    const out = mergeHistoryLists(current, hist)
+
+    expect(out.map(m => m.id)).toEqual(['msg_attachment'])
+    expect(out[0].metadata?.attachments).toHaveLength(1)
+  })
+
   it('keeps two consecutive same-content canonical messages after one-to-one matching', () => {
     const current = [
       msg({ id: 'msg_1', role: 'user', content: '继续', timestamp: 100 }),

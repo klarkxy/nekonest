@@ -80,7 +80,7 @@ func runSend(agent, sessionID, prompt string) {
 	// Warm adapter path caches and reject sessions absent from the local store.
 	_, _ = adapter.Discover()
 	fmt.Fprintf(os.Stderr, "send %s %s available=%v\n", agent, sessionID, adapter.IsAvailable())
-	err = adapter.SendPrompt(sessionID, prompt)
+	err = adapter.SendPrompt(sessionID, adapters.PromptRequest{Prompt: prompt})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "SendPrompt error: %v\n", err)
 		os.Exit(1)

@@ -106,10 +106,10 @@ func (a *routingAdapter) OwnsSession(sessionID string) bool {
 func (a *routingAdapter) Watch(string) (<-chan *adapters.SessionInfo, error) {
 	return nil, fmt.Errorf("unused")
 }
-func (a *routingAdapter) SendPrompt(string, string) error { return nil }
-func (a *routingAdapter) Approve(string, string) error    { return nil }
-func (a *routingAdapter) Deny(string, string) error       { return nil }
-func (a *routingAdapter) Interrupt(string) error          { return nil }
+func (a *routingAdapter) SendPrompt(string, adapters.PromptRequest) error { return nil }
+func (a *routingAdapter) Approve(string, string) error                    { return nil }
+func (a *routingAdapter) Deny(string, string) error                       { return nil }
+func (a *routingAdapter) Interrupt(string) error                          { return nil }
 func (a *routingAdapter) FetchHistory(sessionID string, _ int) ([]*adapters.HistoryMessage, error) {
 	a.historyProbe = true
 	if sessionID != a.hasID {

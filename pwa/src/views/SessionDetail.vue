@@ -191,26 +191,25 @@
     >{{ sessionStore.lastError }}</div>
 
     <div class="input-bar">
-      <span class="attachment-picker">
-        <n-button
-          circle
-          quaternary
-          tabindex="-1"
-          aria-hidden="true"
-          :disabled="sending || uploading"
-        >
-          📎
-        </n-button>
+      <label
+        for="session-attachment-input"
+        class="attachment-picker"
+        :class="{ disabled: sending || uploading }"
+        :aria-disabled="sending || uploading ? 'true' : undefined"
+      >
+        <span class="attachment-picker-icon" aria-hidden="true">📎</span>
+        <span class="sr-only">添加附件</span>
         <input
+          id="session-attachment-input"
           type="file"
           class="attachment-file"
           multiple
-          accept="image/*,.txt,.md,.pdf,.json,text/plain,text/markdown,application/pdf"
+          accept="image/*,.txt,.md,.markdown,.pdf,.json,text/plain,text/markdown,application/pdf,application/json"
           aria-label="添加附件"
           :disabled="sending || uploading"
           @change="onFileChange"
         />
-      </span>
+      </label>
       <n-input
         v-model:value="inputText"
         placeholder="输入指令，或点 📎 加图/附件…"
@@ -863,16 +862,44 @@ function goBack() {
 .attachment-picker {
   position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: #4A4A4A;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.attachment-picker:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+.attachment-picker:focus-within {
+  outline: 2px solid #8D75B8;
+  outline-offset: 2px;
+}
+.attachment-picker.disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.attachment-picker-icon {
+  font-size: 20px;
+  line-height: 1;
 }
 .attachment-file {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
   opacity: 0;
-  cursor: pointer;
 }
-.attachment-file:disabled { cursor: not-allowed; }
 
 </style>

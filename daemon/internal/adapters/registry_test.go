@@ -17,10 +17,10 @@ func (a *registryTestAdapter) OwnsSession(string) bool           { return false 
 func (a *registryTestAdapter) Watch(string) (<-chan *SessionInfo, error) {
 	return nil, fmt.Errorf("unused")
 }
-func (a *registryTestAdapter) SendPrompt(string, string) error { return nil }
-func (a *registryTestAdapter) Approve(string, string) error    { return nil }
-func (a *registryTestAdapter) Deny(string, string) error       { return nil }
-func (a *registryTestAdapter) Interrupt(string) error          { return nil }
+func (a *registryTestAdapter) SendPrompt(string, PromptRequest) error { return nil }
+func (a *registryTestAdapter) Approve(string, string) error           { return nil }
+func (a *registryTestAdapter) Deny(string, string) error              { return nil }
+func (a *registryTestAdapter) Interrupt(string) error                 { return nil }
 func (a *registryTestAdapter) FetchHistory(string, int) ([]*HistoryMessage, error) {
 	return nil, nil
 }

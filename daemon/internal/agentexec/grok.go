@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nekonest/daemon/internal/attach"
 )
 
 const (
@@ -90,7 +92,13 @@ func grokResumeArgs(sessionID, prompt, workDir string) []string {
 	return args
 }
 
-func (c *GrokCommander) SendPromptInDir(sessionID, prompt, workDir string) error {
+func (c *GrokCommander) SendPromptInDir(
+	sessionID string,
+	prompt string,
+	workDir string,
+	_ []attach.LocalFile,
+	onComplete func(),
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -111,6 +119,7 @@ func (c *GrokCommander) SendPromptInDir(sessionID, prompt, workDir string) error
 		c.handleProcessLine(sessionID, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
+		defer completePrompt(onComplete)
 		c.flushStream(sessionID)
 		log.Printf("[grok] session %s process exited with code %d", sessionID, exitCode)
 		c.mu.Lock()

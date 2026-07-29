@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import router from './router'
 import App from './App.vue'
+import { registerAppServiceWorker } from './utils/serviceWorker'
 
 import './styles/neko.css'
 
@@ -14,8 +15,7 @@ app.mount('#app')
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     // vite-plugin-pwa emits sw.js from src/sw.ts in production builds
-    navigator.serviceWorker
-      .register('/sw.js')
+    registerAppServiceWorker(navigator.serviceWorker)
       .then((reg) => {
         console.log('[sw] registered, scope:', reg.scope)
       })

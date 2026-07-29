@@ -582,7 +582,7 @@ func (a *GrokBuildAdapter) Watch(sessionID string) (<-chan *SessionInfo, error) 
 	return ch, nil
 }
 
-func (a *GrokBuildAdapter) SendPrompt(sessionID, prompt string) error {
+func (a *GrokBuildAdapter) SendPrompt(sessionID string, request PromptRequest) error {
 	nativeID, err := nativeSessionID(AgentGrokBuild, sessionID)
 	if err != nil {
 		return err
@@ -591,7 +591,13 @@ func (a *GrokBuildAdapter) SendPrompt(sessionID, prompt string) error {
 	if err != nil {
 		return err
 	}
-	return a.commander.SendPromptInDir(nativeID, prompt, record.projectDir)
+	return a.commander.SendPromptInDir(
+		nativeID,
+		request.Prompt,
+		record.projectDir,
+		request.Attachments,
+		request.OnComplete,
+	)
 }
 
 func (a *GrokBuildAdapter) Approve(sessionID, approvalID string) error {

@@ -476,11 +476,16 @@ func (a *ClaudeCodeAdapter) Watch(sessionID string) (<-chan *SessionInfo, error)
 }
 
 // SendPrompt resumes Claude Code with a new prompt.
-func (a *ClaudeCodeAdapter) SendPrompt(sessionID string, prompt string) error {
+func (a *ClaudeCodeAdapter) SendPrompt(sessionID string, request PromptRequest) error {
 	if !a.commander.IsAvailable() {
 		return fmt.Errorf("claude CLI not found in PATH")
 	}
-	return a.commander.SendPrompt(sessionID, prompt)
+	return a.commander.SendPrompt(
+		sessionID,
+		request.Prompt,
+		request.Attachments,
+		request.OnComplete,
+	)
 }
 
 // Approve approves a pending tool call.

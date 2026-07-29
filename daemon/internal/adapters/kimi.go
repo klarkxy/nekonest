@@ -613,7 +613,7 @@ func (a *KimiCLIAdapter) Watch(sessionID string) (<-chan *SessionInfo, error) {
 	return ch, nil
 }
 
-func (a *KimiCLIAdapter) SendPrompt(sessionID, prompt string) error {
+func (a *KimiCLIAdapter) SendPrompt(sessionID string, request PromptRequest) error {
 	nativeID, err := nativeSessionID(AgentKimiCLI, sessionID)
 	if err != nil {
 		return err
@@ -623,9 +623,21 @@ func (a *KimiCLIAdapter) SendPrompt(sessionID, prompt string) error {
 		return err
 	}
 	if record.legacy {
-		return a.commander.SendLegacyPromptInDir(nativeID, prompt, record.projectDir)
+		return a.commander.SendLegacyPromptInDir(
+			nativeID,
+			request.Prompt,
+			record.projectDir,
+			request.Attachments,
+			request.OnComplete,
+		)
 	}
-	return a.commander.SendPromptInDir(nativeID, prompt, record.projectDir)
+	return a.commander.SendPromptInDir(
+		nativeID,
+		request.Prompt,
+		record.projectDir,
+		request.Attachments,
+		request.OnComplete,
+	)
 }
 
 func (a *KimiCLIAdapter) Approve(sessionID, approvalID string) error {

@@ -2,6 +2,8 @@ import type { SessionMessage } from '@/types/protocol'
 
 const MAX_MESSAGES = 500
 const IMPORTED_DEDUPE_WINDOW_SECONDS = 15
+const NEKONEST_ATTACHMENT_MARK =
+  '\n\n[NekoNest attachments — local files on this PC]\n'
 
 type DuplicateCandidate = {
   canonicalIndex: number
@@ -14,6 +16,14 @@ function agentType(msg: SessionMessage): string | undefined {
   return typeof value === 'string' && value ? value : undefined
 }
 
+function comparableContent(msg: SessionMessage): string {
+  if (msg.role !== 'user') return msg.content
+  const markerIndex = msg.content.indexOf(NEKONEST_ATTACHMENT_MARK)
+  return markerIndex >= 0
+    ? msg.content.slice(0, markerIndex).trim()
+    : msg.content
+}
+
 function canMapImportedToCanonical(
   imported: SessionMessage,
   canonical: SessionMessage
@@ -21,7 +31,10 @@ function canMapImportedToCanonical(
   if (imported.metadata?.imported !== true || canonical.metadata?.imported === true) {
     return false
   }
-  if (imported.role !== canonical.role || imported.content !== canonical.content) {
+  if (
+    imported.role !== canonical.role ||
+    comparableContent(imported) !== comparableContent(canonical)
+  ) {
     return false
   }
   if (!Number.isFinite(imported.timestamp) || !Number.isFinite(canonical.timestamp)) {

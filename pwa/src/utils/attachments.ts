@@ -20,8 +20,51 @@ const ALLOWED = new Set([
   'text/plain', 'text/markdown', 'application/pdf', 'application/json'
 ])
 
+const MIME_BY_EXTENSION = new Map([
+  ['.md', 'text/markdown'],
+  ['.markdown', 'text/markdown'],
+  ['.pdf', 'application/pdf'],
+  ['.json', 'application/json']
+])
+
+const MIME_ALIASES = new Map([
+  ['text/md', 'text/markdown'],
+  ['text/x-markdown', 'text/markdown'],
+  ['application/markdown', 'text/markdown'],
+  ['application/x-markdown', 'text/markdown'],
+  ['application/x-pdf', 'application/pdf'],
+  ['application/acrobat', 'application/pdf'],
+  ['application/vnd.pdf', 'application/pdf'],
+  ['text/pdf', 'application/pdf'],
+  ['text/json', 'application/json'],
+  ['text/x-json', 'application/json'],
+  ['application/x-json', 'application/json'],
+  ['application/ld+json', 'application/json']
+])
+
 export function isImageMime(mime: string): boolean {
   return mime.startsWith('image/')
+}
+
+function attachmentMime(file: File): string {
+  const mime = file.type.toLowerCase().split(';', 1)[0].trim()
+  const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] || ''
+  const extensionMime = MIME_BY_EXTENSION.get(extension)
+  if ((!mime || mime === 'application/octet-stream') && extensionMime) {
+    return extensionMime
+  }
+  const alias = MIME_ALIASES.get(mime)
+  return alias && alias === extensionMime ? alias : (mime || 'application/octet-stream')
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  if (typeof DOMException === 'function') {
+    throw new DOMException('The operation was aborted', 'AbortError')
+  }
+  const error = new Error('The operation was aborted')
+  error.name = 'AbortError'
+  throw error
 }
 
 type DecodedImage = {
@@ -125,12 +168,15 @@ export async function uploadAttachment(
   if (file.size > MAX_BYTES) {
     throw new Error(`${file.name} 超过 4MB`)
   }
-  const mime = file.type || 'application/octet-stream'
+  const mime = attachmentMime(file)
   if (!ALLOWED.has(mime) && mime !== 'application/octet-stream') {
     throw new Error(`${file.name} 的文件类型不受支持`)
   }
+  const uploadFile = mime === file.type
+    ? file
+    : new File([file], file.name, { type: mime, lastModified: file.lastModified })
   const fd = new FormData()
-  fd.append('file', file)
+  fd.append('file', uploadFile)
   if (opts.deviceId) fd.append('device_id', opts.deviceId)
   if (opts.sessionId) fd.append('session_id', opts.sessionId)
 
@@ -156,11 +202,11 @@ export async function uploadAttachment(
   return {
     id: data.id,
     url: data.url,
-    name: data.name || file.name,
-    mime: data.mime || file.type,
-    size: data.size || file.size,
+    name: data.name || uploadFile.name,
+    mime: data.mime || mime,
+    size: data.size || uploadFile.size,
     key: data.key,
-    previewUrl: isImageMime(data.mime || file.type) ? URL.createObjectURL(file) : undefined
+    previewUrl: isImageMime(data.mime || mime) ? URL.createObjectURL(file) : undefined
   }
 }
 
@@ -171,9 +217,9 @@ export async function pickAndUpload(
   const files = Array.from(fileList).slice(0, MAX_COUNT)
   const out: AttachmentRef[] = []
   for (const f of files) {
-    opts.signal?.throwIfAborted()
+    throwIfAborted(opts.signal)
     const prepared = await prepareFile(f)
-    opts.signal?.throwIfAborted()
+    throwIfAborted(opts.signal)
     out.push(await uploadAttachment(prepared, opts))
   }
   return out

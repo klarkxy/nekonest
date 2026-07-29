@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWsToHTTP(t *testing.T) {
@@ -99,7 +100,7 @@ func TestMaterialize(t *testing.T) {
 	defer srv.Close()
 
 	host := strings.TrimPrefix(srv.URL, "http://")
-	dir, paths, suffix, err := Materialize("ws://"+host, "sess-1", []Ref{
+	dir, files, suffix, err := Materialize("ws://"+host, "sess-1", []Ref{
 		{URL: "/api/attachments/f1", Name: "note.txt", MIME: "text/plain"},
 		{URL: "https://evil.example/api/attachments/x", Name: "bad"},
 		{URL: "/api/attachments/f1", Name: "note.txt", MIME: "text/plain"}, // collision
@@ -108,28 +109,61 @@ func TestMaterialize(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
-	if len(paths) != 2 {
-		t.Fatalf("paths=%v hits=%d", paths, hits)
+	if len(files) != 2 {
+		t.Fatalf("files=%v hits=%d", files, hits)
 	}
 	if !strings.Contains(suffix, "rejected") {
 		t.Fatalf("suffix missing reject: %s", suffix)
 	}
-	b, err := os.ReadFile(paths[0])
+	if files[0].MIME != "text/plain" || files[0].Name != "note.txt" {
+		t.Fatalf("file metadata = %#v", files[0])
+	}
+	b, err := os.ReadFile(files[0].Path)
 	if err != nil || string(b) != "hello-file" {
 		t.Fatalf("content %q %v", b, err)
 	}
 	// name collision -> 2_note.txt style
-	base0 := filepath.Base(paths[0])
-	base1 := filepath.Base(paths[1])
+	base0 := filepath.Base(files[0].Path)
+	base1 := filepath.Base(files[1].Path)
 	if base0 == base1 {
 		t.Fatalf("collision names %s %s", base0, base1)
 	}
 }
 
 func TestMaterializeEmpty(t *testing.T) {
-	dir, paths, suf, err := Materialize("wss://x", "s", nil)
-	if err != nil || dir != "" || paths != nil || suf != "" {
-		t.Fatalf("%v %q %v %q", err, dir, paths, suf)
+	dir, files, suf, err := Materialize("wss://x", "s", nil)
+	if err != nil || dir != "" || files != nil || suf != "" {
+		t.Fatalf("%v %q %v %q", err, dir, files, suf)
+	}
+}
+
+func TestMaterializeAllFailedRemovesTemporaryDirectory(t *testing.T) {
+	sessionID := fmt.Sprintf("all-fail-%d", time.Now().UnixNano())
+	pattern := filepath.Join(
+		os.TempDir(),
+		"nekonest-att-"+sanitize(sessionID)+"-*",
+	)
+	before, err := filepath.Glob(pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir, files, suffix, err := Materialize("wss://nest.local", sessionID, []Ref{
+		{URL: "https://evil.example/api/attachments/x", Name: "bad.txt"},
+		{URL: "file:///api/attachments/y", Name: "also-bad.txt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "all 2 attachments failed") {
+		t.Fatalf("Materialize error = %v", err)
+	}
+	if dir != "" || files != nil || suffix != "" {
+		t.Fatalf("failed result = %q %#v %q", dir, files, suffix)
+	}
+	after, globErr := filepath.Glob(pattern)
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("temporary directories leaked: before=%v after=%v", before, after)
 	}
 }
 

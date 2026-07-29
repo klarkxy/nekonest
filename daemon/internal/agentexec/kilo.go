@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nekonest/daemon/internal/attach"
 )
 
 // KiloCommander handles Kilo CLI interactions.
@@ -118,14 +120,52 @@ func (c *KiloCommander) SessionDir(sessionID string) string {
 	return c.sessionDirs[sessionID]
 }
 
+func kiloResumeArgs(
+	sessionID string,
+	prompt string,
+	workDir string,
+	attachments []attach.LocalFile,
+) []string {
+	args := []string{
+		"run",
+		"--session", sessionID,
+		"--format", "json",
+	}
+	if workDir != "" {
+		args = append(args, "--dir", workDir)
+	}
+	for _, path := range attachmentPaths(attachments) {
+		args = append(args, "--file", path)
+	}
+	// End option parsing so a prompt such as "--help" stays a user message.
+	return append(args, "--", prompt)
+}
+
 // SendPrompt resumes a Kilo session with a new prompt.
-// Uses: kilo run --session <id> --format json --dir <dir> <prompt>
-func (c *KiloCommander) SendPrompt(sessionID, prompt string) error {
-	return c.SendPromptInDir(sessionID, prompt, c.SessionDir(sessionID))
+// Uses: kilo run --session <id> --format json --dir <dir> --file <path> -- <prompt>
+func (c *KiloCommander) SendPrompt(
+	sessionID string,
+	prompt string,
+	attachments []attach.LocalFile,
+	onComplete func(),
+) error {
+	return c.SendPromptInDir(
+		sessionID,
+		prompt,
+		c.SessionDir(sessionID),
+		attachments,
+		onComplete,
+	)
 }
 
 // SendPromptInDir resumes a session with an explicit working directory.
-func (c *KiloCommander) SendPromptInDir(sessionID, prompt, workDir string) error {
+func (c *KiloCommander) SendPromptInDir(
+	sessionID string,
+	prompt string,
+	workDir string,
+	attachments []attach.LocalFile,
+	onComplete func(),
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -147,16 +187,7 @@ func (c *KiloCommander) SendPromptInDir(sessionID, prompt, workDir string) error
 		c.sessionDirs[sessionID] = workDir
 	}
 
-	args := []string{
-		"run",
-		"--session", sessionID,
-		"--format", "json",
-	}
-	if workDir != "" {
-		args = append(args, "--dir", workDir)
-	}
-	// Positional message last
-	args = append(args, prompt)
+	args := kiloResumeArgs(sessionID, prompt, workDir, attachments)
 
 	c.nextRunNumber++
 	runNumber := c.nextRunNumber
@@ -165,6 +196,7 @@ func (c *KiloCommander) SendPromptInDir(sessionID, prompt, workDir string) error
 		c.handleProcessLine(sessionID, runNumber, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
+		defer completePrompt(onComplete)
 		log.Printf("[kilo] session %s process exited with code %d", sessionID, exitCode)
 		c.mu.Lock()
 		cur, ok := c.executors[sessionID]

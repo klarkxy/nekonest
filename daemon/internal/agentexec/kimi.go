@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nekonest/daemon/internal/attach"
 )
 
 // KimiCommander resumes Kimi Code sessions in stream-json print mode.
@@ -84,16 +86,49 @@ func kimiResumeArgs(sessionID, prompt string, legacyPrint bool) []string {
 	return args
 }
 
-func (c *KimiCommander) SendPromptInDir(sessionID, prompt, workDir string) error {
-	return c.sendPromptInDir(sessionID, prompt, workDir, false)
+func (c *KimiCommander) SendPromptInDir(
+	sessionID string,
+	prompt string,
+	workDir string,
+	attachments []attach.LocalFile,
+	onComplete func(),
+) error {
+	return c.sendPromptInDir(
+		sessionID,
+		prompt,
+		workDir,
+		false,
+		attachments,
+		onComplete,
+	)
 }
 
 // SendLegacyPromptInDir enables the explicit print mode required by kimi-cli.
-func (c *KimiCommander) SendLegacyPromptInDir(sessionID, prompt, workDir string) error {
-	return c.sendPromptInDir(sessionID, prompt, workDir, true)
+func (c *KimiCommander) SendLegacyPromptInDir(
+	sessionID string,
+	prompt string,
+	workDir string,
+	attachments []attach.LocalFile,
+	onComplete func(),
+) error {
+	return c.sendPromptInDir(
+		sessionID,
+		prompt,
+		workDir,
+		true,
+		attachments,
+		onComplete,
+	)
 }
 
-func (c *KimiCommander) sendPromptInDir(sessionID, prompt, workDir string, legacyStore bool) error {
+func (c *KimiCommander) sendPromptInDir(
+	sessionID string,
+	prompt string,
+	workDir string,
+	legacyStore bool,
+	_ []attach.LocalFile,
+	onComplete func(),
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -114,6 +149,7 @@ func (c *KimiCommander) sendPromptInDir(sessionID, prompt, workDir string, legac
 		c.handleProcessLine(sessionID, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
+		defer completePrompt(onComplete)
 		log.Printf("[kimi] session %s process exited with code %d", sessionID, exitCode)
 		c.mu.Lock()
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {

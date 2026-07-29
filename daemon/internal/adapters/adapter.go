@@ -1,6 +1,10 @@
 package adapters
 
-import "time"
+import (
+	"time"
+
+	"github.com/nekonest/daemon/internal/attach"
+)
 
 // AgentType identifies the type of coding agent.
 type AgentType string
@@ -63,6 +67,14 @@ type OutputEvent struct {
 // OutputSink receives normalized streaming events from every registered adapter.
 type OutputSink func(OutputEvent)
 
+// PromptRequest carries a user turn and any daemon-materialized local files.
+// OnComplete releases those temporary files after the resumed CLI process exits.
+type PromptRequest struct {
+	Prompt      string
+	Attachments []attach.LocalFile
+	OnComplete  func()
+}
+
 // OutputAdapter is implemented by adapters that can stream resumed-agent output.
 type OutputAdapter interface {
 	SetOutputSink(OutputSink)
@@ -88,8 +100,9 @@ type Adapter interface {
 	// Returns a channel that emits updated SessionInfo on changes.
 	Watch(sessionID string) (<-chan *SessionInfo, error)
 
-	// SendPrompt sends a new prompt to an existing session.
-	SendPrompt(sessionID string, prompt string) error
+	// SendPrompt sends a new prompt to an existing session. Implementations
+	// must invoke request.OnComplete after a successfully started run exits.
+	SendPrompt(sessionID string, request PromptRequest) error
 
 	// Approve approves a pending tool call.
 	Approve(sessionID string, approvalID string) error

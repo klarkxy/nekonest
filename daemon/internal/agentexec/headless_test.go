@@ -2,10 +2,81 @@ package agentexec
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/nekonest/daemon/internal/attach"
 )
+
+func TestCodexResumeArgsAttachOnlySupportedImages(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "files with spaces")
+	image := filepath.Join(dir, "photo.png")
+	fallbackImage := filepath.Join(dir, "scan.JPEG")
+	textFile := filepath.Join(dir, "notes.txt")
+	svgFile := filepath.Join(dir, "vector.svg")
+	got := codexResumeArgs("session", "--keep-as-prompt", []attach.LocalFile{
+		{Path: image, MIME: "image/png"},
+		{Path: textFile, MIME: "text/plain"},
+		{Path: fallbackImage},
+		{Path: svgFile, MIME: "image/svg+xml"},
+	})
+	want := []string{
+		"exec", "--json",
+		"--add-dir", dir,
+		"resume",
+		"--image", image,
+		"--image", fallbackImage,
+		"session", "--", "--keep-as-prompt",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("codexResumeArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestClaudeResumeArgsAuthorizesLocalDirectoryWithoutFileFlag(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "attachments")
+	got := claudeResumeArgs("session", "inspect paths in prompt", []attach.LocalFile{
+		{Path: filepath.Join(dir, "photo.png"), MIME: "image/png"},
+		{Path: filepath.Join(dir, "report.pdf"), MIME: "application/pdf"},
+	})
+	want := []string{
+		"--resume", "session",
+		"--add-dir", dir,
+		"-p", "inspect paths in prompt",
+		"--output-format", "stream-json",
+		"--verbose",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("claudeResumeArgs() = %#v, want %#v", got, want)
+	}
+	if strings.Contains(strings.Join(got, "\x00"), "--file") {
+		t.Fatalf("Claude local paths used remote --file syntax: %#v", got)
+	}
+}
+
+func TestKiloResumeArgsAttachEveryFileAndTerminateOptions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "attachments")
+	first := filepath.Join(dir, "photo.png")
+	second := filepath.Join(dir, "notes.txt")
+	got := kiloResumeArgs("session", "--help", `D:\project`, []attach.LocalFile{
+		{Path: first, MIME: "image/png"},
+		{Path: second, MIME: "text/plain"},
+	})
+	want := []string{
+		"run",
+		"--session", "session",
+		"--format", "json",
+		"--dir", `D:\project`,
+		"--file", first,
+		"--file", second,
+		"--", "--help",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("kiloResumeArgs() = %#v, want %#v", got, want)
+	}
+}
 
 func TestGrokResumeArgs(t *testing.T) {
 	got := grokResumeArgs("native", "hello %!\nworld", `D:\repo`)

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isImageMime, prepareFile, uploadAttachment } from './attachments'
+import { isImageMime, pickAndUpload, prepareFile, uploadAttachment } from './attachments'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -68,5 +68,39 @@ describe('uploadAttachment', () => {
     expect(body.get('device_id')).toBe('device-1')
     expect(body.get('session_id')).toBe('session-1')
     expect(body.get('file')).toBeInstanceOf(File)
+  })
+
+  it.each([
+    ['paper.pdf', 'application/x-pdf', 'application/pdf'],
+    ['notes.md', 'text/x-markdown', 'text/markdown'],
+    ['data.json', 'text/json', 'application/json']
+  ])('normalizes the common MIME alias for %s', async (name, alias, canonical) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: 'alias',
+      url: '/api/attachments/alias',
+      name,
+      size: 2
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await uploadAttachment(new File(['ok'], name, { type: alias }))
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const uploaded = (init.body as FormData).get('file') as File
+    expect(uploaded.type).toBe(canonical)
+    expect(result.mime).toBe(canonical)
+  })
+})
+
+describe('pickAndUpload', () => {
+  it('throws AbortError without relying on AbortSignal.throwIfAborted', async () => {
+    const legacySignal = { aborted: true } as AbortSignal
+    const file = new File(['note'], 'note.txt', { type: 'text/plain' })
+
+    await expect(pickAndUpload([file], { signal: legacySignal }))
+      .rejects.toMatchObject({ name: 'AbortError' })
   })
 })

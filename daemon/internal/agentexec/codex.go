@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nekonest/daemon/internal/attach"
 )
 
 // CodexCommander handles Codex CLI interactions.
@@ -84,8 +86,35 @@ func (c *CodexCommander) IsAvailable() bool {
 	return err == nil
 }
 
+func codexResumeArgs(
+	sessionID string,
+	prompt string,
+	attachments []attach.LocalFile,
+) []string {
+	args := []string{
+		"exec",
+		"--json",
+	}
+	for _, dir := range attachmentDirs(attachments) {
+		args = append(args, "--add-dir", dir)
+	}
+	args = append(args, "resume")
+	for _, imagePath := range codexImagePaths(attachments) {
+		args = append(args, "--image", imagePath)
+	}
+	// The daemon resolves Codex to the native executable (or an npm shim
+	// launched without a shell). Terminate option parsing so prompts beginning
+	// with "-" stay user text instead of becoming resume flags.
+	return append(args, sessionID, "--", prompt)
+}
+
 // SendPrompt sends a prompt to a Codex session.
-func (c *CodexCommander) SendPrompt(sessionID, prompt string) error {
+func (c *CodexCommander) SendPrompt(
+	sessionID string,
+	prompt string,
+	attachments []attach.LocalFile,
+	onComplete func(),
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -95,15 +124,9 @@ func (c *CodexCommander) SendPrompt(sessionID, prompt string) error {
 		return fmt.Errorf("codex session %s is still running; wait for it to finish", sessionID)
 	}
 
-	// Non-interactive resume: `codex resume` requires a TTY.
-	// Use: codex exec --json resume <sessionID> <prompt>
-	args := []string{
-		"exec",
-		"--json",
-		"resume",
-		sessionID,
-		prompt,
-	}
+	// Non-interactive resume: `codex resume` requires a TTY. Attachment
+	// directories are exec-level options; image flags belong after resume.
+	args := codexResumeArgs(sessionID, prompt, attachments)
 
 	executor := NewAgentExecutor("codex", sessionID)
 
@@ -113,6 +136,7 @@ func (c *CodexCommander) SendPrompt(sessionID, prompt string) error {
 	}
 
 	executor.OnExit = func(exitCode int) {
+		defer completePrompt(onComplete)
 		log.Printf("[codex] session %s process exited with code %d", sessionID, exitCode)
 		c.mu.Lock()
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {

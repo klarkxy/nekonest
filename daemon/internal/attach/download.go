@@ -20,8 +20,16 @@ type Ref struct {
 	ID   string
 }
 
+// LocalFile is an attachment downloaded to a daemon-owned temporary directory.
+// Path is absolute and remains valid until the resumed agent process exits.
+type LocalFile struct {
+	Path string
+	Name string
+	MIME string
+}
+
 // Materialize downloads attachments into a temp dir and returns local paths + prompt suffix.
-func Materialize(serverWSURL string, sessionID string, refs []Ref) (dir string, paths []string, promptSuffix string, err error) {
+func Materialize(serverWSURL string, sessionID string, refs []Ref) (dir string, files []LocalFile, promptSuffix string, err error) {
 	if len(refs) == 0 {
 		return "", nil, "", nil
 	}
@@ -63,11 +71,25 @@ func Materialize(serverWSURL string, sessionID string, refs []Ref) (dir string, 
 			b.WriteString(fmt.Sprintf("- %s: download failed (%v)\n", name, dlErr))
 			continue
 		}
-		paths = append(paths, local)
+		files = append(files, LocalFile{
+			Path: local,
+			Name: name,
+			MIME: ref.MIME,
+		})
 		b.WriteString(fmt.Sprintf("- %s (%s) → %s\n", name, ref.MIME, local))
 	}
+	if len(files) == 0 {
+		if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
+			return dir, nil, "", fmt.Errorf(
+				"all %d attachments failed; remove temporary directory: %w",
+				len(refs),
+				cleanupErr,
+			)
+		}
+		return "", nil, "", fmt.Errorf("all %d attachments failed to download", len(refs))
+	}
 	b.WriteString("Please inspect these local files if relevant to the user request.\n")
-	return dir, paths, b.String(), nil
+	return dir, files, b.String(), nil
 }
 
 func newSafeHTTPClient(allowedHost string) *http.Client {
@@ -110,9 +132,21 @@ func downloadTo(client *http.Client, rawURL, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, io.LimitReader(resp.Body, 5<<20))
-	return err
+	ok := false
+	defer func() {
+		_ = f.Close()
+		if !ok {
+			_ = os.Remove(dest)
+		}
+	}()
+	if _, err := io.Copy(f, io.LimitReader(resp.Body, 5<<20)); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }
 
 func wsToHTTP(serverURL string) string {

@@ -55,7 +55,7 @@ func TestKiloRejectsSessionWhilePreviousRunFinishes(t *testing.T) {
 	commander.cliPath = executable
 	commander.executors["session"] = NewAgentExecutor("kilo", "session")
 
-	err = commander.SendPromptInDir("session", "next", "")
+	err = commander.SendPromptInDir("session", "next", "", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "running or finishing") {
 		t.Fatalf("finishing session error = %v", err)
 	}
