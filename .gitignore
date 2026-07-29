@@ -13,6 +13,8 @@ node_modules/
 .kilo/
 .art-staging/
 .release-cache/
+/.deploy-tmp/
+/.codex-remote-attachments/
 __pycache__/
 *.py[cod]
 pwa/vite.config.ts.timestamp-*.mjs
