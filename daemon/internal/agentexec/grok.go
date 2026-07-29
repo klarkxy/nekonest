@@ -115,13 +115,25 @@ func (c *GrokCommander) SendPromptInDir(
 		thoughtID: fmt.Sprintf("grok_%s_thought_%d", sessionID, now),
 	}
 	executor := NewAgentExecutor("grok_build", sessionID)
+	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {
+		if diagnostics.suppress("grok", sessionID, source) {
+			return
+		}
 		c.handleProcessLine(sessionID, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
 		c.flushStream(sessionID)
 		log.Printf("[grok] session %s process exited with code %d", sessionID, exitCode)
+		if message := diagnostics.exitFailure(
+			"Grok Build",
+			exitCode,
+			executor.WasIntentionallyStopped(),
+		); message != "" &&
+			c.OnAgentOutput != nil {
+			c.OnAgentOutput(sessionID, "error", message, "")
+		}
 		c.mu.Lock()
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {
 			delete(c.executors, sessionID)
@@ -141,7 +153,6 @@ func (c *GrokCommander) SendPromptInDir(
 
 func (c *GrokCommander) handleProcessLine(sessionID, source, line string) {
 	if source != "stdout" {
-		log.Printf("[grok] session %s stderr: %s", sessionID, boundedDiagnostic(line))
 		return
 	}
 	c.parseAndForwardOutput(sessionID, line)

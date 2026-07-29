@@ -22,6 +22,8 @@ type AgentExecutor struct {
 	running   bool
 	exitCh    chan struct{} // closed when process exits
 	exitCode  int
+	// intentionalStop distinguishes user/daemon cancellation from CLI failure.
+	intentionalStop bool
 	// platformJob is a Windows Job Object handle (kill-on-close process tree).
 	platformJob uintptr
 
@@ -103,6 +105,7 @@ func (e *AgentExecutor) StartWithDir(command string, args []string, env []string
 	exitCh := make(chan struct{})
 	e.exitCh = exitCh
 	e.exitCode = -1
+	e.intentionalStop = false
 	e.platformJob = job
 
 	var outputWG sync.WaitGroup
@@ -193,6 +196,7 @@ func (e *AgentExecutor) Interrupt() error {
 	if !e.running || e.cmd == nil || e.cmd.Process == nil {
 		return fmt.Errorf("agent not running")
 	}
+	e.intentionalStop = true
 	if e.platformJob != 0 {
 		releaseJobObject(e.platformJob)
 		e.platformJob = 0
@@ -211,6 +215,7 @@ func (e *AgentExecutor) Stop() error {
 		e.mu.Unlock()
 		return nil
 	}
+	e.intentionalStop = true
 
 	job := e.platformJob
 	e.platformJob = 0
@@ -263,6 +268,14 @@ func (e *AgentExecutor) ExitCode() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.exitCode
+}
+
+// WasIntentionallyStopped reports whether the active run was interrupted by
+// the user or stopped during daemon shutdown.
+func (e *AgentExecutor) WasIntentionallyStopped() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.intentionalStop
 }
 
 // StdinOpen reports whether the process still accepts stdin writes.

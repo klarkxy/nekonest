@@ -192,7 +192,11 @@ func (c *KiloCommander) SendPromptInDir(
 	c.nextRunNumber++
 	runNumber := c.nextRunNumber
 	executor := NewAgentExecutor("kilo", sessionID)
+	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {
+		if diagnostics.suppress("kilo", sessionID, source) {
+			return
+		}
 		c.handleProcessLine(sessionID, runNumber, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
@@ -243,8 +247,7 @@ func (c *KiloCommander) handleProcessLine(
 	source string,
 	line string,
 ) {
-	if source == "stderr" {
-		log.Printf("[kilo] session %s stderr: %s", sessionID, boundedDiagnostic(line))
+	if source != "stdout" {
 		return
 	}
 	c.parseAndForwardOutput(sessionID, runNumber, line)

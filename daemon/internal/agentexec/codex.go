@@ -129,15 +129,28 @@ func (c *CodexCommander) SendPrompt(
 	args := codexResumeArgs(sessionID, prompt, attachments)
 
 	executor := NewAgentExecutor("codex", sessionID)
+	diagnostics := &stderrDiagnostics{}
 
-	// Wire up output callback
-	executor.OnOutput = func(line string) {
-		c.parseAndForwardOutput(sessionID, line)
+	// Codex writes startup/plugin diagnostics to stderr. Keep those in the
+	// diagnostic channel instead of turning them into chat messages.
+	executor.OnOutputSource = func(source, line string) {
+		if diagnostics.suppress("codex", sessionID, source) {
+			return
+		}
+		c.handleProcessLine(sessionID, source, line)
 	}
 
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
 		log.Printf("[codex] session %s process exited with code %d", sessionID, exitCode)
+		if message := diagnostics.exitFailure(
+			"Codex",
+			exitCode,
+			executor.WasIntentionallyStopped(),
+		); message != "" &&
+			c.OnAgentOutput != nil {
+			c.OnAgentOutput(sessionID, "error", message)
+		}
 		c.mu.Lock()
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {
 			delete(c.executors, sessionID)
@@ -154,6 +167,13 @@ func (c *CodexCommander) SendPrompt(
 	c.executors[sessionID] = executor
 	log.Printf("[codex] started process for session %s", sessionID)
 	return nil
+}
+
+func (c *CodexCommander) handleProcessLine(sessionID, source, line string) {
+	if source != "stdout" {
+		return
+	}
+	c.parseAndForwardOutput(sessionID, line)
 }
 
 // parseAndForwardOutput parses Codex JSON output and calls OnAgentOutput.

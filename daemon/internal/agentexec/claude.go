@@ -95,12 +95,24 @@ func (c *ClaudeCommander) SendPromptInDir(
 	args := claudeResumeArgs(sessionID, prompt, attachments)
 
 	executor := NewAgentExecutor("claude_code", sessionID)
-	executor.OnOutput = func(line string) {
-		c.parseAndForwardOutput(sessionID, line)
+	diagnostics := &stderrDiagnostics{}
+	executor.OnOutputSource = func(source, line string) {
+		if diagnostics.suppress("claude", sessionID, source) {
+			return
+		}
+		c.handleProcessLine(sessionID, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
 		log.Printf("[claude] session %s process exited with code %d", sessionID, exitCode)
+		if message := diagnostics.exitFailure(
+			"Claude Code",
+			exitCode,
+			executor.WasIntentionallyStopped(),
+		); message != "" &&
+			c.OnAgentOutput != nil {
+			c.OnAgentOutput(sessionID, "error", message)
+		}
 		c.mu.Lock()
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {
 			delete(c.executors, sessionID)
@@ -117,6 +129,13 @@ func (c *ClaudeCommander) SendPromptInDir(
 	c.executors[sessionID] = executor
 	log.Printf("[claude] started process for session %s", sessionID)
 	return nil
+}
+
+func (c *ClaudeCommander) handleProcessLine(sessionID, source, line string) {
+	if source != "stdout" {
+		return
+	}
+	c.parseAndForwardOutput(sessionID, line)
 }
 
 // parseAndForwardOutput parses a JSON line from Claude Code output and calls OnAgentOutput.

@@ -154,32 +154,54 @@ func TestHeadlessCommandersDoNotForwardStderrAsAssistant(t *testing.T) {
 	grok := NewGrokCommander()
 	kimi := NewKimiCommander()
 	kilo := NewKiloCommander()
-	var grokEvents, kimiEvents, kiloEvents int
+	codex := NewCodexCommander()
+	claude := NewClaudeCommander()
+	var grokEvents, kimiEvents, kiloEvents, codexEvents, claudeEvents int
 	grok.OnAgentOutput = func(_, _, _, _ string) { grokEvents++ }
 	kimi.OnAgentOutput = func(_, _, _, _ string) { kimiEvents++ }
 	kilo.OnAgentOutput = func(_ string, _ uint64, _, _, _ string) { kiloEvents++ }
+	codex.OnAgentOutput = func(_, _, _ string) { codexEvents++ }
+	claude.OnAgentOutput = func(_, _, _ string) { claudeEvents++ }
 
 	grok.handleProcessLine("g", "stderr", "diagnostic")
 	kimi.handleProcessLine("k", "stderr", "resume notice")
 	kilo.handleProcessLine("o", 1, "stderr", "provider diagnostic")
-	if grokEvents != 0 || kimiEvents != 0 || kiloEvents != 0 {
+	codex.handleProcessLine(
+		"c",
+		"stderr",
+		"2026-07-29T04:48:01.778780Z WARN codex_core_skills::loader: ignoring invalid icon",
+	)
+	claude.handleProcessLine("a", "stderr", "plugin warning")
+	if grokEvents != 0 || kimiEvents != 0 || kiloEvents != 0 ||
+		codexEvents != 0 || claudeEvents != 0 {
 		t.Fatalf(
-			"stderr forwarded: grok=%d kimi=%d kilo=%d",
+			"stderr forwarded: grok=%d kimi=%d kilo=%d codex=%d claude=%d",
 			grokEvents,
 			kimiEvents,
 			kiloEvents,
+			codexEvents,
+			claudeEvents,
 		)
 	}
 
 	grok.handleProcessLine("g", "stdout", `{"type":"text","data":"ok"}`)
 	kimi.handleProcessLine("k", "stdout", `{"role":"assistant","content":"ok"}`)
 	kilo.handleProcessLine("o", 1, "stdout", `{"type":"text","text":"ok"}`)
-	if grokEvents != 1 || kimiEvents != 1 || kiloEvents != 1 {
+	codex.handleProcessLine("c", "stdout", `{"role":"assistant","content":"ok"}`)
+	claude.handleProcessLine(
+		"a",
+		"stdout",
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`,
+	)
+	if grokEvents != 1 || kimiEvents != 1 || kiloEvents != 1 ||
+		codexEvents != 1 || claudeEvents != 1 {
 		t.Fatalf(
-			"stdout not forwarded: grok=%d kimi=%d kilo=%d",
+			"stdout not forwarded: grok=%d kimi=%d kilo=%d codex=%d claude=%d",
 			grokEvents,
 			kimiEvents,
 			kiloEvents,
+			codexEvents,
+			claudeEvents,
 		)
 	}
 }

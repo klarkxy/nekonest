@@ -145,12 +145,23 @@ func (c *KimiCommander) sendPromptInDir(
 
 	c.beginRunLocked(sessionID)
 	executor := NewAgentExecutor("kimi_cli", sessionID)
+	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {
+		if diagnostics.suppress("kimi", sessionID, source) {
+			return
+		}
 		c.handleProcessLine(sessionID, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
 		log.Printf("[kimi] session %s process exited with code %d", sessionID, exitCode)
+		if message := diagnostics.exitFailure(
+			"Kimi CLI",
+			exitCode,
+			executor.WasIntentionallyStopped(),
+		); message != "" {
+			c.emit(sessionID, "error", message, "")
+		}
 		c.mu.Lock()
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {
 			delete(c.executors, sessionID)
@@ -222,7 +233,6 @@ func (c *KimiCommander) probeHelp() (string, error) {
 
 func (c *KimiCommander) handleProcessLine(sessionID, source, line string) {
 	if source != "stdout" {
-		log.Printf("[kimi] session %s stderr: %s", sessionID, boundedDiagnostic(line))
 		return
 	}
 	c.parseAndForwardOutput(sessionID, line)
@@ -261,15 +271,6 @@ func (c *KimiCommander) parseAndForwardOutput(sessionID, line string) {
 	default:
 		// Ignore lifecycle records and empty messages.
 	}
-}
-
-func boundedDiagnostic(line string) string {
-	line = strings.TrimSpace(line)
-	const maxBytes = 500
-	if len(line) <= maxBytes {
-		return line
-	}
-	return line[:maxBytes] + "…"
 }
 
 func (c *KimiCommander) emit(sessionID, msgType, content, msgID string) {
