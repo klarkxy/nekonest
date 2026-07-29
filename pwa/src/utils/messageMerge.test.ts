@@ -30,6 +30,40 @@ describe('upsertMessageList', () => {
     expect(out.map(m => m.id)).toEqual(['1', '2'])
   })
 
+  it('drops legacy Codex stderr diagnostics from the live stream', () => {
+    const base = [msg({ id: '1', role: 'user', content: '继续' })]
+    const out = upsertMessageList(base, msg({
+      id: 'warn_1',
+      role: 'assistant',
+      content:
+        '2026-07-29T04:48:01.778780Z WARN ' +
+        'codex_core_skills::loader: ignoring invalid icon',
+      metadata: { agent_type: 'codex', stream: true }
+    }))
+
+    expect(out).toEqual(base)
+  })
+
+  it('cleans an existing legacy diagnostic on the next live update', () => {
+    const warning = msg({
+      id: 'warn_1',
+      role: 'assistant',
+      content:
+        '2026-07-29T04:48:01.778780Z WARN ' +
+        'codex_core_skills::loader: ignoring invalid icon',
+      metadata: { agent_type: 'codex', stream: true }
+    })
+    const reply = msg({
+      id: 'reply_1',
+      role: 'assistant',
+      content: '正常回复',
+      type: 'assistant',
+      metadata: { agent_type: 'codex', stream: true }
+    })
+
+    expect(upsertMessageList([warning], reply).map(m => m.id)).toEqual(['reply_1'])
+  })
+
   it('maps an imported copy to the canonical message', () => {
     const imported = msg({
       id: 'prt_1',
@@ -85,6 +119,60 @@ describe('mergeHistoryLists', () => {
     const cur = [msg({ id: 'b', role: 'user', content: 'b', timestamp: 20 })]
     const hist = [msg({ id: 'a', role: 'user', content: 'a', timestamp: 10 })]
     expect(mergeHistoryLists(cur, hist).map(m => m.id)).toEqual(['a', 'b'])
+  })
+
+  it('hides persisted Codex stderr diagnostics without hiding pasted logs', () => {
+    const warning =
+      '2026-07-29T04:48:01.778780Z WARN ' +
+      'codex_core::shell_snapshot: snapshot unavailable'
+    const hist = [
+      msg({
+        id: 'legacy_warning',
+        role: 'assistant',
+        content: warning,
+        metadata: { agent_type: 'codex', stream: true }
+      }),
+      msg({
+        id: 'legacy_error',
+        role: 'assistant',
+        content:
+          '2026-07-29T03:57:32.435193Z ERROR ' +
+          'codex_api::endpoint::responses_websocket: service unavailable',
+        metadata: { agent_type: 'codex', stream: true }
+      }),
+      msg({
+        id: 'user_log',
+        role: 'user',
+        content: warning,
+        metadata: { agent_type: 'codex', stream: true }
+      }),
+      msg({
+        id: 'structured_reply',
+        role: 'assistant',
+        content: warning,
+        type: 'assistant',
+        metadata: { agent_type: 'codex', stream: true }
+      }),
+      msg({
+        id: 'other_agent',
+        role: 'assistant',
+        content: warning,
+        metadata: { agent_type: 'claude_code', stream: true }
+      }),
+      msg({
+        id: 'not_streamed',
+        role: 'assistant',
+        content: warning,
+        metadata: { agent_type: 'codex', stream: false }
+      })
+    ]
+
+    expect(mergeHistoryLists([], hist).map(m => m.id)).toEqual([
+      'user_log',
+      'structured_reply',
+      'other_agent',
+      'not_streamed'
+    ])
   })
 
   it('keeps second pending until second hist arrives', () => {

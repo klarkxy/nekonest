@@ -207,6 +207,66 @@ describe('session prompt outbox', () => {
     expect(store.importing).toBe(false)
   })
 
+  it('filters legacy Codex diagnostics buffered for a background session', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a',
+      device_id: 'device-a',
+      agent_type: 'codex',
+      status: 'idle',
+      summary: '',
+      last_activity: 0
+    }
+
+    emit({
+      type: 'session_message',
+      device_id: 'device-a',
+      session_id: 'session-b',
+      timestamp: 1,
+      payload: {
+        message: {
+          id: 'legacy-warning',
+          role: 'assistant',
+          content:
+            '2026-07-29T04:48:01.778780Z WARN ' +
+            'codex_core_skills::loader: ignoring invalid icon',
+          type: 'text',
+          timestamp: 1,
+          metadata: { agent_type: 'codex', stream: true }
+        }
+      }
+    })
+    emit({
+      type: 'session_message',
+      device_id: 'device-a',
+      session_id: 'session-b',
+      timestamp: 2,
+      payload: {
+        message: {
+          id: 'assistant-reply',
+          role: 'assistant',
+          content: '正常回复',
+          type: 'assistant',
+          timestamp: 2,
+          metadata: { agent_type: 'codex', stream: true }
+        }
+      }
+    })
+
+    store.setCurrentSession({
+      id: 'session-b',
+      device_id: 'device-a',
+      agent_type: 'codex',
+      status: 'idle',
+      summary: '',
+      last_activity: 0
+    })
+
+    expect(store.messages.map(message => message.id)).toEqual(['assistant-reply'])
+    store.cleanup()
+  })
+
   it('shows a session error message and stops streaming polls', () => {
     setConnected(true)
     const store = useSessionStore()

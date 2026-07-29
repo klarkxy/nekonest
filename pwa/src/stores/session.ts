@@ -505,12 +505,12 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function pushInbox(deviceId: string, sessionId: string, msg: SessionMessage) {
     const key = inboxKey(deviceId, sessionId)
-    const list = inbox.get(key) || []
-    const i = list.findIndex(m => m.id === msg.id)
-    if (i >= 0) list[i] = { ...list[i], ...msg }
-    else list.push(msg)
-    if (list.length > 200) list.splice(0, list.length - 200)
-    inbox.set(key, list)
+    const list = upsertMessageList(inbox.get(key) || [], msg)
+    if (list.length) {
+      inbox.set(key, list.length > 200 ? list.slice(-200) : list)
+    } else {
+      inbox.delete(key)
+    }
   }
 
   /** Insert or patch message by id (streaming). */
@@ -564,7 +564,7 @@ export const useSessionStore = defineStore('sessions', () => {
       const did = session.device_id || activeDeviceId || ''
       const buffered = inbox.get(inboxKey(did, session.id))
       if (buffered?.length) {
-        messages.value = [...buffered]
+        messages.value = mergeHistoryLists([], buffered)
         inbox.delete(inboxKey(did, session.id))
       }
       restoreOutboxMessages(did, session.id)

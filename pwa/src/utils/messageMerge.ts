@@ -4,6 +4,8 @@ const MAX_MESSAGES = 500
 const IMPORTED_DEDUPE_WINDOW_SECONDS = 15
 const NEKONEST_ATTACHMENT_MARK =
   '\n\n[NekoNest attachments — local files on this PC]\n'
+const LEGACY_CODEX_STDERR_DIAGNOSTIC =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+(?:TRACE|DEBUG|INFO|WARN|ERROR)\s+codex(?:_[A-Za-z0-9]+)*(?:::[A-Za-z0-9_]+)+:/
 
 type DuplicateCandidate = {
   canonicalIndex: number
@@ -14,6 +16,26 @@ type DuplicateCandidate = {
 function agentType(msg: SessionMessage): string | undefined {
   const value = msg.metadata?.agent_type
   return typeof value === 'string' && value ? value : undefined
+}
+
+/**
+ * Hide diagnostics persisted by daemon versions that merged Codex stderr into
+ * the assistant stream. The source metadata and strict Rust log prefix keep
+ * user-pasted logs and real structured agent replies visible.
+ */
+function isLegacyCodexStderrDiagnostic(msg: SessionMessage): boolean {
+  return (
+    msg.role === 'assistant' &&
+    msg.type === 'text' &&
+    agentType(msg) === 'codex' &&
+    msg.metadata?.stream === true &&
+    LEGACY_CODEX_STDERR_DIAGNOSTIC.test(msg.content.trimStart())
+  )
+}
+
+function withoutLegacyDiagnosticNoise(messages: SessionMessage[]): SessionMessage[] {
+  const filtered = messages.filter(message => !isLegacyCodexStderrDiagnostic(message))
+  return filtered.length === messages.length ? messages : filtered
 }
 
 function comparableContent(msg: SessionMessage): string {
@@ -105,20 +127,24 @@ export function upsertMessageList(
   msg: SessionMessage,
   mintId: () => string = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 ): SessionMessage[] {
+  const cleanMessages = withoutLegacyDiagnosticNoise(messages)
+  if (isLegacyCodexStderrDiagnostic(msg)) {
+    return capMessages(dedupeImportedCopies(cleanMessages))
+  }
   let next = msg
   if (!next.id) {
     next = { ...next, id: mintId() }
   }
-  const idx = messages.findIndex(m => m.id === next.id)
+  const idx = cleanMessages.findIndex(m => m.id === next.id)
   if (idx >= 0) {
-    const prev = messages[idx]
+    const prev = cleanMessages[idx]
     const content =
       (next.content?.length || 0) >= (prev.content?.length || 0) ? next.content : prev.content
-    const copy = [...messages]
+    const copy = [...cleanMessages]
     copy[idx] = { ...prev, ...next, content }
     return capMessages(dedupeImportedCopies(copy))
   }
-  return capMessages(dedupeImportedCopies([...messages, next]))
+  return capMessages(dedupeImportedCopies([...cleanMessages, next]))
 }
 
 /** Merge by stable id first, then remove source-aware one-to-one imported copies. */
@@ -126,12 +152,14 @@ export function mergeHistoryLists(
   current: SessionMessage[],
   hist: SessionMessage[]
 ): SessionMessage[] {
-  if (!hist.length) return capMessages(dedupeImportedCopies(current))
+  const cleanCurrent = withoutLegacyDiagnosticNoise(current)
+  const cleanHistory = withoutLegacyDiagnosticNoise(hist)
+  if (!cleanHistory.length) return capMessages(dedupeImportedCopies(cleanCurrent))
   const byId = new Map<string, SessionMessage>()
-  for (const m of hist) {
+  for (const m of cleanHistory) {
     if (m?.id) byId.set(m.id, m)
   }
-  for (const m of current) {
+  for (const m of cleanCurrent) {
     if (!m?.id) continue
     const existing = byId.get(m.id)
     if (!existing) {
