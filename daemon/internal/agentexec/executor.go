@@ -105,14 +105,25 @@ func (e *AgentExecutor) StartWithDir(command string, args []string, env []string
 	e.exitCode = -1
 	e.platformJob = job
 
+	var outputWG sync.WaitGroup
+	outputWG.Add(2)
 	// Line-based output reader for stdout
-	go e.readLineOutput(stdout, "stdout")
+	go func() {
+		defer outputWG.Done()
+		e.readLineOutput(stdout, "stdout")
+	}()
 	// Line-based output reader for stderr
-	go e.readLineOutput(stderr, "stderr")
+	go func() {
+		defer outputWG.Done()
+		e.readLineOutput(stderr, "stderr")
+	}()
 
 	// Wait for process exit in background
 	go func() {
 		err := cmd.Wait()
+		// Do not let the exit callback overtake an output callback that was
+		// already processing the final structured line.
+		outputWG.Wait()
 		e.mu.Lock()
 		exitCode := 0
 		if err != nil {

@@ -21,6 +21,46 @@ func TestExtractKiloText(t *testing.T) {
 	}
 }
 
+func TestKiloNestedErrorOutput(t *testing.T) {
+	commander := NewKiloCommander()
+	var typ, content string
+	commander.OnAgentOutput = func(
+		_ string,
+		_ uint64,
+		gotType,
+		gotContent,
+		_ string,
+	) {
+		typ = gotType
+		content = gotContent
+	}
+
+	commander.handleProcessLine(
+		"session",
+		1,
+		"stdout",
+		`{"type":"error","error":{"name":"MessageAbortedError","data":{"message":"Aborted"}}}`,
+	)
+	if typ != "error" || content != "MessageAbortedError: Aborted" {
+		t.Fatalf("nested Kilo error = %q %q", typ, content)
+	}
+}
+
+func TestKiloRejectsSessionWhilePreviousRunFinishes(t *testing.T) {
+	commander := NewKiloCommander()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commander.cliPath = executable
+	commander.executors["session"] = NewAgentExecutor("kilo", "session")
+
+	err = commander.SendPromptInDir("session", "next", "")
+	if err == nil || !strings.Contains(err.Error(), "running or finishing") {
+		t.Fatalf("finishing session error = %v", err)
+	}
+}
+
 func TestExtractClaudeText(t *testing.T) {
 	msg := map[string]interface{}{
 		"message": map[string]interface{}{

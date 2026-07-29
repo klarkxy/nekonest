@@ -21,10 +21,15 @@ type StreamEmitter func(sessionID, partID, msgType, content string)
 // Call stop() when the process exits.
 func (a *KiloAdapter) StartDBStream(sessionID string, emit StreamEmitter) (stop func()) {
 	done := make(chan struct{})
+	finished := make(chan struct{})
 	var once sync.Once
-	stop = func() { once.Do(func() { close(done) }) }
+	stop = func() {
+		once.Do(func() { close(done) })
+		<-finished
+	}
 
 	go func() {
+		defer close(finished)
 		// Snapshot existing parts so we only stream new/growing ones after prompt.
 		seen := a.snapshotPartLens(sessionID)
 		ticker := time.NewTicker(400 * time.Millisecond)

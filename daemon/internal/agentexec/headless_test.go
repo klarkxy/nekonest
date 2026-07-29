@@ -82,20 +82,34 @@ func TestGrokStreamingOutputIsBoundedAndBatched(t *testing.T) {
 func TestHeadlessCommandersDoNotForwardStderrAsAssistant(t *testing.T) {
 	grok := NewGrokCommander()
 	kimi := NewKimiCommander()
-	var grokEvents, kimiEvents int
+	kilo := NewKiloCommander()
+	var grokEvents, kimiEvents, kiloEvents int
 	grok.OnAgentOutput = func(_, _, _, _ string) { grokEvents++ }
 	kimi.OnAgentOutput = func(_, _, _, _ string) { kimiEvents++ }
+	kilo.OnAgentOutput = func(_ string, _ uint64, _, _, _ string) { kiloEvents++ }
 
 	grok.handleProcessLine("g", "stderr", "diagnostic")
 	kimi.handleProcessLine("k", "stderr", "resume notice")
-	if grokEvents != 0 || kimiEvents != 0 {
-		t.Fatalf("stderr forwarded: grok=%d kimi=%d", grokEvents, kimiEvents)
+	kilo.handleProcessLine("o", 1, "stderr", "provider diagnostic")
+	if grokEvents != 0 || kimiEvents != 0 || kiloEvents != 0 {
+		t.Fatalf(
+			"stderr forwarded: grok=%d kimi=%d kilo=%d",
+			grokEvents,
+			kimiEvents,
+			kiloEvents,
+		)
 	}
 
 	grok.handleProcessLine("g", "stdout", `{"type":"text","data":"ok"}`)
 	kimi.handleProcessLine("k", "stdout", `{"role":"assistant","content":"ok"}`)
-	if grokEvents != 1 || kimiEvents != 1 {
-		t.Fatalf("stdout not forwarded: grok=%d kimi=%d", grokEvents, kimiEvents)
+	kilo.handleProcessLine("o", 1, "stdout", `{"type":"text","text":"ok"}`)
+	if grokEvents != 1 || kimiEvents != 1 || kiloEvents != 1 {
+		t.Fatalf(
+			"stdout not forwarded: grok=%d kimi=%d kilo=%d",
+			grokEvents,
+			kimiEvents,
+			kiloEvents,
+		)
 	}
 }
 

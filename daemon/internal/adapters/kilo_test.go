@@ -40,6 +40,9 @@ func createKiloTestDB(t *testing.T, withParentID bool) string {
 		);
 		CREATE TABLE message (
 			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			time_created INTEGER NOT NULL DEFAULT 0,
+			time_updated INTEGER NOT NULL DEFAULT 0,
 			data TEXT NOT NULL DEFAULT '{}'
 		);
 	`, parentColumn)
@@ -194,5 +197,137 @@ func TestKiloFetchHistoryRejectsUnknownSession(t *testing.T) {
 	}
 	if len(history) != 0 {
 		t.Fatalf("known empty session history = %#v", history)
+	}
+}
+
+func TestKiloFetchHistoryIncludesStoredExecutionErrors(t *testing.T) {
+	path := createKiloTestDB(t, true)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	insertKiloSession(t, db, true, "known", "code", "", now, nil)
+	if _, err := db.Exec(`
+		INSERT INTO message
+			(id, session_id, time_created, time_updated, data)
+		VALUES
+			('user-message', 'known', ?, ?, '{"role":"user"}'),
+			(
+				'error-message',
+				'known',
+				?,
+				?,
+				'{"role":"assistant","error":{"name":"MessageAbortedError","data":{"message":"Aborted"}}}'
+			)
+	`, now-1000, now-1000, now-800, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO part
+			(id, session_id, message_id, data, time_created, time_updated)
+		VALUES
+			(
+				'user-part',
+				'known',
+				'user-message',
+				'{"type":"text","text":"ping"}',
+				?,
+				?
+			),
+			(
+				'partial-part',
+				'known',
+				'error-message',
+				'{"type":"text","text":"partial reply"}',
+				?,
+				?
+			)
+	`, now-1000, now-1000, now-500, now-500); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := NewKiloAdapter()
+	adapter.dbPath = path
+	history, err := adapter.FetchHistory("known", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("history = %#v", history)
+	}
+	if history[0].Role != "user" || history[0].Content != "ping" {
+		t.Fatalf("user history = %#v", history[0])
+	}
+	if history[1].Role != "assistant" || history[1].Content != "partial reply" {
+		t.Fatalf("partial history = %#v", history[1])
+	}
+	if history[2].ID != "error-message" ||
+		history[2].Role != "system" ||
+		history[2].Type != "error" ||
+		history[2].Content != "Kilo execution failed (MessageAbortedError): Aborted" {
+		t.Fatalf("error history = %#v", history[2])
+	}
+
+	var events []OutputEvent
+	adapter.SetOutputSink(func(event OutputEvent) {
+		events = append(events, event)
+	})
+	adapter.commander.OnStreamStart("known", 1, now-900)
+	adapter.commander.OnStreamEnd("known", 1, 1)
+	if len(events) != 1 {
+		t.Fatalf("exit events = %#v", events)
+	}
+	if events[0].MessageID != "error-message" ||
+		events[0].Type != "error" ||
+		events[0].Content != history[2].Content {
+		t.Fatalf("exit event = %#v", events[0])
+	}
+}
+
+func TestKiloRunCleanupCannotStopNextRun(t *testing.T) {
+	adapter := NewKiloAdapter()
+	adapter.dbPath = filepath.Join(t.TempDir(), "missing.db")
+	var events []OutputEvent
+	adapter.SetOutputSink(func(event OutputEvent) {
+		events = append(events, event)
+	})
+
+	startedAt := time.Now().UnixMilli()
+	adapter.commander.OnStreamStart("same", 1, startedAt)
+	adapter.commander.OnAgentOutput(
+		"same",
+		1,
+		"error",
+		"MessageAbortedError: Aborted",
+		"",
+	)
+	adapter.commander.OnStreamStart("same", 2, startedAt+1)
+	adapter.commander.OnStreamEnd("same", 1, 1)
+
+	newKey := kiloRunKey{sessionID: "same", runNumber: 2}
+	if _, ok := adapter.runs.Load(newKey); !ok {
+		t.Fatal("old run cleanup removed the new run")
+	}
+	adapter.commander.OnAgentOutput("same", 2, "assistant", "new reply", "new-part")
+	adapter.commander.OnStreamEnd("same", 2, 0)
+
+	if len(events) != 2 {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].Type != "error" ||
+		events[0].MessageID != fmt.Sprintf("kilo_error_%d_1", startedAt) {
+		t.Fatalf("old error event = %#v", events[0])
+	}
+	if events[1].Type != "assistant" ||
+		events[1].MessageID != "new-part" ||
+		events[1].Content != "new reply" {
+		t.Fatalf("new run event = %#v", events[1])
+	}
+	if _, ok := adapter.runs.Load(newKey); ok {
+		t.Fatal("new run state leaked after exit")
 	}
 }

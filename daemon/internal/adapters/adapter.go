@@ -44,7 +44,7 @@ type ApprovalInfo struct {
 // HistoryMessage is a chat turn imported from the agent-native store.
 type HistoryMessage struct {
 	ID        string `json:"id"`
-	Role      string `json:"role"` // user | assistant
+	Role      string `json:"role"` // user | assistant | system
 	Content   string `json:"content"`
 	Type      string `json:"type,omitempty"`
 	Timestamp int64  `json:"timestamp"` // unix seconds
@@ -100,7 +100,8 @@ type Adapter interface {
 	// Interrupt interrupts a running session (like Ctrl+C).
 	Interrupt(sessionID string) error
 
-	// FetchHistory returns the last N user/assistant turns from the agent store.
+	// FetchHistory returns the last N visible turns from the agent store.
+	// Adapters may include system diagnostics that are durable native history.
 	// limit is capped by each adapter (typically 50).
 	FetchHistory(sessionID string, limit int) ([]*HistoryMessage, error)
 }

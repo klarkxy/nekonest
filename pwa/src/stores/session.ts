@@ -381,7 +381,14 @@ export const useSessionStore = defineStore('sessions', () => {
           (!currentSession.value.device_id || currentSession.value.device_id === did)
         ) {
           upsertMessage(sessionMessage)
-          markStreamActivity()
+          if (sessionMessage.type === 'error') {
+            lastError.value = sessionMessage.content.trim() || 'Agent 执行失败'
+            importing.value = false
+            streaming.value = false
+            stopStreamPoll()
+          } else {
+            markStreamActivity()
+          }
         } else {
           pushInbox(did, sid, sessionMessage)
         }
@@ -390,6 +397,7 @@ export const useSessionStore = defineStore('sessions', () => {
         importing.value = false
         const hist = (msg.payload?.messages as SessionMessage[]) || []
         mergeHistory(hist)
+        stopForTerminalHistoryError(hist)
       } else if (msg.type === 'prompt_sent') {
         const p = msg.payload as {
           prompt?: string
@@ -512,6 +520,28 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function mergeHistory(hist: SessionMessage[]) {
     messages.value = mergeHistoryLists(messages.value, hist)
+  }
+
+  function stopForTerminalHistoryError(hist: SessionMessage[]) {
+    if (!streaming.value) return
+    const latestError = hist
+      .filter(message => message.type === 'error')
+      .reduce<SessionMessage | null>(
+        (latest, message) => !latest || message.timestamp >= latest.timestamp ? message : latest,
+        null
+      )
+    if (!latestError) return
+    const latestUserTimestamp = messages.value.reduce(
+      (latest, message) => message.role === 'user'
+        ? Math.max(latest, message.timestamp)
+        : latest,
+      0
+    )
+    if (latestError.timestamp <= latestUserTimestamp) return
+    lastError.value = latestError.content.trim() || 'Agent 执行失败'
+    importing.value = false
+    streaming.value = false
+    stopStreamPoll()
   }
 
   function setCurrentSession(session: AgentSession | null) {
@@ -645,7 +675,10 @@ export const useSessionStore = defineStore('sessions', () => {
       if (currentSession.value?.id !== sessionId) return
       const data = await res.json()
       const history = (data.messages as SessionMessage[]) || []
-      if (history.length) mergeHistory(history)
+      if (history.length) {
+        mergeHistory(history)
+        stopForTerminalHistoryError(history)
+      }
     } catch {
       /* ignore */
     }

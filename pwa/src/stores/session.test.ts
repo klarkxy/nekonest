@@ -207,6 +207,147 @@ describe('session prompt outbox', () => {
     expect(store.importing).toBe(false)
   })
 
+  it('shows a session error message and stops streaming polls', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a',
+      device_id: 'device-a',
+      agent_type: 'kilo',
+      status: 'running',
+      summary: '',
+      last_activity: 0
+    }
+    store.importing = true
+
+    emit({
+      type: 'prompt_sent',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      timestamp: 1,
+      payload: { message_id: 'prompt-a', prompt: 'ping' }
+    })
+    expect(store.streaming).toBe(true)
+
+    emit({
+      type: 'session_message',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      timestamp: 2,
+      payload: {
+        message: {
+          id: 'kilo-error',
+          role: 'system',
+          content: 'MessageAbortedError',
+          type: 'error',
+          timestamp: 2
+        }
+      }
+    })
+
+    expect(store.messages).toContainEqual(expect.objectContaining({
+      id: 'kilo-error',
+      type: 'error',
+      content: 'MessageAbortedError'
+    }))
+    expect(store.lastError).toBe('MessageAbortedError')
+    expect(store.streaming).toBe(false)
+    expect(store.importing).toBe(false)
+
+    vi.advanceTimersByTime(6000)
+    expect(harness.sent.filter(message => message.type === 'fetch_history')).toHaveLength(0)
+    store.cleanup()
+  })
+
+  it('stops streaming when native history supplies a missed error frame', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a',
+      device_id: 'device-a',
+      agent_type: 'kilo',
+      status: 'running',
+      summary: '',
+      last_activity: 0
+    }
+    const promptTime = Math.floor(Date.now() / 1000)
+
+    emit({
+      type: 'prompt_sent',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      timestamp: promptTime,
+      payload: { message_id: 'prompt-a', prompt: 'ping' }
+    })
+    expect(store.streaming).toBe(true)
+
+    emit({
+      type: 'session_history',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      timestamp: promptTime + 1,
+      payload: {
+        messages: [{
+          id: 'kilo-error',
+          role: 'system',
+          content: 'Kilo execution failed: Aborted',
+          type: 'error',
+          timestamp: promptTime + 1
+        }]
+      }
+    })
+
+    expect(store.lastError).toBe('Kilo execution failed: Aborted')
+    expect(store.streaming).toBe(false)
+    vi.advanceTimersByTime(6000)
+    expect(harness.sent.filter(message => message.type === 'fetch_history')).toHaveLength(0)
+    store.cleanup()
+  })
+
+  it('does not apply an old same-second history error to a new prompt', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a',
+      device_id: 'device-a',
+      agent_type: 'kilo',
+      status: 'running',
+      summary: '',
+      last_activity: 0
+    }
+    const promptTime = Math.floor(Date.now() / 1000)
+
+    emit({
+      type: 'prompt_sent',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      timestamp: promptTime,
+      payload: { message_id: 'prompt-a', prompt: 'retry' }
+    })
+    emit({
+      type: 'session_history',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      timestamp: promptTime,
+      payload: {
+        messages: [{
+          id: 'old-kilo-error',
+          role: 'system',
+          content: 'old failure',
+          type: 'error',
+          timestamp: promptTime
+        }]
+      }
+    })
+
+    expect(store.lastError).toBeNull()
+    expect(store.streaming).toBe(true)
+    store.cleanup()
+  })
+
   it('persists the complete bounded outbox across a store reload', () => {
     const store = useSessionStore()
     store.subscribeDevice('device-a')
