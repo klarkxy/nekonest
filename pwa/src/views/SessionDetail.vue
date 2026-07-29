@@ -18,15 +18,22 @@
           📁 {{ projectLine.name }}
         </div>
       </div>
-      <span v-if="sessionStore.currentSession?.status === 'running'" class="status-dot online"></span>
-      <span v-else-if="sessionStore.currentSession?.status === 'waiting_approval'" class="status-dot waiting"></span>
+      <span
+        v-if="showThreadActivity"
+        class="thread-state-pill"
+        :class="`thread-state-pill--${threadActivity.tone}`"
+        :title="threadActivity.detail"
+        aria-hidden="true"
+      >
+        <span>{{ threadActivity.icon }}</span>
+        <span class="thread-state-label">{{ threadActivity.label }}</span>
+      </span>
       <span
         class="sr-only"
         role="status"
         aria-live="polite"
         aria-atomic="true"
       >{{ liveStatusText }}</span>
-      <span v-if="sessionStore.streaming" class="ws-pill streaming" aria-hidden="true">流式中</span>
       <span class="ws-pill" :class="sessionStore.wsStatus" aria-hidden="true">{{ wsLabel }}</span>
       <n-button
         v-if="sessionStore.currentSession?.status === 'running' || sessionStore.streaming"
@@ -37,6 +44,20 @@
         @click="handleInterrupt"
       >中断</n-button>
     </div>
+
+    <section
+      v-if="showThreadActivity"
+      class="thread-activity"
+      :class="`thread-activity--${threadActivity.tone}`"
+      aria-hidden="true"
+    >
+      <span class="thread-activity-icon">{{ threadActivity.icon }}</span>
+      <span class="thread-activity-copy">
+        <strong>{{ threadActivity.headline }}</strong>
+        <span>{{ threadActivity.detail }}</span>
+      </span>
+      <span class="thread-activity-trail">…</span>
+    </section>
 
     <div
       v-if="sessionStore.currentSession?.pending_approval"
@@ -242,7 +263,7 @@ import { getAgentMeta, UNKNOWN_AGENT_META } from '@/config/agents'
 import { deviceDetailLocation } from '@/router/navigation'
 import { useSessionStore } from '@/stores/session'
 import { useDraftStore } from '@/stores/drafts'
-import { projectDisplay } from '@/utils/agent'
+import { projectDisplay, sessionActivityPresentation } from '@/utils/agent'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
 import {
   pickAndUpload,
@@ -283,12 +304,22 @@ const projectLine = computed(() => {
   return projectDisplay(s)
 })
 
+const threadActivity = computed(() => sessionActivityPresentation(
+  sessionStore.currentSession?.status || '',
+  sessionStore.streaming
+))
+
+const showThreadActivity = computed(() => {
+  const status = sessionStore.currentSession?.status
+  return sessionStore.streaming || status === 'running' || status === 'waiting_approval'
+})
+
 const wsLabel = computed(() => {
   switch (sessionStore.wsStatus) {
-    case 'connected': return '已连接'
-    case 'connecting': return '连接中'
-    case 'auth_error': return '密钥错误'
-    default: return '未连接'
+    case 'connected': return '中转已连接'
+    case 'connecting': return '中转连接中'
+    case 'auth_error': return '中转认证失败'
+    default: return '中转未连接'
   }
 })
 
@@ -297,7 +328,9 @@ const canApprove = computed(() => false)
 
 const liveStatusText = computed(() => {
   const parts = [wsLabel.value]
-  if (sessionStore.streaming) parts.push('流式输出中')
+  if (showThreadActivity.value) {
+    parts.push(threadActivity.value.headline, threadActivity.value.detail)
+  }
   if (sessionStore.importing) parts.push('正在同步历史')
   if (sessionStore.lastError) parts.push(sessionStore.lastError)
   return parts.join('，')
@@ -676,16 +709,86 @@ function goBack() {
   font-size: 11px; color: #8A7AA8; margin-top: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.thread-state-pill {
+  display: inline-flex;
+  min-height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid #ded7dc;
+  border-radius: 999px;
+  background: #f3eff2;
+  color: #756b72;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.thread-state-pill--active {
+  border-color: #bfdfca;
+  background: #e9f5ed;
+  color: #3e7654;
+}
+.thread-state-pill--waiting {
+  border-color: #ead09f;
+  background: #fff4df;
+  color: #8a642f;
+}
 .ws-pill {
   font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #EEE; color: #888;
 }
 .ws-pill.connected { background: #E6F7EE; color: #3A9B6A; }
 .ws-pill.connecting { background: #FFF5E0; color: #C09040; }
 .ws-pill.auth_error { background: #FDE8E8; color: #C05050; }
-.ws-pill.streaming { background: #EDE6FF; color: #6B5BB8; animation: pulse 1.2s ease-in-out infinite; }
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+
+.thread-activity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #d8e9dd;
+  background: #f2f8f4;
+  color: #3e7654;
+}
+.thread-activity--waiting {
+  border-bottom-color: #ead09f;
+  background: #fff8e9;
+  color: #815e2f;
+}
+.thread-activity-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 17px;
+}
+.thread-activity-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+.thread-activity-copy strong {
+  font-size: 13px;
+  font-weight: 750;
+}
+.thread-activity-copy > span {
+  color: #68736b;
+  font-size: 11px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+.thread-activity--waiting .thread-activity-copy > span {
+  color: #796d5a;
+}
+.thread-activity-trail {
+  flex: 0 0 auto;
+  font-size: 12px;
+  opacity: 0.55;
 }
 
 .approval-banner {
@@ -900,6 +1003,26 @@ function goBack() {
   white-space: nowrap;
   border: 0;
   opacity: 0;
+}
+
+@media (max-width: 430px) {
+  .page-header {
+    gap: 7px;
+    padding-inline: 10px;
+  }
+
+  .thread-state-pill {
+    padding-inline: 6px;
+  }
+
+  .thread-state-label,
+  .thread-activity-trail {
+    display: none;
+  }
+
+  .ws-pill {
+    padding-inline: 6px;
+  }
 }
 
 </style>

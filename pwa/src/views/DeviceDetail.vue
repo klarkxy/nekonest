@@ -69,7 +69,17 @@
           <p class="section-kicker">Directory · Agent · Thread</p>
           <h2 id="sessions-title">工作目录</h2>
         </div>
-        <span class="local-only">本机线程</span>
+        <div class="session-overview" role="status" aria-live="polite">
+          <span v-if="runningSessionCount" class="session-count-badge session-count-badge--active">
+            <span aria-hidden="true">🐾</span>
+            {{ runningSessionCount }} 条线程还在跑
+          </span>
+          <span v-if="waitingApprovalCount" class="session-count-badge session-count-badge--waiting">
+            <span aria-hidden="true">🔔</span>
+            {{ waitingApprovalCount }} 条等你点头
+          </span>
+          <span class="local-only">本机线程</span>
+        </div>
       </div>
       <SessionThreadList :sessions="sessionStore.sessions" @open="goSession" />
     </section>
@@ -100,6 +110,12 @@ const binding = useBindingStore()
 
 const deviceId = computed(() => String(route.params.deviceId || ''))
 const device = computed(() => deviceStore.devices.find(d => d.id === deviceId.value))
+const runningSessionCount = computed(
+  () => sessionStore.sessions.filter(session => session.status === 'running').length
+)
+const waitingApprovalCount = computed(
+  () => sessionStore.sessions.filter(session => session.status === 'waiting_approval').length
+)
 let fetchGen = 0
 let fetchController: AbortController | null = null
 let mounted = false
@@ -377,6 +393,14 @@ function goBack() {
   letter-spacing: -0.035em;
 }
 
+.session-overview {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.session-count-badge,
 .local-only {
   padding: 4px 7px;
   border-radius: 7px;
@@ -384,6 +408,23 @@ function goBack() {
   background: rgba(236, 229, 245, 0.86);
   font-size: 9px;
   font-weight: 680;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-count-badge {
+  border: 1px solid transparent;
+}
+
+.session-count-badge--active {
+  border-color: #bfdfca;
+  background: #e9f5ed;
+  color: #3e7654;
+}
+
+.session-count-badge--waiting {
+  border-color: #ead09f;
+  background: #fff4df;
+  color: #8a642f;
 }
 
 @media (max-width: 370px) {
@@ -410,6 +451,14 @@ function goBack() {
 
   .scene-dialogue h2 {
     font-size: 13px;
+  }
+
+  .section-heading {
+    align-items: flex-start;
+  }
+
+  .session-overview {
+    max-width: 160px;
   }
 }
 </style>

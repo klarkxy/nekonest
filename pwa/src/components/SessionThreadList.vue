@@ -110,13 +110,20 @@
               <button
                 type="button"
                 class="session-main"
-                :aria-label="`打开会话：${shortSummary(session.summary)}`"
+                :aria-label="`打开会话：${shortSummary(session.summary)}。${sessionActivityPresentation(session.status).detail}`"
                 @click="$emit('open', session.id)"
               >
                 <span class="session-summary">{{ shortSummary(session.summary) }}</span>
-                <n-tag :type="statusTagType(session.status)" size="small" round>
-                  {{ statusLabel(session.status) }}
-                </n-tag>
+                <span
+                  class="session-status"
+                  :class="`session-status--${sessionActivityPresentation(session.status).tone}`"
+                  :title="sessionActivityPresentation(session.status).detail"
+                >
+                  <span class="session-status-icon" aria-hidden="true">
+                    {{ sessionActivityPresentation(session.status).icon }}
+                  </span>
+                  <span>{{ sessionActivityPresentation(session.status).label }}</span>
+                </span>
               </button>
 
               <div class="session-actions">
@@ -163,11 +170,10 @@
 
 <script setup lang="ts">
 import { computed, type CSSProperties } from 'vue'
-import { NTag } from 'naive-ui'
 import { UNKNOWN_AGENT_META } from '@/config/agents'
 import { useSessionPrefsStore, type SessionSortMode } from '@/stores/sessionPrefs'
 import type { AgentSession, AgentType } from '@/types/protocol'
-import { shortSummary, statusLabel, statusTagType } from '@/utils/agent'
+import { sessionActivityPresentation, shortSummary } from '@/utils/agent'
 import { buildSessionTree, type SessionTreeAgent } from '@/utils/sessionTree'
 
 const props = defineProps<{
@@ -489,11 +495,60 @@ function shortPath(path: string, max = 36): string {
   white-space: nowrap;
 }
 
+.session-status {
+  display: inline-flex;
+  min-height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid #ded7dc;
+  border-radius: 999px;
+  background: #f3eff2;
+  color: #756b72;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.session-status--active {
+  border-color: #bfdfca;
+  background: #e9f5ed;
+  color: #3e7654;
+}
+
+.session-status--waiting {
+  border-color: #ead09f;
+  background: #fff4df;
+  color: #8a642f;
+}
+
+.session-status--unknown {
+  border-style: dashed;
+}
+
+.session-status-icon {
+  line-height: 1;
+}
+
 .session-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
+}
+
+@media (max-width: 390px) {
+  .session-status {
+    padding-inline: 6px;
+  }
+
+  .session-status > span:last-child {
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 .icon-btn,

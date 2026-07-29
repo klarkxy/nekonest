@@ -5,6 +5,7 @@ import {
   agentLabel,
   groupSessionsByAgent,
   projectDisplay,
+  sessionActivityPresentation,
   shortSummary,
   statusLabel,
   statusTagType
@@ -33,7 +34,19 @@ describe('agent helpers', () => {
   })
 
   it('status maps', () => {
-    expect(statusLabel('running')).toBe('运行中')
+    expect(statusLabel('running')).toBe('猫爪忙碌中')
+    expect(sessionActivityPresentation('running')).toEqual({
+      icon: '🐾',
+      label: '猫爪忙碌中',
+      headline: '这条线程还在跑',
+      detail: '猫娘仍在本机忙碌，状态与新消息会自动同步回来。',
+      tone: 'active'
+    })
+    expect(sessionActivityPresentation('idle').label).toBe('猫窝待命')
+    expect(sessionActivityPresentation('waiting_approval').label).toBe('等你点头')
+    expect(sessionActivityPresentation('waiting_approval', true).label).toBe('等你点头')
+    expect(sessionActivityPresentation('idle', true).label).toBe('正在衔回消息')
+    expect(sessionActivityPresentation('nope').tone).toBe('unknown')
     expect(statusTagType('waiting_approval')).toBe('warning')
     expect(statusTagType('nope')).toBe('default')
   })

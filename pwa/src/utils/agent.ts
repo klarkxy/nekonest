@@ -9,6 +9,48 @@ export type AgentGroup = {
   sessions: AgentSession[]
 }
 
+export type SessionActivityTone = 'active' | 'idle' | 'waiting' | 'unknown'
+
+export type SessionActivityPresentation = {
+  icon: string
+  label: string
+  headline: string
+  detail: string
+  tone: SessionActivityTone
+}
+
+const SESSION_ACTIVITY: Record<AgentStatus, SessionActivityPresentation> = {
+  running: {
+    icon: '🐾',
+    label: '猫爪忙碌中',
+    headline: '这条线程还在跑',
+    detail: '猫娘仍在本机忙碌，状态与新消息会自动同步回来。',
+    tone: 'active'
+  },
+  idle: {
+    icon: '🌙',
+    label: '猫窝待命',
+    headline: '已经回到猫窝',
+    detail: '线程现在空闲，随时可以继续。',
+    tone: 'idle'
+  },
+  waiting_approval: {
+    icon: '🔔',
+    label: '等你点头',
+    headline: '猫娘停在门口啦',
+    detail: '线程正在等待审批；当前需要回到 PC 终端处理。',
+    tone: 'waiting'
+  }
+}
+
+const STREAMING_ACTIVITY: SessionActivityPresentation = {
+  icon: '🐾',
+  label: '正在衔回消息',
+  headline: '猫爪还在敲键盘',
+  detail: '线程仍在运行，新的回复会自动出现在这里。',
+  tone: 'active'
+}
+
 export function agentIcon(type: AgentType | string): string {
   return getAgentMeta(type).symbol
 }
@@ -21,8 +63,23 @@ export function agentColor(type: AgentType | string): string {
   return getAgentMeta(type).color
 }
 
+export function sessionActivityPresentation(
+  status: AgentStatus | string,
+  streaming = false
+): SessionActivityPresentation {
+  if (status === 'waiting_approval') return SESSION_ACTIVITY.waiting_approval
+  if (streaming) return STREAMING_ACTIVITY
+  return SESSION_ACTIVITY[status as AgentStatus] || {
+    icon: '✦',
+    label: status || '状态未知',
+    headline: '还没看清猫窝里的动静',
+    detail: '等待下一次状态同步。',
+    tone: 'unknown'
+  }
+}
+
 export function statusLabel(status: AgentStatus | string): string {
-  return ({ running: '运行中', idle: '空闲', waiting_approval: '等待审批' } as Record<string, string>)[status] || status
+  return sessionActivityPresentation(status).label
 }
 
 export function statusTagType(status: AgentStatus | string): 'success' | 'default' | 'warning' {
