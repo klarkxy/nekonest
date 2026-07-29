@@ -103,7 +103,7 @@ func (c *GrokCommander) SendPromptInDir(
 	defer c.mu.Unlock()
 
 	if executor, ok := c.executors[sessionID]; ok && executor.IsRunning() {
-		return fmt.Errorf("grok session %s is still running; wait for it to finish", sessionID)
+		return fmt.Errorf("%w: grok session %s is still running; wait for it to finish", ErrSessionBusy, sessionID)
 	}
 	if !c.IsAvailable() {
 		return fmt.Errorf("grok CLI not found")

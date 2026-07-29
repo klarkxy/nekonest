@@ -82,7 +82,7 @@ func (c *ClaudeCommander) SendPromptInDir(
 
 	// Print/resume closes stdin after -p; a second prompt needs a new process.
 	if executor, ok := c.executors[sessionID]; ok && executor.IsRunning() {
-		return fmt.Errorf("claude session %s is still running; wait for it to finish", sessionID)
+		return fmt.Errorf("%w: claude session %s is still running; wait for it to finish", ErrSessionBusy, sessionID)
 	}
 
 	// Reject synthetic IDs left by older experimental builds.

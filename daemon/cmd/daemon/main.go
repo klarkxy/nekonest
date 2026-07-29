@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nekonest/daemon/internal/adapters"
+	"github.com/nekonest/daemon/internal/agentexec"
 	"github.com/nekonest/daemon/internal/attach"
 	"github.com/nekonest/daemon/internal/config"
 	"github.com/nekonest/daemon/internal/connection"
@@ -290,6 +292,24 @@ func main() {
 			}
 			if err := targetAdapter.SendPrompt(sessionID, request); err != nil {
 				log.Printf("[daemon] send_prompt error via %s: %v", targetAdapter.Name(), err)
+				if errors.Is(err, agentexec.ErrSessionBusy) {
+					// Busy is checked before an adapter starts a new process,
+					// so this rejection is known not to have crossed the agent
+					// boundary. Roll back the dispatch marker and allow an
+					// explicit retry after the active run finishes.
+					if journalErr := commandJournal.rollbackDispatching(sessionID, clientMsgID); journalErr == nil {
+						sendPromptFailed(
+							client,
+							deviceID,
+							sessionID,
+							clientMsgID,
+							"this session is still running; wait for the current turn to finish, then retry",
+						)
+						return
+					} else {
+						log.Printf("[daemon] rollback busy prompt failed: %v", journalErr)
+					}
+				}
 				// The adapter API cannot prove whether a failing Start/Send
 				// crossed into the agent. Preserve the ambiguity instead of
 				// enabling an unsafe automatic retry.

@@ -169,18 +169,18 @@ func (c *KiloCommander) SendPromptInDir(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if _, ok := c.executors[sessionID]; ok {
+		return fmt.Errorf(
+			"%w: kilo session %s is still running or finishing; wait for it to finish",
+			ErrSessionBusy,
+			sessionID,
+		)
+	}
 	if !c.IsAvailable() {
 		return fmt.Errorf("kilo CLI not found")
 	}
 	if strings.HasPrefix(sessionID, "nekonest_") || strings.HasPrefix(sessionID, "new_") {
 		return fmt.Errorf("invalid session id %q — use a session discovered from the PC", sessionID)
-	}
-
-	if _, ok := c.executors[sessionID]; ok {
-		return fmt.Errorf(
-			"kilo session %s is still running or finishing; wait for it to finish",
-			sessionID,
-		)
 	}
 
 	if workDir != "" {

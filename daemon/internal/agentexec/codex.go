@@ -1,13 +1,16 @@
 package agentexec
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,19 +30,94 @@ type CodexCommander struct {
 
 	// OnAgentOutput is called for each line of output from the agent.
 	OnAgentOutput func(sessionID string, msgType string, content string)
+
+	terminalExitGrace time.Duration
+	resumeArgs        func(string, string, []attach.LocalFile) []string
 }
 
 // NewCodexCommander creates a new Codex commander.
 func NewCodexCommander() *CodexCommander {
 	return &CodexCommander{
-		cliPath:         findCodexCLI(),
-		executors:       make(map[string]*AgentExecutor),
-		lastAssistant:   make(map[string]string),
-		lastAssistantAt: make(map[string]int64),
+		cliPath:           findCodexCLI(),
+		executors:         make(map[string]*AgentExecutor),
+		lastAssistant:     make(map[string]string),
+		lastAssistantAt:   make(map[string]int64),
+		terminalExitGrace: 5 * time.Second,
+		resumeArgs:        codexResumeArgs,
 	}
 }
 
+type desktopCodexCandidate struct {
+	path        string
+	installedAt time.Time
+}
+
+func desktopCodexCandidates(localAppData string) []desktopCodexCandidate {
+	if localAppData == "" {
+		return nil
+	}
+	matches, _ := filepath.Glob(
+		filepath.Join(localAppData, "OpenAI", "Codex", "bin", "*", "codex.exe"),
+	)
+	candidates := make([]desktopCodexCandidate, 0, len(matches))
+	for _, candidate := range matches {
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		installedAt := info.ModTime()
+		if dirInfo, err := os.Stat(filepath.Dir(candidate)); err == nil {
+			installedAt = dirInfo.ModTime()
+		}
+		candidates = append(candidates, desktopCodexCandidate{
+			path:        candidate,
+			installedAt: installedAt,
+		})
+	}
+	sort.Slice(candidates, func(i, k int) bool {
+		if candidates[i].installedAt.Equal(candidates[k].installedAt) {
+			return candidates[i].path > candidates[k].path
+		}
+		return candidates[i].installedAt.After(candidates[k].installedAt)
+	})
+	return candidates
+}
+
+func firstUsableDesktopCodexCLI(
+	candidates []desktopCodexCandidate,
+	probe func(string) bool,
+) string {
+	for _, candidate := range candidates {
+		if probe(candidate.path) {
+			return candidate.path
+		}
+	}
+	return ""
+}
+
+func probeCodexCLI(candidate string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	command, args, err := resolveLaunch(candidate, []string{"--version"})
+	if err != nil {
+		return false
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
+}
+
 func findCodexCLI() string {
+	// Desktop sessions are written by the bundled Codex CLI. Prefer the newest
+	// installed desktop binary so resume behavior matches the native store,
+	// then fall back to a separately installed npm CLI.
+	if desktopCLI := firstUsableDesktopCodexCLI(
+		desktopCodexCandidates(os.Getenv("LOCALAPPDATA")),
+		probeCodexCLI,
+	); desktopCLI != "" {
+		return desktopCLI
+	}
 	appData := os.Getenv("APPDATA")
 	// Prefer .exe over .cmd to avoid cmd.exe metacharacter re-parse of prompts.
 	candidates := []string{
@@ -121,15 +199,20 @@ func (c *CodexCommander) SendPrompt(
 	// exec resume puts the prompt on argv and closes stdin — never write stdin
 	// again (that caused garbled/duplicate turns). If a run is still active, reject.
 	if executor, ok := c.executors[sessionID]; ok && executor.IsRunning() {
-		return fmt.Errorf("codex session %s is still running; wait for it to finish", sessionID)
+		return fmt.Errorf("%w: codex session %s is still running; wait for it to finish", ErrSessionBusy, sessionID)
 	}
 
 	// Non-interactive resume: `codex resume` requires a TTY. Attachment
 	// directories are exec-level options; image flags belong after resume.
-	args := codexResumeArgs(sessionID, prompt, attachments)
+	resumeArgs := c.resumeArgs
+	if resumeArgs == nil {
+		resumeArgs = codexResumeArgs
+	}
+	args := resumeArgs(sessionID, prompt, attachments)
 
 	executor := NewAgentExecutor("codex", sessionID)
 	diagnostics := &stderrDiagnostics{}
+	var terminalStopOnce sync.Once
 
 	// Codex writes startup/plugin diagnostics to stderr. Keep those in the
 	// diagnostic channel instead of turning them into chat messages.
@@ -138,6 +221,30 @@ func (c *CodexCommander) SendPrompt(
 			return
 		}
 		c.handleProcessLine(sessionID, source, line)
+		if source == "stdout" && isCodexTerminalEvent(line) {
+			// Some Codex versions emit a terminal event but leave an MCP child
+			// alive indefinitely. Stop asynchronously after a short grace
+			// period; calling Stop inside the output reader would deadlock with
+			// the executor's output wait group.
+			terminalStopOnce.Do(func() {
+				grace := c.terminalExitGrace
+				if grace <= 0 {
+					grace = 5 * time.Second
+				}
+				time.AfterFunc(grace, func() {
+					if !executor.IsRunning() {
+						return
+					}
+					log.Printf(
+						"[codex] session %s remained alive after terminal event; stopping process tree",
+						sessionID,
+					)
+					if err := executor.Stop(); err != nil {
+						log.Printf("[codex] stop completed session %s: %v", sessionID, err)
+					}
+				})
+			})
+		}
 	}
 
 	executor.OnExit = func(exitCode int) {
@@ -167,6 +274,16 @@ func (c *CodexCommander) SendPrompt(
 	c.executors[sessionID] = executor
 	log.Printf("[codex] started process for session %s", sessionID)
 	return nil
+}
+
+func isCodexTerminalEvent(line string) bool {
+	var event struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return false
+	}
+	return event.Type == "turn.completed" || event.Type == "turn.failed"
 }
 
 func (c *CodexCommander) handleProcessLine(sessionID, source, line string) {

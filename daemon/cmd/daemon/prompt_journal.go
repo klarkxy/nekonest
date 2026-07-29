@@ -275,6 +275,32 @@ func (j *promptJournal) markAccepted(sessionID, clientMsgID string) error {
 	return j.transition(sessionID, clientMsgID, promptJournalAccepted)
 }
 
+// rollbackDispatching removes a command only while it is still known to have
+// been rejected before crossing the agent boundary. Persist first so a failed
+// disk write never enables an unsafe retry in memory.
+func (j *promptJournal) rollbackDispatching(sessionID, clientMsgID string) error {
+	if err := validateJournalIdentifiers(sessionID, clientMsgID); err != nil {
+		return err
+	}
+	key := promptJournalKeyFromHash(j.deviceHash, sessionID, clientMsgID)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	current, ok := j.records[key]
+	if !ok {
+		return fmt.Errorf("prompt journal record not found")
+	}
+	if current.Status != promptJournalDispatching {
+		return fmt.Errorf("cannot roll back prompt from %s", current.Status)
+	}
+	next := cloneJournalRecords(j.records)
+	delete(next, key)
+	if err := j.persistRecords(next); err != nil {
+		return err
+	}
+	j.records = next
+	return nil
+}
+
 func (j *promptJournal) markIndeterminate(sessionID, clientMsgID string) error {
 	return j.transition(sessionID, clientMsgID, promptJournalIndeterminate)
 }

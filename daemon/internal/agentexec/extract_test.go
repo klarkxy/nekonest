@@ -1,13 +1,18 @@
 package agentexec
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nekonest/daemon/internal/attach"
 )
 
 func TestExtractKiloText(t *testing.T) {
@@ -59,6 +64,9 @@ func TestKiloRejectsSessionWhilePreviousRunFinishes(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "running or finishing") {
 		t.Fatalf("finishing session error = %v", err)
 	}
+	if !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("finishing session error = %v, want ErrSessionBusy", err)
+	}
 }
 
 func TestExtractClaudeText(t *testing.T) {
@@ -79,6 +87,168 @@ func TestExtractClaudeText(t *testing.T) {
 func TestExtractCodexText(t *testing.T) {
 	if extractCodexText(map[string]interface{}{"content": "c"}) != "c" {
 		t.Fatal("str")
+	}
+}
+
+func TestCodexTerminalEvent(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"turn.completed","usage":{}}`,
+		`{"type":"turn.failed","error":{"message":"nope"}}`,
+	} {
+		if !isCodexTerminalEvent(line) {
+			t.Fatalf("terminal event not recognized: %s", line)
+		}
+	}
+	for _, line := range []string{
+		`{"type":"item.completed"}`,
+		`not-json`,
+	} {
+		if isCodexTerminalEvent(line) {
+			t.Fatalf("non-terminal event recognized: %s", line)
+		}
+	}
+}
+
+func TestCodexBusyErrorIsRetryable(t *testing.T) {
+	commander := NewCodexCommander()
+	commander.executors["session"] = &AgentExecutor{running: true}
+	err := commander.SendPrompt("session", "next", nil, nil)
+	if !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("busy error = %v, want ErrSessionBusy", err)
+	}
+}
+
+func TestDesktopCodexCandidatesPreferInstallTimeAndFallBack(t *testing.T) {
+	root := t.TempDir()
+	older := filepath.Join(root, "OpenAI", "Codex", "bin", "older", "codex.exe")
+	newer := filepath.Join(root, "OpenAI", "Codex", "bin", "newer", "codex.exe")
+	for _, path := range []string{older, newer} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(older, base, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newer, base.Add(time.Minute), base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Dir(older), base, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Dir(newer), base.Add(2*time.Minute), base.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	candidates := desktopCodexCandidates(root)
+	if len(candidates) != 2 || candidates[0].path != newer {
+		t.Fatalf("desktop candidates = %#v", candidates)
+	}
+	got := firstUsableDesktopCodexCLI(candidates, func(path string) bool {
+		return path == older
+	})
+	if got != older {
+		t.Fatalf("desktop fallback = %q, want %q", got, older)
+	}
+}
+
+func newTestCodexCommander(
+	helperTest string,
+	grace time.Duration,
+) *CodexCommander {
+	return &CodexCommander{
+		cliPath:           os.Args[0],
+		executors:         make(map[string]*AgentExecutor),
+		lastAssistant:     make(map[string]string),
+		lastAssistantAt:   make(map[string]int64),
+		terminalExitGrace: grace,
+		resumeArgs: func(string, string, []attach.LocalFile) []string {
+			return []string{"-test.run=^" + helperTest + "$"}
+		},
+	}
+}
+
+func TestCodexTerminalHangHelper(t *testing.T) {
+	if os.Getenv("NEKONEST_CODEX_TERMINAL_HELPER") != "hang" {
+		return
+	}
+	fmt.Fprintln(os.Stdout, `{"type":"turn.completed","usage":{}}`)
+	time.Sleep(30 * time.Second)
+}
+
+func TestCodexTerminalTailHelper(t *testing.T) {
+	if os.Getenv("NEKONEST_CODEX_TERMINAL_HELPER") != "tail" {
+		return
+	}
+	fmt.Fprintln(os.Stdout, `{"type":"turn.completed","usage":{}}`)
+	time.Sleep(25 * time.Millisecond)
+	fmt.Fprintln(os.Stdout, `{"type":"agent_message","text":"tail persisted"}`)
+}
+
+func TestCodexTerminalEventStopsHungProcessAndReleasesSession(t *testing.T) {
+	t.Setenv("NEKONEST_CODEX_TERMINAL_HELPER", "hang")
+	commander := newTestCodexCommander(
+		"TestCodexTerminalHangHelper",
+		50*time.Millisecond,
+	)
+	defer commander.StopAll()
+
+	completed := make(chan struct{}, 2)
+	var completionCount atomic.Int32
+	onComplete := func() {
+		completionCount.Add(1)
+		completed <- struct{}{}
+	}
+	for run := 1; run <= 2; run++ {
+		if err := commander.SendPrompt("session", "next", nil, onComplete); err != nil {
+			t.Fatalf("run %d send: %v", run, err)
+		}
+		select {
+		case <-completed:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("run %d did not complete", run)
+		}
+	}
+	if got := completionCount.Load(); got != 2 {
+		t.Fatalf("completion callback count = %d, want 2", got)
+	}
+}
+
+func TestCodexTerminalGracePreservesTailOutput(t *testing.T) {
+	t.Setenv("NEKONEST_CODEX_TERMINAL_HELPER", "tail")
+	commander := newTestCodexCommander(
+		"TestCodexTerminalTailHelper",
+		250*time.Millisecond,
+	)
+	defer commander.StopAll()
+
+	tail := make(chan string, 1)
+	commander.OnAgentOutput = func(_ string, msgType, content string) {
+		if msgType == "assistant" {
+			tail <- content
+		}
+	}
+	completed := make(chan struct{}, 1)
+	if err := commander.SendPrompt("session", "next", nil, func() {
+		completed <- struct{}{}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case content := <-tail:
+		if content != "tail persisted" {
+			t.Fatalf("tail output = %q", content)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("tail output was not preserved")
+	}
+	select {
+	case <-completed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("naturally exiting helper did not complete")
 	}
 }
 

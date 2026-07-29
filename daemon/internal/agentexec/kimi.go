@@ -133,7 +133,7 @@ func (c *KimiCommander) sendPromptInDir(
 	defer c.mu.Unlock()
 
 	if executor, ok := c.executors[sessionID]; ok && executor.IsRunning() {
-		return fmt.Errorf("kimi session %s is still running; wait for it to finish", sessionID)
+		return fmt.Errorf("%w: kimi session %s is still running; wait for it to finish", ErrSessionBusy, sessionID)
 	}
 	if !c.IsAvailable() {
 		return fmt.Errorf("kimi CLI not found")

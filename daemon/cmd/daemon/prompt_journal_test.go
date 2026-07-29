@@ -66,6 +66,72 @@ func TestPromptJournalAcceptedPersistsAndIsDeviceIsolated(t *testing.T) {
 	}
 }
 
+func TestPromptJournalRollsBackOnlyDispatchingCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal.json")
+	journal, err := loadPromptJournal(path, "device", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.markDispatching("session", "retryable", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.rollbackDispatching("session", "retryable"); err != nil {
+		t.Fatalf("rollback dispatching: %v", err)
+	}
+	if _, ok := journal.state("session", "retryable"); ok {
+		t.Fatal("rolled-back dispatch is still recorded")
+	}
+	restarted, err := loadPromptJournal(path, "device", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := restarted.state("session", "retryable"); ok {
+		t.Fatal("rolled-back dispatch reappeared after restart")
+	}
+	if err := restarted.markDispatching("session", "retryable", "hello again"); err != nil {
+		t.Fatalf("same client_msg_id was not retryable: %v", err)
+	}
+	if err := restarted.markAccepted("session", "retryable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.rollbackDispatching("session", "retryable"); err == nil {
+		t.Fatal("accepted prompt was rolled back")
+	}
+	record, ok := restarted.state("session", "retryable")
+	if !ok || record.Status != promptJournalAccepted {
+		t.Fatalf("accepted record changed after rejected rollback: %#v, %v", record, ok)
+	}
+
+	if err := restarted.markDispatching("session", "indeterminate", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.markIndeterminate("session", "indeterminate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.rollbackDispatching("session", "indeterminate"); err == nil {
+		t.Fatal("indeterminate prompt was rolled back")
+	}
+}
+
+func TestPromptJournalRollbackFailureKeepsDispatchingRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal.json")
+	journal, err := loadPromptJournal(path, "device", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.markDispatching("session", "message", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	journal.path = t.TempDir()
+	if err := journal.rollbackDispatching("session", "message"); err == nil {
+		t.Fatal("rollback unexpectedly succeeded with an unwritable journal path")
+	}
+	record, ok := journal.state("session", "message")
+	if !ok || record.Status != promptJournalDispatching {
+		t.Fatalf("failed rollback changed in-memory state: %#v, %v", record, ok)
+	}
+}
+
 func TestPromptJournalNeverEvictsIndeterminateCommands(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "journal.json")
 	journal, err := loadPromptJournal(path, "device", 2)
