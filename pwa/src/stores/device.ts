@@ -8,6 +8,8 @@ import { useBindingStore } from './binding'
 export const useDeviceStore = defineStore('devices', () => {
   const devices = ref<Device[]>([])
   const loading = ref(false)
+  const loaded = ref(false)
+  const loadError = ref('')
   const connected = ref(false)
   const authError = ref(false)
 
@@ -47,20 +49,24 @@ export const useDeviceStore = defineStore('devices', () => {
 
   async function fetchDevices() {
     loading.value = true
+    loadError.value = ''
     authError.value = false
     try {
       const res = await apiFetch('/api/devices')
       if (res.status === 401) {
         authError.value = true
+        loaded.value = false
         devices.value = []
         return
       }
       if (!res.ok) {
+        loadError.value = `猫窝服务器暂时没有回应（${res.status}）`
         console.error('failed to fetch devices:', res.status)
         return
       }
       const data = await res.json()
       devices.value = data.devices || []
+      loaded.value = true
 
       // Auto-subscribe to last / first device for live updates
       const binding = useBindingStore()
@@ -73,11 +79,21 @@ export const useDeviceStore = defineStore('devices', () => {
         binding.setLastDevice(target)
       }
     } catch (err) {
+      loadError.value = '连不上猫窝服务器，请检查网络或服务地址。'
       console.error('failed to fetch devices:', err)
     } finally {
       loading.value = false
     }
   }
 
-  return { devices, loading, connected, authError, initWebSocket, fetchDevices }
+  return {
+    devices,
+    loading,
+    loaded,
+    loadError,
+    connected,
+    authError,
+    initWebSocket,
+    fetchDevices
+  }
 })

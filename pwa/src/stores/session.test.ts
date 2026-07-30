@@ -123,6 +123,44 @@ describe('session prompt outbox', () => {
     expect(harness.sent).toHaveLength(0)
   })
 
+  it('prevents a second prompt while the connected session is still running', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a',
+      device_id: 'device-a',
+      agent_type: 'codex',
+      status: 'running',
+      summary: '',
+      last_activity: 0
+    }
+
+    expect(store.sendPrompt('device-a', 'session-a', '再来一条')).toBe(false)
+    expect(store.lastError).toBe('猫娘还在处理上一条，结束后再发送')
+    expect(store.messages).toHaveLength(0)
+    expect(harness.sent).toHaveLength(0)
+    store.cleanup()
+  })
+
+  it('still queues a prompt offline when the last known session status is running', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a',
+      device_id: 'device-a',
+      agent_type: 'codex',
+      status: 'running',
+      summary: '',
+      last_activity: 0
+    }
+
+    expect(store.sendPrompt('device-a', 'session-a', '回来后继续')).toBe(true)
+    expect(store.messages[0].metadata?.delivery_status).toBe('queued')
+    expect(harness.sent).toHaveLength(0)
+    store.cleanup()
+  })
+
   it('freezes a failed prompt and explicitly retries with the same client id', () => {
     const store = useSessionStore()
     store.subscribeDevice('device-a')
@@ -169,6 +207,39 @@ describe('session prompt outbox', () => {
     })
     expect(store.isPending(clientMsgId)).toBe(false)
     expect(store.messages[0].metadata?.delivery_status).toBeUndefined()
+    store.cleanup()
+  })
+
+  it('turns an already-running daemon rejection into a useful recovery message', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a',
+      device_id: 'device-a',
+      agent_type: 'codex',
+      status: 'idle',
+      summary: '',
+      last_activity: 0
+    }
+    store.sendPrompt('device-a', 'session-a', '碰巧撞车')
+    const clientMsgId = store.messages[0].id
+
+    emit({
+      type: 'prompt_failed',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      timestamp: 1,
+      payload: {
+        client_msg_id: clientMsgId,
+        message: 'agent session is already running; wait for it to finish'
+      }
+    })
+
+    expect(store.lastError).toBe('猫娘还在处理上一条，结束后再重试')
+    expect(store.messages[0].metadata?.delivery_error).toBe(
+      '猫娘还在处理上一条，结束后再重试'
+    )
     store.cleanup()
   })
 
@@ -470,6 +541,8 @@ describe('session prompt outbox', () => {
     vi.advanceTimersByTime(PROMPT_ACK_TIMEOUT_MS)
     expect(sentPrompts()).toHaveLength(1)
 
+    // This test exercises ACK queries, not the connected busy-session guard.
+    store.streaming = false
     store.sendPrompt('device-a', 'session-a', 'still-pending')
     const pendingId = store.messages[store.messages.length - 1].id
     vi.advanceTimersByTime(PROMPT_ACK_TIMEOUT_MS - 1)

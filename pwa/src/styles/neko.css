@@ -37,14 +37,14 @@
 }
 
 html {
-  min-width: 320px;
+  min-width: 0;
   min-height: 100%;
   scroll-behavior: smooth;
   background: #e8dcdf;
 }
 
 body {
-  min-width: 320px;
+  min-width: 0;
   min-height: 100%;
   margin: 0;
   color: var(--neko-ink);

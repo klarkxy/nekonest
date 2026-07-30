@@ -25,8 +25,8 @@
     <section
       class="connection-panel"
       :class="{
-        'connection-panel--connected': deviceStore.connected,
-        'connection-panel--error': deviceStore.authError
+        'connection-panel--connected': connection.tone === 'connected',
+        'connection-panel--error': connection.tone === 'error'
       }"
       aria-label="连接状态"
       aria-live="polite"
@@ -34,20 +34,21 @@
       <div class="connection-copy">
         <span
           class="status-dot"
-          :class="deviceStore.connected ? 'online' : deviceStore.authError ? 'offline' : 'waiting'"
+          :class="connection.dot"
           aria-hidden="true"
         ></span>
-        <span class="connection-label">
-          {{
-            deviceStore.authError
-              ? '钥匙对不上'
-              : deviceStore.connected
-                ? '猫窝通道已接通'
-                : '正在找家里的猫窝…'
-          }}
-        </span>
+        <span class="connection-label">{{ connection.label }}</span>
       </div>
-      <RouterLink class="setup-link" :to="setupLocation()">钥匙设置</RouterLink>
+      <button
+        v-if="deviceStore.loadError"
+        type="button"
+        class="connection-action"
+        :disabled="deviceStore.loading"
+        @click="retryDevices"
+      >
+        {{ deviceStore.loading ? '重试中…' : '重试' }}
+      </button>
+      <RouterLink v-else class="connection-action" :to="setupLocation()">钥匙设置</RouterLink>
     </section>
 
     <div v-if="deviceStore.authError" class="auth-banner" role="alert">
@@ -70,6 +71,15 @@
           <span class="skeleton-line skeleton-line--title"></span>
           <span class="skeleton-line skeleton-line--meta"></span>
         </div>
+      </div>
+
+      <div v-else-if="deviceStore.loadError" class="load-failure" role="alert">
+        <span class="load-failure__mark" aria-hidden="true">↻</span>
+        <h3>电脑列表没读到</h3>
+        <p>{{ deviceStore.loadError }}</p>
+        <button type="button" :disabled="deviceStore.loading" @click="retryDevices">
+          {{ deviceStore.loading ? '正在重连…' : '重新连接' }}
+        </button>
       </div>
 
       <div v-else class="device-cards">
@@ -111,7 +121,7 @@
           </button>
         </article>
 
-        <div v-if="visibleDevices.length === 0" class="empty-state">
+        <div v-if="deviceStore.loaded && visibleDevices.length === 0" class="empty-state">
           <img
             src="/brand/nekonest-duo.webp"
             alt=""
@@ -161,10 +171,33 @@ const visibleDevices = computed(() =>
   )
 )
 
+const connection = computed(() => {
+  if (deviceStore.authError) {
+    return { tone: 'error', dot: 'offline', label: '手机钥匙对不上' } as const
+  }
+  if (deviceStore.loadError) {
+    return { tone: 'error', dot: 'offline', label: '猫窝服务器连接失败' } as const
+  }
+  if (!deviceStore.loaded || deviceStore.loading) {
+    return { tone: 'waiting', dot: 'waiting', label: '正在检查猫窝服务器…' } as const
+  }
+  if (deviceStore.connected) {
+    return { tone: 'connected', dot: 'online', label: '猫窝实时通道已接通' } as const
+  }
+  if (visibleDevices.value.length === 0) {
+    return { tone: 'connected', dot: 'online', label: '猫窝服务器已接通' } as const
+  }
+  return { tone: 'waiting', dot: 'waiting', label: '服务器已接通，实时通道重连中…' } as const
+})
+
 onMounted(() => {
   deviceStore.initWebSocket()
   void deviceStore.fetchDevices()
 })
+
+function retryDevices() {
+  void deviceStore.fetchDevices()
+}
 
 function onOpenDevice(device: Device) {
   binding.setLastDevice(device.id)
@@ -342,21 +375,29 @@ function osLabel(os: string): string {
   white-space: nowrap;
 }
 
-.setup-link {
+.connection-action {
   display: inline-flex;
   flex: 0 0 auto;
   min-height: 44px;
   align-items: center;
   padding: 6px 10px;
+  border: 0;
   border-radius: 8px;
   color: var(--neko-primary-deep);
+  background: transparent;
   font-size: 12px;
   font-weight: 650;
+  cursor: pointer;
   text-decoration: none;
 }
 
-.setup-link:hover {
+.connection-action:hover {
   background: rgba(114, 91, 157, 0.1);
+}
+
+.connection-action:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .auth-banner {
@@ -408,6 +449,61 @@ function osLabel(os: string): string {
 .device-skeletons {
   display: grid;
   gap: 10px;
+}
+
+.load-failure {
+  display: grid;
+  justify-items: center;
+  padding: 30px 24px 33px;
+  border: 1px solid rgba(191, 104, 116, 0.2);
+  border-radius: 21px 21px 27px 14px;
+  color: #784951;
+  background: rgba(249, 231, 233, 0.58);
+  text-align: center;
+}
+
+.load-failure__mark {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: 17px;
+  color: var(--neko-danger);
+  background: rgba(255, 255, 255, 0.62);
+  font-size: 27px;
+  line-height: 1;
+}
+
+.load-failure h3 {
+  margin: 14px 0 0;
+  color: var(--neko-ink);
+  font-size: 16px;
+}
+
+.load-failure p {
+  max-width: 18rem;
+  margin: 7px 0 17px;
+  font-size: 12px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.load-failure button {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 13px;
+  color: #fff;
+  background: var(--neko-danger);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(191, 104, 116, 0.22);
+}
+
+.load-failure button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .device-card {

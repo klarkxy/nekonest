@@ -207,6 +207,10 @@
       <button type="button" class="error-dismiss" aria-label="关闭提示" @click="dismissErrors">×</button>
     </div>
 
+    <p v-if="sendBlocked" class="compose-status" role="status">
+      猫娘还在处理上一条，可以先把下一句写好。
+    </p>
+
     <div class="input-bar">
       <label
         for="session-attachment-input"
@@ -229,7 +233,7 @@
       </label>
       <n-input
         v-model:value="inputText"
-        placeholder="跟猫娘说点什么…"
+        :placeholder="composerPlaceholder"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 4 }"
         :disabled="sending || uploading"
@@ -240,9 +244,9 @@
       <n-button
         type="primary"
         circle
-        aria-label="发送"
+        :aria-label="sendButtonLabel"
         @click="handleSend"
-        :disabled="(!inputText.trim() && !pendingAtts.length) || sending || uploading"
+        :disabled="sendBlocked || (!inputText.trim() && !pendingAtts.length) || sending || uploading"
         :loading="sending || uploading"
       >
         <template #icon>↑</template>
@@ -304,6 +308,22 @@ const threadActivity = computed(() => sessionActivityPresentation(
   sessionStore.streaming
 ))
 
+const sessionBusy = computed(
+  () => sessionStore.currentSession?.status === 'running' || sessionStore.streaming
+)
+
+const sendBlocked = computed(
+  () => sessionBusy.value && sessionStore.wsStatus === 'connected'
+)
+
+const composerPlaceholder = computed(() =>
+  sendBlocked.value ? '先写下一句，任务结束后再发送…' : '跟猫娘说点什么…'
+)
+
+const sendButtonLabel = computed(() =>
+  sendBlocked.value ? '当前任务结束后可发送' : '发送'
+)
+
 const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
 
 const showHeaderActivity = computed(() => {
@@ -319,9 +339,7 @@ const showActivityBanner = computed(() => {
   return sessionStore.streaming || status === 'running'
 })
 
-const canInterrupt = computed(() =>
-  sessionStore.currentSession?.status === 'running' || sessionStore.streaming
-)
+const canInterrupt = sessionBusy
 
 const wsLabel = computed(() => {
   switch (sessionStore.wsStatus) {
@@ -609,6 +627,10 @@ function onEnterKey(event: KeyboardEvent) {
 }
 
 async function handleSend() {
+  if (sendBlocked.value) {
+    sessionStore.lastError = '猫娘还在处理上一条，结束后再发送'
+    return
+  }
   let prompt = inputText.value.trim()
   const mark = '\n\n[NekoNest attachments — local files on this PC]\n'
   const mi = prompt.indexOf(mark)
@@ -1072,6 +1094,23 @@ function handleInterrupt() {
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
+}
+
+.compose-status {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 7px 16px;
+  border-top: 1px solid rgba(188, 132, 72, 0.2);
+  color: #7d623f;
+  background: rgba(255, 247, 230, 0.94);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+  text-wrap: pretty;
+}
+
+.compose-status + .input-bar {
+  border-top: 0;
 }
 
 .input-bar {

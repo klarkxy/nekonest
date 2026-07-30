@@ -458,9 +458,7 @@ export const useSessionStore = defineStore('sessions', () => {
         }
         const cid = (p?.client_msg_id || '').trim()
         const retryAllowed = p?.retry_allowed !== false && p?.outcome !== 'indeterminate'
-        const failure = retryAllowed
-          ? p?.message || p?.error || p?.reason || '猫娘没接下这条指令'
-          : '结果不确定，为避免重复已关掉重试'
+        const failure = promptFailureMessage(p, retryAllowed)
         if (cid) syncOutboxFromStorage()
         const item = cid ? outbox.get(cid) : undefined
         if (cid) clearAckTimer(cid)
@@ -520,6 +518,24 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function mergeHistory(hist: SessionMessage[]) {
     messages.value = mergeHistoryLists(messages.value, hist)
+  }
+
+  function promptFailureMessage(
+    payload: {
+      message?: string
+      error?: string
+      reason?: string
+    },
+    retryAllowed: boolean
+  ) {
+    if (!retryAllowed) {
+      return '结果不确定，为避免重复已关掉重试'
+    }
+    const raw = payload.message || payload.error || payload.reason || ''
+    if (/already running|still running/i.test(raw)) {
+      return '猫娘还在处理上一条，结束后再重试'
+    }
+    return raw || '猫娘没接下这条指令'
   }
 
   function stopForTerminalHistoryError(hist: SessionMessage[]) {
@@ -704,6 +720,13 @@ export const useSessionStore = defineStore('sessions', () => {
     const atts = attachments?.filter(a => a?.url) || []
     if (!prompt.trim() && atts.length === 0) {
       lastError.value = '先说点什么，或塞个附件'
+      return false
+    }
+    const isCurrentSessionBusy =
+      currentSession.value?.id === sessionId &&
+      (currentSession.value.status === 'running' || streaming.value)
+    if (isCurrentSessionBusy && nekoWS().isConnected()) {
+      lastError.value = '猫娘还在处理上一条，结束后再发送'
       return false
     }
     syncOutboxFromStorage()

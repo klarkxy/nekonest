@@ -22,14 +22,14 @@
         <label class="field-label" for="pair-code">配对码</label>
         <n-input
           id="pair-code"
-          v-model:value="pairCode"
+          v-model:value="pairCodeModel"
           name="one-time-code"
           autocomplete="one-time-code"
           inputmode="text"
+          autocapitalize="none"
           spellcheck="false"
           placeholder="输入 6 位配对码…"
           size="large"
-          maxlength="6"
           class="pair-input"
           aria-describedby="pair-help"
           :status="fieldError ? 'error' : undefined"
@@ -42,7 +42,7 @@
           block
           size="large"
           :loading="pairing"
-          :disabled="pairCode.trim().length !== 6"
+          :disabled="pairCode.length !== 6"
         >
           完成配对
         </n-button>
@@ -52,12 +52,26 @@
         <p class="help-title">怎么拿到配对码</p>
         <ol class="help-steps">
           <li>
-            已注册的电脑运行
-            <code translate="no">{{ WINDOWS_PAIR_COMMANDS.pair }}</code>
+            <span>已注册的电脑运行</span>
+            <div class="command-row">
+              <code translate="no">{{ WINDOWS_PAIR_COMMANDS.pair }}</code>
+              <button
+                type="button"
+                :aria-label="`复制命令 ${WINDOWS_PAIR_COMMANDS.pair}`"
+                @click="copyCommand(WINDOWS_PAIR_COMMANDS.pair)"
+              >复制</button>
+            </div>
           </li>
           <li>
-            首次使用时，设置好服务器地址与注册令牌后运行
-            <code translate="no">{{ WINDOWS_PAIR_COMMANDS.register }}</code>
+            <span>首次使用时，设置好服务器地址与注册令牌后运行</span>
+            <div class="command-row">
+              <code translate="no">{{ WINDOWS_PAIR_COMMANDS.register }}</code>
+              <button
+                type="button"
+                :aria-label="`复制命令 ${WINDOWS_PAIR_COMMANDS.register}`"
+                @click="copyCommand(WINDOWS_PAIR_COMMANDS.register)"
+              >复制</button>
+            </div>
           </li>
           <li>把码填到上方，点完成配对</li>
           <li>让本机服务保持在线</li>
@@ -68,13 +82,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import { NButton, NInput, useMessage } from 'naive-ui'
 import { apiFetch } from '@/api/http'
 import { useBindingStore } from '@/stores/binding'
 import { devicesLocation } from '@/router/navigation'
-import { WINDOWS_PAIR_COMMANDS } from '@/utils/onboarding'
+import { normalizePairCode, WINDOWS_PAIR_COMMANDS } from '@/utils/onboarding'
 
 const router = useRouter()
 const message = useMessage()
@@ -82,11 +96,19 @@ const binding = useBindingStore()
 const pairCode = ref('')
 const pairing = ref(false)
 const fieldError = ref('')
+const pairCodeModel = computed({
+  get: () => pairCode.value,
+  set: (value: string) => {
+    pairCode.value = normalizePairCode(value)
+    fieldError.value = ''
+  }
+})
 
 async function handlePair() {
   fieldError.value = ''
-  const code = pairCode.value.trim()
+  const code = normalizePairCode(pairCode.value)
   if (code.length !== 6 || pairing.value) return
+  pairCode.value = code
   pairing.value = true
   try {
     const res = await apiFetch('/api/pair/consume', {
@@ -111,6 +133,16 @@ async function handlePair() {
     fieldError.value = '配对没成功，检查网络后再试。'
   } finally {
     pairing.value = false
+  }
+}
+
+async function copyCommand(command: string) {
+  try {
+    if (!navigator.clipboard) throw new Error('clipboard unavailable')
+    await navigator.clipboard.writeText(command)
+    message.success('命令已复制')
+  } catch {
+    message.error('复制失败，请长按命令手动复制')
   }
 }
 </script>
@@ -223,17 +255,54 @@ async function handlePair() {
   margin-top: 8px;
 }
 
-.help-steps code {
-  display: block;
-  max-width: 100%;
+.command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
   margin-top: 4px;
-  padding: 7px 8px;
-  overflow-x: auto;
+}
+
+.command-row code {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  padding: 8px 9px;
   border-radius: 7px;
   color: var(--neko-primary-deep);
   background: rgba(114, 91, 157, 0.08);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
-  white-space: nowrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.command-row button {
+  min-width: 52px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid rgba(114, 91, 157, 0.2);
+  border-radius: 9px;
+  color: var(--neko-primary-deep);
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.command-row button:hover {
+  background: rgba(114, 91, 157, 0.1);
+}
+
+@media (max-width: 340px) {
+  .command-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .command-row button {
+    min-width: 68px;
+    justify-self: end;
+  }
 }
 </style>
