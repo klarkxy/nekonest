@@ -3,73 +3,75 @@
 
   <h1>NekoNest · 猫娘窝</h1>
 
-  <p><strong>在手机上，安全续写家里 Windows 电脑中已有的编码智能体线程。</strong></p>
-  <p>自托管 · PC 仅出站连接 · 原生会话存储 · 移动端 PWA</p>
+  <p><strong>Safely continue coding-agent threads that already live on your home Windows PC — from your phone.</strong></p>
+  <p>Self-hosted · PC outbound-only · Native session stores · Mobile PWA</p>
 
   <p>
-    <a href="#快速开始">快速开始</a> ·
-    <a href="#支持的智能体">支持的智能体</a> ·
-    <a href="#部署与配置">部署与配置</a> ·
-    <a href="#文档">文档</a> ·
-    <a href="#开发与验证">开发与验证</a> ·
-    <a href="#许可证">许可证</a>
+    <a href="./README.zh-CN.md">简体中文</a> ·
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#supported-agents">Agents</a> ·
+    <a href="#documentation">Docs</a> ·
+    <a href="#license">License</a>
   </p>
 </div>
 
 ---
 
-NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、消息中转与持久化；Windows Daemon 主动连接 VPS，并从各智能体的本地原生存储中发现线程；手机 PWA 用于查看历史、发送提示词和附件、接收流式输出。
+NekoNest is a self-hosted bridge: the VPS handles authentication, pairing, relay, and durability; a Windows daemon dials out to the VPS and discovers threads from each agent’s **native** local store; the phone PWA shows history, sends prompts and attachments, and streams output.
 
 > [!IMPORTANT]
-> NekoNest 只续写电脑上已经存在的线程，不在手机端远程新建线程。各智能体自己的本地存储始终是会话发现与历史记录的权威来源。
+> NekoNest only **resumes** threads that already exist on the PC. It does not create remote sessions from the phone. Each agent’s native store remains the authority for discovery and transcript history.
 
-## 工作方式
+## How it works
 
 ```text
 ┌─────────────┐       HTTPS / WSS       ┌──────────────────┐
-│  手机 PWA   │ ◄─────────────────────► │  VPS Server      │
-│ Vue 3 + PWA │                         │  Go + SQLite      │
+│  Phone PWA  │ ◄─────────────────────► │  VPS Server      │
+│ Vue 3 + PWA │                         │  Go + SQLite     │
 └─────────────┘                         └────────┬─────────┘
-                                               │ WSS
-                                               │ 由 PC 主动发起
-                                      ┌────────▼─────────┐
-                                      │ Windows Daemon   │
-                                      │ 发现 / 历史 / 执行 │
-                                      └────────┬─────────┘
-                                               │ 本地存储与 CLI
-                      ┌────────────┬───────────┼──────────┬────────────┐
-                      │Claude Code │   Codex   │   Kilo   │  Kimi CLI  │ Grok Build
-                      └────────────┴───────────┴──────────┴────────────┴───────────
+                                                 │ WSS
+                                                 │ outbound from PC
+                                        ┌────────▼─────────┐
+                                        │ Windows Daemon   │
+                                        │ discover/history │
+                                        │ journal / exec   │
+                                        └────────┬─────────┘
+                                                 │ local store + CLI
+                    ┌────────────┬───────────┬───┴──────┬────────────┐
+                    │Claude Code │   Codex   │  Kilo    │ Kimi CLI   │ Grok Build
+                    └────────────┴───────────┴──────────┴────────────┴───────────
 ```
 
-家中电脑不需要公网 IP，也不需要开放入站端口。Daemon 通过出站 WebSocket 连接 VPS；手机只访问启用 HTTPS/WSS 的 VPS。
+The home PC needs neither a public IP nor inbound ports. The daemon opens an outbound WebSocket to the VPS; the phone only talks to the HTTPS/WSS nest.
 
-## 核心能力
+## Features
 
-- **原生线程发现**：按 `目录 → 智能体 → 线程` 展示电脑上的已有会话；没有可识别目录的线程统一归入「未分类」。
-- **可靠续写**：提示词具有独立的接受、提交与失败状态，断线重连不会把“传输成功”误当作“智能体已接收”。
-- **历史与流式输出**：合并原生历史、服务端持久化记录和实时输出，并保持稳定消息标识，避免重放产生重复消息；CLI 标准错误只作为本机诊断信号，不进入对话正文。
-- **图片与文档附件**：手机上传后，由 Daemon 下载到本次任务专用临时目录，再按不同 CLI 的能力传入。
-- **移动端体验**：可安装 PWA、会话草稿、经过清理的 Markdown 渲染、断线恢复和可选 Web Push。
-- **安全默认值**：手机密钥、Daemon 注册令牌、来源校验、附件校验、消息大小限制和受控代理信任。
+- **Native thread discovery** — browse `directory → agent → thread`; orphans land in **未分类** (Uncategorized).
+- **Reliable resume** — independent accepted / committed / failed delivery states; transport success is not agent acceptance.
+- **History + streaming** — merge native history, server durability, and live output with stable message ids; CLI stderr stays diagnostic.
+- **Attachments** — phone upload → daemon per-run temp dir → agent-specific wiring (max 5 files, 4 MB each).
+- **Mobile UX** — installable PWA, drafts, sanitized Markdown, reconnect outbox, optional Web Push.
+- **Safe defaults** — phone secret, bootstrap token, origin checks, attachment validation, size limits, controlled proxy trust.
 
-## 支持的智能体
+## Supported agents
 
-| 智能体 | 本地会话来源 | 续写入口 | 附件处理 |
+| Agent | Local session source | Resume entry | Attachments |
 |---|---|---|---|
-| Claude Code | `~/.claude/projects` | `claude --resume` | 授权本次临时目录，并在提示词中提供本地路径 |
-| Codex | `~/.codex/sessions` | `codex exec resume` | 图片使用原生图片参数；其他文件通过受限目录与本地路径传入 |
-| Kilo | Kilo / OpenCode 本地数据库 | `kilo run --session` | 使用原生 `--file` 参数 |
-| Kimi CLI | `.kimi-code`，兼容 `.kimi` 旧布局 | `kimi --session` | 在提示词中提供本地路径，能否读取取决于 CLI 文件权限 |
-| Grok Build | `~/.grok/sessions` | `grok --resume` | 在提示词中提供本地路径，能否读取取决于 CLI 文件权限 |
+| Claude Code | `~/.claude/projects` | `claude --resume` | Authorize run temp dir; paths in prompt |
+| Codex | `~/.codex/sessions` | `codex exec resume` | Native image args; other files via restricted dir + paths |
+| Kilo | Kilo / OpenCode local DB | `kilo run --session` | Native `--file` |
+| Kimi CLI | `.kimi-code` (legacy `.kimi`) | `kimi --session` | Paths in prompt; CLI file permissions apply |
+| Grok Build | `~/.grok/sessions` | `grok --resume` | Paths in prompt; non-interactive safe mode |
 
-未安装某个 CLI，或本机没有该智能体的有效主线程时，不会影响其他智能体的发现与使用。
+A missing CLI or empty store for one agent does not disable the others.
 
-## 快速开始
+Wire ids: `claude_code`, `codex`, `kilo`, `kimi_cli`, `grok_build`.
 
-### 1. 在 VPS 构建并启动 Server
+## Quick start
 
-需要 Go 1.22+、Node.js 和 pnpm。公网部署还需要一个启用 HTTPS 的域名与 Caddy/Nginx。
+### 1. Build and run the server (VPS)
+
+Needs Go 1.22+, Node.js, pnpm. Public deploy also needs a TLS domain and Caddy/Nginx.
 
 ```bash
 git clone https://github.com/klarkxy/nekonest.git
@@ -82,16 +84,16 @@ pnpm build
 cd ../server
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/server
 
-export NEKONEST_PHONE_SECRET='换成足够长的随机串'
-export NEKONEST_BOOTSTRAP_TOKEN='换成另一段足够长的随机串'
+export NEKONEST_PHONE_SECRET='long-random-string'
+export NEKONEST_BOOTSTRAP_TOKEN='another-long-random-string'
 ./nekonest-server -port 8080 -data ./data -pwa ../pwa/dist
 ```
 
-用 Caddy 或 Nginx 把公网 HTTPS/WSS 反向代理到 `127.0.0.1:8080`。完整的 systemd、Caddy、Nginx 和可信代理示例见 [VPS 部署指南](docs/deploy-vps.md)。
+Terminate public HTTPS/WSS at the reverse proxy to `127.0.0.1:8080`. Full systemd/Caddy/Nginx notes: [docs/deploy-vps.md](docs/deploy-vps.md).
 
-### 2. 在 Windows 注册并运行 Daemon
+### 2. Register and run the daemon (Windows)
 
-先安装并正常使用至少一个受支持的智能体 CLI，使其本地存储中存在可续写线程。
+Install and use at least one supported agent CLI so native threads exist.
 
 ```powershell
 git clone https://github.com/klarkxy/nekonest.git
@@ -101,94 +103,81 @@ $env:CGO_ENABLED = "0"
 go build -trimpath -ldflags="-s -w" -o nekonest-daemon.exe ./cmd/daemon
 
 $env:NEKONEST_SERVER = "https://nekonest.example.com"
-$env:NEKONEST_BOOTSTRAP_TOKEN = "与 VPS 相同的注册令牌"
-.\nekonest-daemon.exe -register -name "书房电脑"
-```
-
-注册成功后，Daemon 会保存设备凭据并打印 6 位配对码。随后常驻运行：
-
-```powershell
+$env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
+.\nekonest-daemon.exe -register -name "Study PC"
 .\nekonest-daemon.exe
 ```
 
-需要新的配对码时运行 `.\nekonest-daemon.exe -pair gen`。任务计划程序开机启动示例见 [Windows Daemon 部署指南](docs/deploy-windows.md)。
+Registration writes `%USERPROFILE%\.nekonest\config.json` and prints a 6-digit pair code. New code: `.\nekonest-daemon.exe -pair gen`. Autostart: [docs/deploy-windows.md](docs/deploy-windows.md).
 
-### 3. 在手机上配对
+### 3. Pair the phone
 
-1. 打开 `https://nekonest.example.com`，输入 `NEKONEST_PHONE_SECRET`。
-2. 进入「配对电脑」，输入 Daemon 打印的 6 位配对码。
-3. 确认设备在线，按「目录 → 智能体 → 线程」进入已有线程。
-4. 发送提示词，或选择图片、TXT、Markdown、PDF、JSON 等附件后发送。
+1. Open `https://nekonest.example.com` and enter `NEKONEST_PHONE_SECRET`.
+2. **Pair computer** with the 6-digit code.
+3. Confirm the device is online; open **directory → agent → thread**.
+4. Send prompts and optional images / TXT / Markdown / PDF / JSON.
 
-发布后可按 [端到端冒烟清单](docs/e2e-smoke.md) 验收完整链路。
+Acceptance checklist: [docs/e2e-smoke.md](docs/e2e-smoke.md).
 
-## 部署与配置
+## Configuration (summary)
 
-### Server 环境变量
-
-| 变量 | 用途 |
+| Variable | Role |
 |---|---|
-| `NEKONEST_PHONE_SECRET` | 保护手机 REST 与 WebSocket；公网部署必须设置 |
-| `NEKONEST_BOOTSTRAP_TOKEN` | 保护 Daemon 注册接口；公网部署必须设置，且应与手机密钥不同 |
-| `NEKONEST_ALLOWED_ORIGINS` | 可选的浏览器来源白名单，逗号分隔 |
-| `NEKONEST_TRUST_PROXY` | 正确覆盖转发头的反向代理位于前方时设为 `1` |
-| `NEKONEST_TRUSTED_PROXY_CIDRS` | 反向代理不在 loopback 时，声明可信代理网段 |
-| `NEKONEST_VAPID_PUBLIC_KEY` | 可选 Web Push 公钥 |
-| `NEKONEST_VAPID_PRIVATE_KEY` | 可选 Web Push 私钥 |
-| `NEKONEST_VAPID_SUBJECT` | 可选 Web Push 联系地址，如 `mailto:you@example.com` |
-
-### Daemon 环境变量
-
-| 变量 | 用途 |
-|---|---|
-| `NEKONEST_SERVER` | 注册时使用的 VPS 地址，如 `https://nekonest.example.com` |
-| `NEKONEST_BOOTSTRAP_TOKEN` | 注册时发送给 VPS 的注册令牌 |
+| `NEKONEST_PHONE_SECRET` | Phone REST/WS auth (**required** on public VPS) |
+| `NEKONEST_BOOTSTRAP_TOKEN` | Daemon register gate (**required** on public VPS; ≠ phone secret) |
+| `NEKONEST_ALLOWED_ORIGINS` | Browser origin allowlist |
+| `NEKONEST_TRUST_PROXY` | `1` only behind a proxy that **overwrites** XFF |
+| `NEKONEST_TRUSTED_PROXY_CIDRS` | Trusted proxy CIDRs when proxy is not loopback |
+| `NEKONEST_VAPID_*` | Optional Web Push |
+| `NEKONEST_SERVER` | Daemon register: VPS URL |
 
 > [!WARNING]
-> 未设置 `NEKONEST_PHONE_SECRET` 时，Server 只绑定 loopback，用于本地开发。不要通过修改监听地址或代理配置把未鉴权模式暴露到公网。
+> Without `NEKONEST_PHONE_SECRET` the server binds **loopback only** for local development. Do not expose unauthenticated mode publicly.
 
-附件每次最多选择 5 个，单个文件不超过 4 MB。上传内容保存在 Server 的数据目录中，并在执行时暂存到 Windows；不要把数据目录、设备令牌、手机密钥或本地会话存储提交到版本库。
+Full flags, `config.json` fields, routes, and limits: [docs/configuration.md](docs/configuration.md). Trust model: [docs/security.md](docs/security.md).
 
-NekoNest 的 VPS 会中转并持久化设备信息、消息和附件，当前不提供端到端加密。请把 VPS 与 `data/` 目录视为敏感系统，使用 HTTPS/WSS，并限制服务器和备份的访问权限。
+The VPS relays and persists devices, messages, and attachments. **There is no end-to-end encryption.** Treat the host and `data/` as sensitive.
 
-## 文档
+## Documentation
 
-| 文档 | 用途 |
+| Doc | Purpose |
 |---|---|
-| [VPS 部署](docs/deploy-vps.md) | Server、systemd、反代与环境变量 |
-| [Windows Daemon 部署](docs/deploy-windows.md) | 注册、常驻与开机启动 |
-| [端到端冒烟清单](docs/e2e-smoke.md) | 发版 / 部署验收 |
-| [发版流程](docs/release.md) | 维护者切割版本与打 tag |
-| [变更记录](CHANGELOG.md) | 用户可见版本历史 |
-| [品牌资源](docs/brand-art.md) | 维护者重建 PWA 图标与角色立绘 |
-| [历史归档](docs/archive/) | 早期施工快照（**非**现行产品合同） |
+| [docs/README.md](docs/README.md) | Full doc index (EN + ZH links) |
+| [docs/deploy-vps.md](docs/deploy-vps.md) | Server, systemd, reverse proxy |
+| [docs/deploy-windows.md](docs/deploy-windows.md) | Daemon register, run, autostart |
+| [docs/configuration.md](docs/configuration.md) | Env, flags, limits |
+| [docs/security.md](docs/security.md) | Secrets, trust, hardening |
+| [docs/architecture.md](docs/architecture.md) | Data flow and delivery |
+| [docs/protocol.md](docs/protocol.md) | Wire types and REST/WS |
+| [docs/development.md](docs/development.md) | Local dev and tests |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common failures |
+| [docs/e2e-smoke.md](docs/e2e-smoke.md) | Deploy acceptance |
+| [docs/release.md](docs/release.md) | Maintainer release cut |
+| [docs/brand-art.md](docs/brand-art.md) | Brand asset rebuild |
+| [CHANGELOG.md](CHANGELOG.md) | User-visible history |
+| [docs/archive/](docs/archive/) | Frozen construction history (**not** the live contract) |
 
-贡献者与编码智能体请先读 [AGENTS.md](AGENTS.md)。
+简体中文: [README.zh-CN.md](README.zh-CN.md) and `docs/*.zh-CN.md`.
 
-## 项目结构
+Contributors and coding agents: start with [AGENTS.md](AGENTS.md).
+
+## Repository layout
 
 ```text
 nekonest/
-├── protocol/   # 语言无关的 JSON 协议 schema
-├── server/     # VPS 服务：认证、配对、中转、SQLite、附件与 Web Push
-├── daemon/     # Windows 服务：发现、历史、提示词日志与智能体进程控制
-├── pwa/        # Vue 3 + TypeScript + Pinia 移动端
-├── docs/       # 运维、验收、发版与历史归档
+├── protocol/   # language-neutral JSON schema
+├── server/     # VPS: auth, pair, relay, SQLite, attachments, push
+├── daemon/     # Windows: discover, history, journal, agent processes
+├── pwa/        # Vue 3 + TypeScript + Pinia mobile client
+├── docs/       # operator + contributor docs (EN + .zh-CN)
 ├── CHANGELOG.md
 ├── LICENSE / LICENSE_zh
-└── tools/      # 可复现的品牌资源构建工具
+└── tools/      # reproducible brand asset build
 ```
 
-协议类型目前手动维护。修改线协议时，需要同步检查：
+Two Go modules (`server/`, `daemon/`) and one pnpm app (`pwa/`); no root Go module. Protocol types are manual—see [docs/protocol.md](docs/protocol.md).
 
-- `protocol/protocol.json`
-- `server/internal/protocol/types.go`
-- `pwa/src/types/protocol.ts`
-- Daemon 的消息分发与各智能体适配器
-
-## 开发与验证
-
-仓库包含两个独立 Go module 和一个 pnpm 项目，没有根 Go module。
+## Development and verification
 
 ```powershell
 # Server
@@ -209,7 +198,7 @@ pnpm type-check
 pnpm build
 ```
 
-本地开发可分别运行：
+Local run sketch:
 
 ```text
 server:  go run ./cmd/server -port 8080 -pwa ../pwa/dist
@@ -217,22 +206,24 @@ daemon:  go run ./cmd/daemon
 pwa:     pnpm dev
 ```
 
-## 当前边界
+Details: [docs/development.md](docs/development.md).
 
-以下为 v0.1 稳定产品边界，不是待办清单：
+## Current boundaries (v0.1)
 
-- 手机端不创建新线程；请先在 PC 上创建。
-- 工具审批取决于各智能体的非交互 CLI 能力；无法承载时应回到 PC 处理。
-- Kimi CLI 与 Grok Build 当前只接收附件的本地路径，读取能力取决于对应 CLI 的文件权限。
-- Web Push 需要额外配置 VAPID；未配置时不发送真实推送。
-- Daemon 当前面向 Windows。
-- VPS 会中转并持久化设备信息、消息和附件，当前不提供端到端加密。
+These are stable product limits, not a todo list:
 
-## 许可证
+- Phone does not create threads; create them on the PC first.
+- Tool approval depends on each agent’s non-interactive CLI; blocked work may need the PC.
+- Kimi CLI and Grok Build receive attachment **paths** in the prompt; reads depend on CLI permissions.
+- Web Push needs VAPID; without it, no real push is sent.
+- Daemon targets **Windows**.
+- VPS stores metadata, messages, and attachments; **no E2E encryption**.
 
-本项目采用 **Star And Thank Author License (SATA) 2.0**。
+## License
 
-- 法律文本以英文 [LICENSE](LICENSE) 为准
-- 简体中文译本 [LICENSE_zh](LICENSE_zh) 仅供方便理解，不具独立法律效力
+**Star And Thank Author License (SATA) 2.0**.
 
-使用、分发或修改本软件前，请先 star 本仓库并感谢作者。
+- Legal text: English [LICENSE](LICENSE)
+- Convenience translation: [LICENSE_zh](LICENSE_zh) (not independently binding)
+
+Please star this repository and thank the author before use, distribution, or modification.

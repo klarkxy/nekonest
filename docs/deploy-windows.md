@@ -1,86 +1,133 @@
-# Windows Daemon 部署
+> English | [简体中文](./deploy-windows.zh-CN.md)
 
-## 1. 编译
+# Windows daemon deploy
+
+Run the outbound NekoNest daemon on the home PC so the phone can resume existing agent threads.
+
+Configuration reference: [configuration.md](./configuration.md).
+
+## Prerequisites
+
+- Windows PC where you already use at least one supported agent CLI
+- Existing threads in that agent’s **native** store (phone does not create threads)
+- Reachable nest URL (`https://…`) and the same `NEKONEST_BOOTSTRAP_TOKEN` as the VPS
+- Go 1.22+ if building from source
+
+Supported agents (summary):
+
+| Agent | Native store (typical) | Resume entry | Attachments |
+|---|---|---|---|
+| Claude Code | `~/.claude/projects` | `claude --resume` | Authorize temp dir; paths in prompt |
+| Codex | `~/.codex/sessions` | `codex exec resume` | Native image args; other files via restricted dir + paths |
+| Kilo | Kilo / OpenCode local DB | `kilo run --session` | Native `--file` |
+| Kimi CLI | `.kimi-code` (legacy `.kimi`) | `kimi --session` | Local paths in prompt; CLI permissions apply |
+| Grok Build | `~/.grok/sessions` | `grok --resume` | Local paths in prompt; non-interactive safe mode |
+
+Missing CLI or empty store for one agent does not disable the others.
+
+## 1. Build
 
 ```powershell
-cd daemon
-$env:CGO_ENABLED=0
+git clone https://github.com/klarkxy/nekonest.git
+Set-Location nekonest\daemon
+$env:CGO_ENABLED = "0"
 go build -trimpath -ldflags="-s -w" -o nekonest-daemon.exe ./cmd/daemon
 ```
 
-## 2. 注册到 VPS
+Place the exe somewhere stable, e.g. `D:\nekonest\bin\nekonest-daemon.exe`.
+
+## 2. Register with the VPS
 
 ```powershell
-$env:NEKONEST_SERVER="https://nekonest.example.com"
-# 与 VPS 上 NEKONEST_BOOTSTRAP_TOKEN 相同（公网注册必填）
-$env:NEKONEST_BOOTSTRAP_TOKEN="另一段长随机串"
-.\nekonest-daemon.exe -register -name "书房电脑"
+$env:NEKONEST_SERVER = "https://nekonest.example.com"
+$env:NEKONEST_BOOTSTRAP_TOKEN = "same-as-vps-bootstrap-token"
+.\nekonest-daemon.exe -register -name "Study PC"
 ```
 
-成功后会：
+On success the daemon:
 
-- 写入 `%USERPROFILE%\.nekonest\config.json`（含 device_id + token）
-- 打印 **6 位手机配对码**
+- Writes `%USERPROFILE%\.nekonest\config.json` (`server_url`, `device_id`, `token`, …)
+- Prints a **6-digit** phone pair code (short TTL, ~5 minutes)
 
-在手机 PWA「配对电脑」输入该码。
+Enter that code in the PWA under **Pair computer**.
 
-需要新配对码时：
+New code later:
 
 ```powershell
 .\nekonest-daemon.exe -pair gen
 ```
 
-## 3. 常驻运行
+Custom config path: `-config C:\path\to\config.json`.
+
+## 3. Run
 
 ```powershell
 .\nekonest-daemon.exe
 ```
 
-日志应出现 `authenticated as device_...`。
+Logs should include authentication for your `device_…` id. Only **one** process may use a given config path (`.daemon.lock`); a second instance exits.
 
-### 开机启动（任务计划程序）
+### Autostart — Task Scheduler
 
-1. 打开「任务计划程序」→ 创建基本任务  
-2. 触发器：登录时  
-3. 操作：启动程序 → `D:\path\to\nekonest-daemon.exe`  
-4. 起始于：exe 所在目录  
+1. Task Scheduler → Create Basic Task  
+2. Trigger: **At log on**  
+3. Action: start `D:\path\to\nekonest-daemon.exe`  
+4. Start in: directory containing the exe  
 
-或 PowerShell（当前用户登录时）：
+PowerShell (current user at logon):
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "D:\path\to\nekonest-daemon.exe"
+$exe = "D:\path\to\nekonest-daemon.exe"
+$action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory (Split-Path $exe)
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 Register-ScheduledTask -TaskName "NekoNestDaemon" -Action $action -Trigger $trigger -Description "NekoNest"
 ```
 
-## 4. Windows Defender 排除（自用）
+### Autostart — Startup folder fallback
 
-开发/常驻目录被误杀时：
+If Task Scheduler is restricted, create a shortcut in the user Startup folder:
+
+```text
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\
+```
+
+Point the shortcut at `nekonest-daemon.exe` with “Start in” set to the exe directory.
+
+## 4. Optional: Windows Defender exclusions
+
+Only if AV false-positives block a self-hosted binary you built:
 
 ```powershell
-# 管理员
-Add-MpPreference -ExclusionPath "D:\path\to\daemon"
+# Administrator
+Add-MpPreference -ExclusionPath "D:\path\to\daemon-or-bin"
 Add-MpPreference -ExclusionProcess "nekonest-daemon.exe"
 ```
 
-## 5. 主路径用法
+This widens local attack surface—use deliberately.
 
-1. PC 上正常使用 Claude Code、Codex、Kilo、Kimi CLI 或 Grok Build（产生线程）
-2. Daemon 每几秒 Discover，上报会话列表
-3. 手机按「目录 → 智能体 → 线程」打开已有线程，发送指令（resume）
+## 5. Day-to-day usage
 
-没有可识别工作目录的线程会进入唯一的「未分类」目录。某个目录下没有某类智能体线程时，不显示该智能体分组。
+1. On the PC, use Claude Code / Codex / Kilo / Kimi CLI / Grok Build normally so threads exist.  
+2. Daemon discovers on a short interval and reports session lists.  
+3. Phone: **directory → agent → thread**, then send prompts or attachments.  
+4. Threads without a project directory appear under **未分类**.  
+5. Approvals the non-interactive CLI cannot host must be finished on the **PC terminal**.
 
-手机端不提供远程新建线程；请先在 PC 端创建。Daemon 会按本机实际存在的会话存储自动发现，未安装或没有线程的智能体会被忽略。
+Attachment limits: max **5** files, **4 MB** each; see [configuration.md](./configuration.md).
 
-### 智能体说明
+## 6. Upgrade
 
-| 智能体 | 本地续写入口 | 备注 |
-|---|---|---|
-| Claude Code | `claude --resume` | 发现 `~/.claude/projects` |
-| Codex | `codex exec resume` | 发现 `~/.codex/sessions` |
-| Kilo | `kilo run --session` | 发现本地 Kilo/OpenCode 数据库 |
-| Kimi CLI | `kimi --session` | 兼容 `.kimi-code` 当前布局与 `.kimi` 旧布局 |
-| Grok Build | `grok --resume` | 发现 `~/.grok/sessions`；手机续写使用非交互安全模式 |
+1. Build a new `nekonest-daemon.exe`.  
+2. Stop the running daemon.  
+3. Replace the exe.  
+4. **Keep** `%USERPROFILE%\.nekonest\config.json` (and journal/lock siblings).  
+5. Start again; confirm online on the phone.  
+6. Smoke: [e2e-smoke.md](./e2e-smoke.md).
 
-非交互命令不能承载的审批不会在手机端伪装成成功；请回到 PC 终端完成。
+Changing `device_id` / `token` requires re-register (new credentials) and a process restart; hot-reload does not swap identity mid-process.
+
+## Related
+
+- [VPS deploy](./deploy-vps.md)
+- [Troubleshooting](./troubleshooting.md)
+- [Architecture](./architecture.md)

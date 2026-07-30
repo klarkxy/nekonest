@@ -27,7 +27,8 @@ Keep these product boundaries intact unless the user explicitly changes them:
 
 ## Read Before Editing
 
-1. Read `README.md` for the current product contract and repository layout.
+1. Read `README.md` (English primary) or `README.zh-CN.md` for the current
+   product contract and repository layout. Doc index: `docs/README.md`.
 2. Check `git status --short --branch` and preserve unrelated user changes.
 3. Check `codegraph status`. When the index is current, use `codegraph query`,
    `codegraph explore`, `codegraph node`, and `codegraph impact` to trace
@@ -43,6 +44,11 @@ stores as application source. Do not edit `.codegraph/codegraph.db` directly.
 Historical construction and multi-agent delivery snapshots live under
 `docs/archive/`. They are frozen records, not the current product contract.
 Verify any claim there against live code, `README.md`, and this guide.
+
+Operator and contributor docs live under `docs/`: English short paths
+(`docs/foo.md`) with Simplified Chinese mirrors (`docs/foo.zh-CN.md`). Start
+from `docs/README.md`. This file (`AGENTS.md`) and `CHANGELOG.md` remain
+English-only.
 
 Release hygiene for maintainers: `CHANGELOG.md` and `docs/release.md`.
 
@@ -64,8 +70,10 @@ Release hygiene for maintainers: `CHANGELOG.md` and `docs/release.md`.
   session state.
 - `pwa/src/utils/`: pure grouping, sorting, merging, attachment, and Markdown
   helpers.
-- `docs/`: operator deploy guides, e2e smoke, release checklist; frozen history
-  under `docs/archive/`.
+- `docs/`: operator and contributor guides (deploy, configuration, security,
+  architecture, protocol, development, troubleshooting, e2e, release); Chinese
+  mirrors as `*.zh-CN.md`; frozen history under `docs/archive/`.
+- `README.md` / `README.zh-CN.md`: product contract and quick start.
 - `CHANGELOG.md`, `LICENSE`, `LICENSE_zh`: user-visible history and SATA 2.0.
 - `tools/build_brand_assets.py`: reproducible derivation of PWA brand assets.
 
@@ -169,8 +177,8 @@ without an explicit product decision.
 - Do not commit build outputs, local databases, generated caches, packaged
   archives, secrets, or CodeGraph database files.
 - When behavior, environment variables, supported agents, deployment, or the
-  manual acceptance path changes, update `README.md` and the relevant file in
-  `docs/`.
+  manual acceptance path changes, update `README.md`, `README.zh-CN.md`, and the
+  matching English and `*.zh-CN.md` files under `docs/`.
 - Do not create commits, push branches, or rewrite history unless the user asks.
 
 ## Verification

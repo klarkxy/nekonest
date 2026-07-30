@@ -1,0 +1,53 @@
+> English | [简体中文](./README.zh-CN.md)
+
+# NekoNest documentation
+
+Live operator and contributor docs for NekoNest. Product overview: [../README.md](../README.md) · [../README.zh-CN.md](../README.zh-CN.md).
+
+English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use the `.zh-CN.md` suffix.
+
+## Start here
+
+| Doc | Description |
+|---|---|
+| [../README.md](../README.md) | Product, quick start, boundaries |
+| [deploy-vps.md](./deploy-vps.md) | Build and run the VPS server |
+| [deploy-windows.md](./deploy-windows.md) | Register and run the Windows daemon |
+| [e2e-smoke.md](./e2e-smoke.md) | Post-deploy acceptance checklist |
+| [troubleshooting.md](./troubleshooting.md) | Symptom → fix guide |
+
+## Reference
+
+| Doc | Description |
+|---|---|
+| [configuration.md](./configuration.md) | Env vars, flags, config files, limits |
+| [security.md](./security.md) | Trust model, secrets, hardening |
+| [architecture.md](./architecture.md) | Components, discovery, prompt path |
+| [protocol.md](./protocol.md) | Wire envelope, message types, REST |
+| [development.md](./development.md) | Local dev and tests |
+| [release.md](./release.md) | Maintainer release cut |
+| [brand-art.md](./brand-art.md) | Rebuild PWA brand assets |
+| [../CHANGELOG.md](../CHANGELOG.md) | User-visible history |
+| [../AGENTS.md](../AGENTS.md) | Engineering invariants (EN) |
+
+## Chinese mirrors
+
+| English | 简体中文 |
+|---|---|
+| [README.md](../README.md) | [README.zh-CN.md](../README.zh-CN.md) |
+| [deploy-vps.md](./deploy-vps.md) | [deploy-vps.zh-CN.md](./deploy-vps.zh-CN.md) |
+| [deploy-windows.md](./deploy-windows.md) | [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md) |
+| [e2e-smoke.md](./e2e-smoke.md) | [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) |
+| [configuration.md](./configuration.md) | [configuration.zh-CN.md](./configuration.zh-CN.md) |
+| [security.md](./security.md) | [security.zh-CN.md](./security.zh-CN.md) |
+| [architecture.md](./architecture.md) | [architecture.zh-CN.md](./architecture.zh-CN.md) |
+| [protocol.md](./protocol.md) | [protocol.zh-CN.md](./protocol.zh-CN.md) |
+| [development.md](./development.md) | [development.zh-CN.md](./development.zh-CN.md) |
+| [troubleshooting.md](./troubleshooting.md) | [troubleshooting.zh-CN.md](./troubleshooting.zh-CN.md) |
+| [release.md](./release.md) | [release.zh-CN.md](./release.zh-CN.md) |
+| [brand-art.md](./brand-art.md) | [brand-art.zh-CN.md](./brand-art.zh-CN.md) |
+| [README.md](./README.md) (this index) | [README.zh-CN.md](./README.zh-CN.md) |
+
+## Archive
+
+[archive/](./archive/) holds frozen construction-era snapshots. **Not** the live product contract. Verify any claim there against current code, README, and AGENTS.md.

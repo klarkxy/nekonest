@@ -1,17 +1,19 @@
-# 发版流程（维护者）
+> English | [简体中文](./release.zh-CN.md)
 
-面向仓库维护者切割版本。操作者日常部署见 [VPS 部署](deploy-vps.md) 与
-[Windows Daemon 部署](deploy-windows.md)。
+# Release process (maintainers)
 
-## 前置
+Cutting a version for the repository. Day-to-day deploy: [deploy-vps.md](./deploy-vps.md), [deploy-windows.md](./deploy-windows.md).
 
-- 工作树干净，且不含密钥、本地 `data/`、本机 agent 存储或构建产物
-- `README.md` 中的产品边界与本版 `CHANGELOG.md` 一致
-- 许可证文件 `LICENSE` / `LICENSE_zh` 仍为 SATA 2.0，Project Url 指向本仓库
+## Preconditions
 
-## 1. 验证
+- Clean worktree; no secrets, local `data/`, native agent stores, or build artifacts staged
+- [README.md](../README.md) product boundaries match this version’s [CHANGELOG.md](../CHANGELOG.md)
+- `LICENSE` / `LICENSE_zh` remain SATA 2.0; Project URL points at this repo
+- Doc index still accurate (`docs/README.md` and Chinese twin)
 
-在仓库根目录按模块执行（Windows 推荐显式命令）：
+## 1. Verify
+
+From the repo root (Windows-friendly explicit commands):
 
 ```powershell
 Set-Location server
@@ -32,41 +34,47 @@ Set-Location ..
 git diff --check
 ```
 
-行为或部署路径有变时，按 [端到端冒烟清单](e2e-smoke.md) 对真实链路做一次验收。
+If behavior or deploy paths changed, run [e2e-smoke.md](./e2e-smoke.md) on a real nest.
 
-## 2. 变更记录与版本号
+## 2. Changelog and version
 
-1. 将 `CHANGELOG.md` 中 `[Unreleased]`（若有）整理为新版本小节，并填写日期
-2. 确认 `pwa/package.json` 的 `version` 与即将打的 tag 一致（如 `0.1.0` ↔ `v0.1.0`）
-3. 若环境变量、支持的智能体、部署步骤或验收路径有变，同步 `README.md` 与 `docs/`
+1. Fold `[Unreleased]` (if any) into a new version section with a date  
+2. Align `pwa/package.json` `version` with the tag (`0.1.0` ↔ `v0.1.0`)  
+3. If env vars, agents, deploy steps, or acceptance paths changed, update **both** English and Chinese docs (`README.md` / `README.zh-CN.md`, `docs/*.md` / `docs/*.zh-CN.md`)
 
-## 3. 提交、标签与 GitHub Release
+## 3. Commit, tag, GitHub Release
 
 ```powershell
 git status --short --branch
-# 审查 diff 后提交（信息遵循仓库既有风格）
+# review diff, then commit in repo style
 
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin main
 git push origin vX.Y.Z
 
-# 将 CHANGELOG 对应版本正文写入临时 notes 文件后：
+# write CHANGELOG section body to a temp notes file, then:
 gh release create vX.Y.Z --title "vX.Y.Z" --notes-file release-notes.md
 ```
 
-v0.1.x 默认只发布源码与构建说明，不强制附带预编译二进制。Release 说明中应链接
-README 快速开始与部署文档。
+v0.1.x defaults to **source + build instructions**; prebuilt binaries are optional, not required. Release notes should link README quick start and deploy docs (EN + ZH).
 
-## 4. 可选：生产更新
+## 4. Optional: production update
 
-标签不等于已部署。需要更新自托管实例时：
+A tag is not a deploy.
 
-1. 在构建机按 README 重新编译 server 与 PWA，部署到 VPS
-2. 在 Windows 上重新编译并替换 daemon，保留 `%USERPROFILE%\.nekonest\config.json`
-3. 再跑一遍 [e2e-smoke.md](e2e-smoke.md)
+1. Rebuild server + PWA; deploy to VPS; preserve `data/`  
+2. Rebuild daemon on Windows; replace exe; preserve `%USERPROFILE%\.nekonest\config.json`  
+3. Run [e2e-smoke.md](./e2e-smoke.md) again  
 
-## 不要
+## Do not
 
-- 在含密钥或脏工作树时打 tag
-- 未经明确要求 force-push 或移动已发布 tag
-- 把 `docs/archive/` 中的施工记录当作现行产品合同
+- Tag with secrets or a dirty tree  
+- Force-push or move published tags without an explicit decision  
+- Treat `docs/archive/` as the live product contract  
+- Update only one language when operator-facing behavior changes  
+
+## Related
+
+- [CHANGELOG.md](../CHANGELOG.md)
+- [Development](./development.md)
+- [Docs index](./README.md)
