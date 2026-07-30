@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "猫娘窝 - 从手机续写家里电脑上的线团",
+  "license": "SATA-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

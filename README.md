@@ -10,7 +10,9 @@
     <a href="#快速开始">快速开始</a> ·
     <a href="#支持的智能体">支持的智能体</a> ·
     <a href="#部署与配置">部署与配置</a> ·
-    <a href="#开发与验证">开发与验证</a>
+    <a href="#文档">文档</a> ·
+    <a href="#开发与验证">开发与验证</a> ·
+    <a href="#许可证">许可证</a>
   </p>
 </div>
 
@@ -149,6 +151,20 @@ $env:NEKONEST_BOOTSTRAP_TOKEN = "与 VPS 相同的注册令牌"
 
 NekoNest 的 VPS 会中转并持久化设备信息、消息和附件，当前不提供端到端加密。请把 VPS 与 `data/` 目录视为敏感系统，使用 HTTPS/WSS，并限制服务器和备份的访问权限。
 
+## 文档
+
+| 文档 | 用途 |
+|---|---|
+| [VPS 部署](docs/deploy-vps.md) | Server、systemd、反代与环境变量 |
+| [Windows Daemon 部署](docs/deploy-windows.md) | 注册、常驻与开机启动 |
+| [端到端冒烟清单](docs/e2e-smoke.md) | 发版 / 部署验收 |
+| [发版流程](docs/release.md) | 维护者切割版本与打 tag |
+| [变更记录](CHANGELOG.md) | 用户可见版本历史 |
+| [品牌资源](docs/brand-art.md) | 维护者重建 PWA 图标与角色立绘 |
+| [历史归档](docs/archive/) | 早期施工快照（**非**现行产品合同） |
+
+贡献者与编码智能体请先读 [AGENTS.md](AGENTS.md)。
+
 ## 项目结构
 
 ```text
@@ -157,7 +173,9 @@ nekonest/
 ├── server/     # VPS 服务：认证、配对、中转、SQLite、附件与 Web Push
 ├── daemon/     # Windows 服务：发现、历史、提示词日志与智能体进程控制
 ├── pwa/        # Vue 3 + TypeScript + Pinia 移动端
-├── docs/       # 部署与端到端验收文档
+├── docs/       # 运维、验收、发版与历史归档
+├── CHANGELOG.md
+├── LICENSE / LICENSE_zh
 └── tools/      # 可复现的品牌资源构建工具
 ```
 
@@ -201,8 +219,20 @@ pwa:     pnpm dev
 
 ## 当前边界
 
+以下为 v0.1 稳定产品边界，不是待办清单：
+
 - 手机端不创建新线程；请先在 PC 上创建。
 - 工具审批取决于各智能体的非交互 CLI 能力；无法承载时应回到 PC 处理。
 - Kimi CLI 与 Grok Build 当前只接收附件的本地路径，读取能力取决于对应 CLI 的文件权限。
 - Web Push 需要额外配置 VAPID；未配置时不发送真实推送。
 - Daemon 当前面向 Windows。
+- VPS 会中转并持久化设备信息、消息和附件，当前不提供端到端加密。
+
+## 许可证
+
+本项目采用 **Star And Thank Author License (SATA) 2.0**。
+
+- 法律文本以英文 [LICENSE](LICENSE) 为准
+- 简体中文译本 [LICENSE_zh](LICENSE_zh) 仅供方便理解，不具独立法律效力
+
+使用、分发或修改本软件前，请先 star 本仓库并感谢作者。

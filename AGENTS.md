@@ -40,9 +40,11 @@ Do not treat `_archive/`, `go-sdk/`, `gocache/`, `.pnpm-store/`, `bin/`,
 `data/`, built PWA output, archives, databases, coverage files, or local agent
 stores as application source. Do not edit `.codegraph/codegraph.db` directly.
 
-`tasks/plan.md`, `tasks/todo.md`, and older review reports are historical
-delivery records. Verify their claims against the live code before relying on
-them.
+Historical construction and multi-agent delivery snapshots live under
+`docs/archive/`. They are frozen records, not the current product contract.
+Verify any claim there against live code, `README.md`, and this guide.
+
+Release hygiene for maintainers: `CHANGELOG.md` and `docs/release.md`.
 
 ## Repository Map
 
@@ -62,7 +64,9 @@ them.
   session state.
 - `pwa/src/utils/`: pure grouping, sorting, merging, attachment, and Markdown
   helpers.
-- `docs/`: deployment and manual end-to-end acceptance instructions.
+- `docs/`: operator deploy guides, e2e smoke, release checklist; frozen history
+  under `docs/archive/`.
+- `CHANGELOG.md`, `LICENSE`, `LICENSE_zh`: user-visible history and SATA 2.0.
 - `tools/build_brand_assets.py`: reproducible derivation of PWA brand assets.
 
 There are two independent Go modules (`server/go.mod` and `daemon/go.mod`) and

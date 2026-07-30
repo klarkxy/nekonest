@@ -15,7 +15,7 @@ PWA：
 
 ```bash
 cd pwa
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 # 产物在 pwa/dist
 ```

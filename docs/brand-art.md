@@ -1,5 +1,8 @@
 # NekoNest generated brand art
 
+Maintainer note: production brand and agent assets already ship under
+`pwa/public`. Rebuild only when replacing source art.
+
 The production mascot and agent portraits are original `gpt-image-2` outputs
 generated through the user-approved DragTokens image endpoint on 2026-07-28.
 No API key is stored in this repository.
