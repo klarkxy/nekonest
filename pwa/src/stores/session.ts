@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import type { AgentSession, SessionMessage } from '@/types/protocol'
 import { nekoWS } from '@/api/websocket'
 import { apiFetch } from '@/api/http'
+import { tGlobal } from '@/i18n'
 import { mergeHistoryLists, upsertMessageList } from '@/utils/messageMerge'
 
 export const MAX_OUTBOX = 40
@@ -226,7 +227,7 @@ export const useSessionStore = defineStore('sessions', () => {
     it.status = sent ? 'sending' : 'queued'
     delete it.error
     if (!persistOutboxItem(it)) {
-      lastError.value = '待发消息没存住，先别关页面'
+      lastError.value = tGlobal('errors.outboxPersist')
     }
     patchDeliveryMessage(it.clientMsgId, it.status)
     if (sent && scheduleAck) {
@@ -294,7 +295,7 @@ export const useSessionStore = defineStore('sessions', () => {
   function restoreOutboxMessages(deviceId: string, sessionId: string) {
     for (const it of outbox.values()) {
       if (it.deviceId !== deviceId || it.sessionId !== sessionId) continue
-      const display = it.prompt || `(发送了 ${it.attachments?.length || 0} 个附件)`
+      const display = it.prompt || tGlobal('outbox.attachmentsOnly', { n: it.attachments?.length || 0 })
       upsertMessage({
         id: it.clientMsgId,
         role: 'user',
@@ -382,7 +383,7 @@ export const useSessionStore = defineStore('sessions', () => {
         ) {
           upsertMessage(sessionMessage)
           if (sessionMessage.type === 'error') {
-            lastError.value = sessionMessage.content.trim() || '猫娘这边出错了'
+            lastError.value = sessionMessage.content.trim() || tGlobal('errors.agentError')
             importing.value = false
             streaming.value = false
             stopStreamPoll()
@@ -529,13 +530,13 @@ export const useSessionStore = defineStore('sessions', () => {
     retryAllowed: boolean
   ) {
     if (!retryAllowed) {
-      return '结果不确定，为避免重复已关掉重试'
+      return tGlobal('errors.ambiguousNoRetry')
     }
     const raw = payload.message || payload.error || payload.reason || ''
     if (/already running|still running/i.test(raw)) {
-      return '猫娘还在处理上一条，结束后再重试'
+      return tGlobal('errors.busyRetry')
     }
-    return raw || '猫娘没接下这条指令'
+    return raw || tGlobal('errors.promptRejected')
   }
 
   function stopForTerminalHistoryError(hist: SessionMessage[]) {
@@ -554,7 +555,7 @@ export const useSessionStore = defineStore('sessions', () => {
       0
     )
     if (latestError.timestamp <= latestUserTimestamp) return
-    lastError.value = latestError.content.trim() || '猫娘这边出错了'
+    lastError.value = latestError.content.trim() || tGlobal('errors.agentError')
     importing.value = false
     streaming.value = false
     stopStreamPoll()
@@ -573,7 +574,7 @@ export const useSessionStore = defineStore('sessions', () => {
       syncOutboxFromStorage()
       if (session.device_id && activeDeviceId && session.device_id !== activeDeviceId) {
         // Refuse to open a session from another device while subscribed elsewhere.
-        lastError.value = '这条线团属于别的电脑，请先回去换猫窝'
+        lastError.value = tGlobal('errors.wrongDevice')
         currentSession.value = null
         return
       }
@@ -601,7 +602,7 @@ export const useSessionStore = defineStore('sessions', () => {
         const history = (data.messages as SessionMessage[]) || []
         mergeHistory(history)
       } else {
-        lastError.value = `历史没叼回来（${res.status}）`
+        lastError.value = tGlobal('errors.historyStatus', { status: res.status })
       }
     } catch (err) {
       console.warn('[session] rest history failed:', err)
@@ -719,19 +720,19 @@ export const useSessionStore = defineStore('sessions', () => {
     lastError.value = null
     const atts = attachments?.filter(a => a?.url) || []
     if (!prompt.trim() && atts.length === 0) {
-      lastError.value = '先说点什么，或塞个附件'
+      lastError.value = tGlobal('errors.emptyPrompt')
       return false
     }
     const isCurrentSessionBusy =
       currentSession.value?.id === sessionId &&
       (currentSession.value.status === 'running' || streaming.value)
     if (isCurrentSessionBusy && nekoWS().isConnected()) {
-      lastError.value = '猫娘还在处理上一条，结束后再发送'
+      lastError.value = tGlobal('errors.busySend')
       return false
     }
     syncOutboxFromStorage()
     if (outbox.size >= MAX_OUTBOX) {
-      lastError.value = `待发已满（${MAX_OUTBOX} 条），等前面的确认后再发`
+      lastError.value = tGlobal('errors.outboxFull', { n: MAX_OUTBOX })
       return false
     }
     // Stable wire id (msg_*) — server persists it; not "optimistic-only" prefix.
@@ -748,12 +749,12 @@ export const useSessionStore = defineStore('sessions', () => {
       createdAt: Math.floor(Date.now() / 1000)
     }
     if (!persistOutboxItem(item)) {
-      lastError.value = '浏览器存不下待发消息，清点空间后再试'
+      lastError.value = tGlobal('errors.outboxStorage')
       return false
     }
     outbox.set(clientMsgId, item)
 
-    const display = trimmed || `(发送了 ${atts.length} 个附件)`
+    const display = trimmed || tGlobal('outbox.attachmentsOnly', { n: atts.length })
     upsertMessage({
       id: clientMsgId,
       role: 'user',
@@ -767,7 +768,7 @@ export const useSessionStore = defineStore('sessions', () => {
     })
     const sent = sendOutboxItem(item)
     if (!sent) {
-      lastError.value = '通道还没通，消息已排队，接通后会自动送出'
+      lastError.value = tGlobal('errors.channelQueued')
     }
     return true
   }
@@ -782,11 +783,11 @@ export const useSessionStore = defineStore('sessions', () => {
     const item = outbox.get(clientMsgId)
     if (!item || item.status !== 'failed') return false
     if (!item.retryAllowed) {
-      lastError.value = '结果不确定，为避免重复已关掉重试'
+      lastError.value = tGlobal('errors.ambiguousNoRetry')
       return false
     }
     if (!nekoWS().isConnected()) {
-      lastError.value = '通道还没通，接通后再重试'
+      lastError.value = tGlobal('errors.channelRetry')
       return false
     }
     item.status = 'queued'
@@ -797,7 +798,7 @@ export const useSessionStore = defineStore('sessions', () => {
     persistOutboxItem(item)
     const sent = sendOutboxItem(item, true)
     if (!sent) {
-      const failure = '通道又断了，接通后再点重试'
+      const failure = tGlobal('errors.channelDropped')
       item.status = 'failed'
       item.error = failure
       persistOutboxItem(item)
@@ -815,7 +816,7 @@ export const useSessionStore = defineStore('sessions', () => {
       timestamp: Math.floor(Date.now() / 1000),
       payload: { approval_id: approvalId }
     })
-    if (!ok) lastError.value = '通道还没通，没法代传审批'
+    if (!ok) lastError.value = tGlobal('errors.channelApprove')
     return ok
   }
 
@@ -827,7 +828,7 @@ export const useSessionStore = defineStore('sessions', () => {
       timestamp: Math.floor(Date.now() / 1000),
       payload: { approval_id: approvalId }
     })
-    if (!ok) lastError.value = '通道还没通，没法代传拒绝'
+    if (!ok) lastError.value = tGlobal('errors.channelReject')
     return ok
   }
 
@@ -839,7 +840,7 @@ export const useSessionStore = defineStore('sessions', () => {
       timestamp: Math.floor(Date.now() / 1000),
       payload: {}
     })
-    if (!ok) lastError.value = '通道还没通，没法中断'
+    if (!ok) lastError.value = tGlobal('errors.channelInterrupt')
     return ok
   }
 

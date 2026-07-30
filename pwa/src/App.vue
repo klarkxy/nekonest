@@ -1,8 +1,11 @@
 <template>
-  <n-config-provider :theme="null" :theme-overrides="nekoThemeOverrides">
+  <n-config-provider
+    :theme="naiveTheme"
+    :theme-overrides="themeOverrides"
+  >
     <n-message-provider>
       <div class="nekonest-app">
-        <a class="skip-link" href="#main-content">跳到主内容</a>
+        <a class="skip-link" href="#main-content">{{ t('brand.skipToContent') }}</a>
         <div class="neko-atmosphere" aria-hidden="true">
           <span class="ambient-orb ambient-orb--rose"></span>
           <span class="ambient-orb ambient-orb--violet"></span>
@@ -20,6 +23,45 @@
 </template>
 
 <script setup lang="ts">
-import { NConfigProvider, NMessageProvider } from 'naive-ui'
-import { nekoThemeOverrides } from './styles/theme'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { darkTheme, NConfigProvider, NMessageProvider } from 'naive-ui'
+import {
+  nekoThemeOverrides,
+  nekoThemeOverridesDark
+} from './styles/theme'
+import {
+  applyTheme,
+  getThemePreference,
+  resolveTheme,
+  watchSystemTheme,
+  type ResolvedTheme
+} from './i18n/theme'
+
+const { t } = useI18n()
+const resolved = ref<ResolvedTheme>(resolveTheme(getThemePreference()))
+
+const naiveTheme = computed(() => (resolved.value === 'dark' ? darkTheme : null))
+const themeOverrides = computed(() =>
+  resolved.value === 'dark' ? nekoThemeOverridesDark : nekoThemeOverrides
+)
+
+let stopWatch: (() => void) | undefined
+
+onMounted(() => {
+  resolved.value = applyTheme()
+  stopWatch = watchSystemTheme((next) => {
+    resolved.value = next
+  })
+  window.addEventListener('nekonest-theme', onThemeEvent as EventListener)
+})
+
+onUnmounted(() => {
+  stopWatch?.()
+  window.removeEventListener('nekonest-theme', onThemeEvent as EventListener)
+})
+
+function onThemeEvent() {
+  resolved.value = resolveTheme(getThemePreference())
+}
 </script>

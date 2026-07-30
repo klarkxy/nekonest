@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getPhoneSecret } from '../api/http'
 import { appRoutes } from './routes'
+import { routePageTitle, setDocumentTitle } from './title'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -23,19 +24,13 @@ router.beforeEach((to) => {
 })
 
 router.afterEach((to) => {
-  const pageTitle =
-    to.name === 'devices'
-      ? '猫娘窝'
-      : to.name === 'device-detail'
-        ? '工作目录'
-        : to.name === 'session-detail'
-          ? '线团'
-          : to.name === 'pair'
-            ? '配对电脑'
-            : to.name === 'setup'
-              ? '手机钥匙'
-              : ''
-  document.title = pageTitle ? `${pageTitle} · 猫娘窝` : '猫娘窝'
+  if (to.name === 'session-detail' || to.name === 'device-detail') {
+    // Views set a richer title after data loads.
+    setDocumentTitle(routePageTitle(to.name))
+    return
+  }
+  setDocumentTitle(routePageTitle(to.name))
 })
 
+export { routePageTitle, setDocumentTitle }
 export default router

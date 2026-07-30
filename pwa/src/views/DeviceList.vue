@@ -2,23 +2,23 @@
   <div class="device-list-page">
     <header class="brand-hero">
       <div class="brand-copy">
-        <p class="eyebrow">猫娘值守中</p>
+        <p class="eyebrow">{{ t('deviceList.eyebrow') }}</p>
         <h1>
-          猫娘窝
-          <span>NekoNest</span>
+          {{ t('brand.name') }}
+          <span>{{ t('brand.nameEn') }}</span>
         </h1>
-        <p class="brand-intro">回到熟悉的工作目录，继续家里已经开着的线团。</p>
+        <p class="brand-intro">{{ t('deviceList.intro') }}</p>
       </div>
 
       <figure class="mascot-stage">
         <span class="mascot-glow" aria-hidden="true"></span>
         <img
           src="/brand/nekonest-duo.webp"
-          alt="NekoNest 的两位原创猫娘看板娘"
+          :alt="t('brand.duoAlt')"
           width="132"
           height="132"
         />
-        <figcaption>双猫值守中</figcaption>
+        <figcaption>{{ t('brand.duoCaption') }}</figcaption>
       </figure>
     </header>
 
@@ -28,7 +28,7 @@
         'connection-panel--connected': connection.tone === 'connected',
         'connection-panel--error': connection.tone === 'error'
       }"
-      aria-label="连接状态"
+      :aria-label="t('deviceList.connectionAria')"
       aria-live="polite"
     >
       <div class="connection-copy">
@@ -46,27 +46,27 @@
         :disabled="deviceStore.loading"
         @click="retryDevices"
       >
-        {{ deviceStore.loading ? '重试中…' : '重试' }}
+        {{ deviceStore.loading ? t('common.retrying') : t('common.retry') }}
       </button>
-      <RouterLink v-else class="connection-action" :to="setupLocation()">钥匙设置</RouterLink>
+      <RouterLink v-else class="connection-action" :to="setupLocation()">{{ t('deviceList.keySettings') }}</RouterLink>
     </section>
 
     <div v-if="deviceStore.authError" class="auth-banner" role="alert">
-      <strong>进不了猫窝。</strong>
-      <span>请重新设置手机钥匙，并确认与部署时记下的那串一致。</span>
+      <strong>{{ t('deviceList.authTitle') }}</strong>
+      <span>{{ t('deviceList.authBody') }}</span>
     </div>
 
     <section class="device-section" aria-labelledby="device-section-title">
       <div class="section-heading">
         <div>
-          <p class="section-kicker">你的猫窝</p>
-          <h2 id="device-section-title">选择一台电脑</h2>
+          <p class="section-kicker">{{ t('deviceList.sectionKicker') }}</p>
+          <h2 id="device-section-title">{{ t('deviceList.sectionTitle') }}</h2>
         </div>
-        <span class="device-total">{{ visibleDevices.length }} 台</span>
+        <span class="device-total">{{ t('deviceList.deviceCount', { n: visibleDevices.length }) }}</span>
       </div>
 
       <div v-if="deviceStore.loading && visibleDevices.length === 0" class="device-skeletons" role="status">
-        <span class="sr-only">正在读取电脑列表</span>
+        <span class="sr-only">{{ t('deviceList.loadingList') }}</span>
         <div v-for="index in 2" :key="index" class="device-skeleton" aria-hidden="true">
           <span class="skeleton-line skeleton-line--title"></span>
           <span class="skeleton-line skeleton-line--meta"></span>
@@ -75,10 +75,10 @@
 
       <div v-else-if="deviceStore.loadError" class="load-failure" role="alert">
         <span class="load-failure__mark" aria-hidden="true">↻</span>
-        <h3>电脑列表没读到</h3>
+        <h3>{{ t('deviceList.loadFailureTitle') }}</h3>
         <p>{{ deviceStore.loadError }}</p>
         <button type="button" :disabled="deviceStore.loading" @click="retryDevices">
-          {{ deviceStore.loading ? '正在重连…' : '重新连接' }}
+          {{ deviceStore.loading ? t('common.reconnecting') : t('common.reconnect') }}
         </button>
       </div>
 
@@ -92,7 +92,10 @@
             class="device-entry"
             :class="{ 'device-entry--offline': device.status !== 'online' }"
             :to="deviceDetailLocation(device.id)"
-            :aria-label="`打开 ${device.name}，${device.status === 'online' ? '在线' : '离线'}`"
+            :aria-label="t('deviceList.openDevice', {
+              name: device.name,
+              status: device.status === 'online' ? t('common.online') : t('common.offline')
+            })"
             @click="onOpenDevice(device)"
           >
             <span class="device-entry__accent" aria-hidden="true"></span>
@@ -103,9 +106,9 @@
               </span>
               <span class="device-entry__meta">
                 <span class="status-dot" :class="device.status" aria-hidden="true"></span>
-                <span>{{ device.status === 'online' ? '在线' : '离线' }}</span>
+                <span>{{ device.status === 'online' ? t('common.online') : t('common.offline') }}</span>
                 <span class="meta-divider" aria-hidden="true"></span>
-                <span class="agent-count">{{ device.active_agents }} 位猫娘</span>
+                <span class="agent-count">{{ t('deviceList.threadCount', { n: device.active_agents }) }}</span>
               </span>
             </span>
             <span class="device-arrow" aria-hidden="true">›</span>
@@ -114,10 +117,10 @@
             v-if="binding.boundIds.has(device.id)"
             type="button"
             class="unbind-btn"
-            :aria-label="`把 ${device.name} 移出手机猫窝`"
+            :aria-label="t('deviceList.unbindAria', { name: device.name })"
             @click="confirmUnbind(device)"
           >
-            移出
+            {{ t('deviceList.unbind') }}
           </button>
         </article>
 
@@ -129,17 +132,19 @@
             height="88"
             aria-hidden="true"
           />
-          <h3>还没有配对的电脑</h3>
-          <p>在家里电脑上生成配对码，这里就会出现它的工作目录和线团。</p>
-          <RouterLink class="empty-pair-link" :to="pairLocation()">去配对</RouterLink>
+          <h3>{{ t('deviceList.emptyTitle') }}</h3>
+          <p>{{ t('deviceList.emptyBody') }}</p>
+          <RouterLink class="empty-pair-link" :to="pairLocation()">{{ t('deviceList.emptyPair') }}</RouterLink>
         </div>
       </div>
     </section>
 
-    <nav class="bottom-dock" aria-label="电脑操作">
+    <LocaleThemeBar class="list-prefs" />
+
+    <nav class="bottom-dock" :aria-label="t('deviceList.dockAria')">
       <RouterLink class="dock-pair" :to="pairLocation()">
         <span class="add-mark" aria-hidden="true">＋</span>
-        配对新电脑
+        {{ t('deviceList.pairNew') }}
       </RouterLink>
     </nav>
   </div>
@@ -147,8 +152,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
 import { useMessage } from 'naive-ui'
+import LocaleThemeBar from '@/components/LocaleThemeBar.vue'
 import { useDeviceStore } from '@/stores/device'
 import { useBindingStore } from '@/stores/binding'
 import {
@@ -159,6 +166,7 @@ import {
 import type { Device } from '@/types/protocol'
 import { selectVisibleDevices } from '@/utils/deviceVisibility'
 
+const { t } = useI18n()
 const message = useMessage()
 const deviceStore = useDeviceStore()
 const binding = useBindingStore()
@@ -173,21 +181,21 @@ const visibleDevices = computed(() =>
 
 const connection = computed(() => {
   if (deviceStore.authError) {
-    return { tone: 'error', dot: 'offline', label: '手机钥匙对不上' } as const
+    return { tone: 'error', dot: 'offline', label: t('deviceList.connAuth') } as const
   }
   if (deviceStore.loadError) {
-    return { tone: 'error', dot: 'offline', label: '猫窝服务器连接失败' } as const
+    return { tone: 'error', dot: 'offline', label: t('deviceList.connServerFail') } as const
   }
   if (!deviceStore.loaded || deviceStore.loading) {
-    return { tone: 'waiting', dot: 'waiting', label: '正在检查猫窝服务器…' } as const
+    return { tone: 'waiting', dot: 'waiting', label: t('deviceList.connChecking') } as const
   }
   if (deviceStore.connected) {
-    return { tone: 'connected', dot: 'online', label: '猫窝实时通道已接通' } as const
+    return { tone: 'connected', dot: 'online', label: t('deviceList.connLive') } as const
   }
   if (visibleDevices.value.length === 0) {
-    return { tone: 'connected', dot: 'online', label: '猫窝服务器已接通' } as const
+    return { tone: 'connected', dot: 'online', label: t('deviceList.connServerOk') } as const
   }
-  return { tone: 'waiting', dot: 'waiting', label: '服务器已接通，实时通道重连中…' } as const
+  return { tone: 'waiting', dot: 'waiting', label: t('deviceList.connWsReconnect') } as const
 })
 
 onMounted(() => {
@@ -204,12 +212,10 @@ function onOpenDevice(device: Device) {
 }
 
 function confirmUnbind(device: Device) {
-  const ok = window.confirm(
-    `把「${device.name}」移出这台手机？\n不会关掉家里的电脑，只是手机不再记住它。`
-  )
+  const ok = window.confirm(t('deviceList.unbindConfirm', { name: device.name }))
   if (!ok) return
   binding.removeBinding(device.id)
-  message.success('已从手机移出')
+  message.success(t('deviceList.unbindSuccess'))
 }
 
 function osLabel(os: string): string {
@@ -217,7 +223,7 @@ function osLabel(os: string): string {
   if (normalized === 'windows') return 'Windows'
   if (normalized === 'darwin' || normalized === 'macos') return 'macOS'
   if (normalized === 'linux') return 'Linux'
-  return os || '电脑'
+  return os || t('common.computer')
 }
 </script>
 
@@ -245,12 +251,15 @@ function osLabel(os: string): string {
 .eyebrow,
 .section-kicker {
   margin: 0;
-  color: var(--neko-rose);
-  font-size: 10px;
+  color: var(--neko-primary-deep);
+  font-size: 12px;
   font-weight: 750;
-  letter-spacing: 0.13em;
+  letter-spacing: 0.04em;
   line-height: 1.4;
-  text-transform: uppercase;
+}
+
+.list-prefs {
+  margin-bottom: 12px;
 }
 
 .brand-copy h1 {
@@ -332,7 +341,7 @@ function osLabel(os: string): string {
   color: var(--neko-primary-deep);
   background: rgba(247, 239, 251, 0.94);
   box-shadow: 0 5px 12px rgba(91, 67, 90, 0.1);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -587,7 +596,7 @@ function osLabel(os: string): string {
   border-radius: 6px;
   color: var(--neko-primary-deep);
   background: var(--neko-primary-soft);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.035em;
 }

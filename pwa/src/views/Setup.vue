@@ -3,26 +3,25 @@
     <img
       class="logo"
       src="/brand/nekonest-duo.webp"
-      alt=""
+      :alt="t('brand.duoAlt')"
       width="88"
       height="88"
-      aria-hidden="true"
     />
-    <h1>猫娘窝</h1>
-    <p class="desc">进窝前，请输入与部署时相同的手机钥匙。</p>
+    <h1>{{ t('setup.title') }}</h1>
+    <p class="desc">{{ t('setup.desc') }}</p>
 
-    <label class="field-label" for="phone-secret">手机钥匙</label>
+    <label class="field-label" for="phone-secret">{{ t('setup.secretLabel') }}</label>
     <n-input
-      id="phone-secret"
       v-model:value="secret"
       type="password"
       name="password"
       autocomplete="current-password"
       show-password-on="click"
-      placeholder="粘贴手机钥匙…"
+      :placeholder="t('setup.placeholder')"
       size="large"
       class="secret-input"
       aria-describedby="secret-hint"
+      :input-props="{ id: 'phone-secret' }"
     />
 
     <n-button
@@ -32,23 +31,28 @@
       size="large"
       :disabled="!secret.trim()"
     >
-      进入猫窝
+      {{ t('setup.enter') }}
     </n-button>
 
     <p id="secret-hint" class="hint">
-      钥匙是部署猫窝时记下的那串访问口令。仅在家里调试、未设置钥匙时，可随便填一个字符进入。
+      {{ t('setup.hint') }}
     </p>
+
+    <LocaleThemeBar />
   </form>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { NButton, NInput } from 'naive-ui'
 import { setPhoneSecret, getPhoneSecret } from '@/api/http'
+import LocaleThemeBar from '@/components/LocaleThemeBar.vue'
 import { devicesLocation } from '@/router/navigation'
 import { normalizePhoneSecret } from '@/utils/onboarding'
 
+const { t } = useI18n()
 const router = useRouter()
 const secret = ref(getPhoneSecret())
 

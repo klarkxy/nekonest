@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { tGlobal } from '@/i18n'
 import type { NekoMessage } from '@/types/protocol'
 
 const harness = vi.hoisted(() => ({
@@ -137,7 +138,7 @@ describe('session prompt outbox', () => {
     }
 
     expect(store.sendPrompt('device-a', 'session-a', '再来一条')).toBe(false)
-    expect(store.lastError).toBe('猫娘还在处理上一条，结束后再发送')
+    expect(store.lastError).toBe(tGlobal('errors.busySend'))
     expect(store.messages).toHaveLength(0)
     expect(harness.sent).toHaveLength(0)
     store.cleanup()
@@ -236,10 +237,8 @@ describe('session prompt outbox', () => {
       }
     })
 
-    expect(store.lastError).toBe('猫娘还在处理上一条，结束后再重试')
-    expect(store.messages[0].metadata?.delivery_error).toBe(
-      '猫娘还在处理上一条，结束后再重试'
-    )
+    expect(store.lastError).toBe(tGlobal('errors.busyRetry'))
+    expect(store.messages[0].metadata?.delivery_error).toBe(tGlobal('errors.busyRetry'))
     store.cleanup()
   })
 
@@ -508,7 +507,7 @@ describe('session prompt outbox', () => {
 
     expect(store.sendPrompt('device-a', 'session-a', 'must not disappear')).toBe(false)
     expect(store.messages).toHaveLength(0)
-    expect(store.lastError).toContain('存不下待发')
+    expect(store.lastError).toBe(tGlobal('errors.outboxStorage'))
     expect(errorSpy).toHaveBeenCalled()
   })
 
@@ -637,9 +636,7 @@ describe('session prompt outbox', () => {
     })
     expect(store.messages[0].metadata?.delivery_status).toBe('failed')
     expect(store.messages[0].metadata?.delivery_retry_allowed).toBe(false)
-    expect(store.messages[0].metadata?.delivery_error).toBe(
-      '结果不确定，为避免重复已关掉重试'
-    )
+    expect(store.messages[0].metadata?.delivery_error).toBe(tGlobal('errors.ambiguousNoRetry'))
     expect(store.retryPrompt(clientMsgId)).toBe(false)
     expect(sentPrompts()).toHaveLength(1)
 

@@ -1,63 +1,65 @@
 <template>
   <div class="session-detail-page">
     <header class="page-header">
-      <RouterLink
-        class="back-link"
-        :to="deviceDetailLocation(deviceId)"
-        aria-label="返回工作目录"
-      >← 返回</RouterLink>
-      <img
-        class="header-agent-avatar"
-        :src="agentMeta.avatar"
-        alt=""
-        width="34"
-        height="34"
-        :style="{ borderColor: agentMeta.color }"
-        @load="onAgentAvatarLoad"
-        @error="onAgentAvatarError"
-      />
-      <div class="header-mid">
-        <h1>{{ agentLabelText }}</h1>
-        <div v-if="projectLine" class="header-project" :title="projectLine.path">
-          {{ projectLine.name }}
+      <div class="header-row header-row--primary">
+        <RouterLink
+          class="back-link"
+          :to="deviceDetailLocation(deviceId)"
+          :aria-label="t('common.backWorkspaces')"
+        >{{ t('common.back') }}</RouterLink>
+        <img
+          class="header-agent-avatar"
+          :src="agentMeta.avatar"
+          alt=""
+          width="34"
+          height="34"
+          :style="{ borderColor: agentMeta.color }"
+          @load="onAgentAvatarLoad"
+          @error="onAgentAvatarError"
+        />
+        <div class="header-mid">
+          <h1>{{ agentLabelText }}</h1>
+          <div v-if="projectLine" class="header-project" :title="projectLine.path || projectLine.name">
+            {{ projectBaseName(projectLine.name || projectLine.path) }}
+          </div>
         </div>
+        <button
+          v-if="canInterrupt"
+          type="button"
+          class="interrupt-btn"
+          :disabled="sessionStore.wsStatus !== 'connected'"
+          :aria-label="t('session.interruptAria')"
+          @click="handleInterrupt"
+        >{{ t('session.interrupt') }}</button>
       </div>
-      <span
-        v-if="showHeaderActivity"
-        class="thread-state-pill"
-        :class="`thread-state-pill--${threadActivity.tone}`"
-        :title="threadActivity.detail"
-        aria-hidden="true"
-      >
-        <span class="thread-state-label">{{ threadActivity.label }}</span>
-      </span>
-      <span
-        class="sr-only"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >{{ liveStatusText }}</span>
-      <span
-        v-if="sessionStore.wsStatus !== 'connected'"
-        class="ws-pill"
-        :class="sessionStore.wsStatus"
-        aria-hidden="true"
-      >{{ wsLabel }}</span>
-      <n-button
-        v-if="canInterrupt"
-        size="tiny"
-        quaternary
-        :disabled="sessionStore.wsStatus !== 'connected'"
-        aria-label="中断当前任务"
-        @click="handleInterrupt"
-      >中断</n-button>
+      <div class="header-row header-row--meta">
+        <span
+          v-if="showHeaderActivity && !showActivityBanner && !hasPendingApproval"
+          class="thread-state-pill"
+          :class="`thread-state-pill--${threadActivity.tone}`"
+          :title="threadActivity.detail"
+        >
+          <span class="thread-state-label">{{ threadActivity.label }}</span>
+        </span>
+        <span
+          v-if="sessionStore.wsStatus !== 'connected'"
+          class="ws-pill"
+          :class="sessionStore.wsStatus"
+        >{{ wsLabel }}</span>
+        <span
+          class="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >{{ liveStatusText }}</span>
+      </div>
     </header>
 
     <section
       v-if="showActivityBanner"
       class="thread-activity"
       :class="`thread-activity--${threadActivity.tone}`"
-      aria-hidden="true"
+      role="status"
     >
       <span class="thread-activity-copy">
         <strong>{{ threadActivity.headline }}</strong>
@@ -72,7 +74,7 @@
       aria-live="polite"
       aria-atomic="true"
     >
-      <div class="approval-title">等电脑点头</div>
+      <div class="approval-title">{{ t('session.approvalTitle') }}</div>
       <div class="approval-tool">{{ sessionStore.currentSession.pending_approval.tool_name }}</div>
       <div
         v-if="sessionStore.currentSession.pending_approval.description"
@@ -82,7 +84,7 @@
         v-if="approvalParamsText"
         class="approval-params"
       >{{ approvalParamsText }}</pre>
-      <p class="approval-note">请到家里电脑的终端批准或拒绝。手机不能代点。</p>
+      <p class="approval-note">{{ t('session.approvalNote') }}</p>
     </div>
 
     <div
@@ -91,7 +93,7 @@
       role="log"
       aria-live="polite"
       aria-relevant="additions text"
-      aria-label="线团消息"
+      :aria-label="t('session.messagesAria')"
       tabindex="0"
     >
       <div
@@ -127,7 +129,7 @@
               >
                 <img
                   :src="a.url"
-                  :alt="a.name || '图片附件'"
+                  :alt="a.name || t('common.imageAttachment')"
                   width="240"
                   height="180"
                   loading="lazy"
@@ -139,7 +141,7 @@
                 :href="a.url"
                 target="_blank"
                 rel="noopener"
-              >{{ a.name || '附件' }}</a>
+              >{{ a.name || t('common.attachment') }}</a>
             </template>
           </div>
         </template>
@@ -155,12 +157,12 @@
             type="button"
             class="retry-btn"
             @click="retryMessage(msg.id)"
-          >重试</button>
+          >{{ t('session.retry') }}</button>
         </div>
       </div>
 
       <div v-if="sessionStore.importing" class="import-banner" role="status" aria-live="polite">
-        正在同步家里的记录…
+        {{ t('session.importing') }}
       </div>
 
       <div v-if="sessionStore.messages.length === 0 && !sessionStore.importing" class="empty-messages">
@@ -174,11 +176,11 @@
             @error="onAgentAvatarError"
           />
         </div>
-        <p class="empty-title">线团还是空的</p>
+        <p class="empty-title">{{ t('session.emptyTitle') }}</p>
         <p class="empty-hint">
-          打开时会试着同步家里的记录。也可以直接说一句继续；新线团请先在电脑上开。
+          {{ t('session.emptyHint') }}
         </p>
-        <n-button size="small" @click="reloadHistory">重新同步</n-button>
+        <n-button size="small" @click="reloadHistory">{{ t('session.reloadHistory') }}</n-button>
       </div>
     </div>
 
@@ -191,9 +193,9 @@
           width="40"
           height="40"
         />
-        <span v-else class="chip-file" aria-hidden="true">文件</span>
+        <span v-else class="chip-file" aria-hidden="true">{{ t('common.file') }}</span>
         <span class="chip-name">{{ a.name }}</span>
-        <button type="button" class="chip-x" :aria-label="`移除附件 ${a.name || ''}`" @click="removeAtt(i)">×</button>
+        <button type="button" class="chip-x" :aria-label="t('session.removeAtt', { name: a.name || '' })" @click="removeAtt(i)">×</button>
       </div>
     </div>
 
@@ -204,11 +206,11 @@
       aria-live="assertive"
     >
       <p>{{ uploadError || sessionStore.lastError }}</p>
-      <button type="button" class="error-dismiss" aria-label="关闭提示" @click="dismissErrors">×</button>
+      <button type="button" class="error-dismiss" :aria-label="t('common.close')" @click="dismissErrors">×</button>
     </div>
 
     <p v-if="sendBlocked" class="compose-status" role="status">
-      猫娘还在处理上一条，可以先把下一句写好。
+      {{ t('session.sendBusyHint') }}
     </p>
 
     <div class="input-bar">
@@ -219,14 +221,14 @@
         :aria-disabled="sending || uploading ? 'true' : undefined"
       >
         <span class="attachment-picker-icon" aria-hidden="true">＋</span>
-        <span class="sr-only">添加附件</span>
+        <span class="sr-only">{{ t('session.attachAria') }}</span>
         <input
           id="session-attachment-input"
           type="file"
           class="attachment-file"
           multiple
           accept="image/*,.txt,.md,.markdown,.pdf,.json,text/plain,text/markdown,application/pdf,application/json"
-          aria-label="添加附件"
+          :aria-label="t('session.attachAria')"
           :disabled="sending || uploading"
           @change="onFileChange"
         />
@@ -237,13 +239,14 @@
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 4 }"
         :disabled="sending || uploading"
-        aria-label="消息输入"
+        :aria-label="t('session.inputAria')"
         @keydown.enter.exact="onEnterKey"
         @paste="onPaste"
       />
       <n-button
         type="primary"
         circle
+        class="send-btn"
         :aria-label="sendButtonLabel"
         @click="handleSend"
         :disabled="sendBlocked || (!inputText.trim() && !pendingAtts.length) || sending || uploading"
@@ -257,13 +260,15 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, RouterLink } from 'vue-router'
+import { routePageTitle, setDocumentTitle } from '@/router/title'
 import { NButton, NInput } from 'naive-ui'
 import { getAgentMeta, UNKNOWN_AGENT_META } from '@/config/agents'
 import { deviceDetailLocation } from '@/router/navigation'
 import { useSessionStore } from '@/stores/session'
 import { useDraftStore } from '@/stores/drafts'
-import { projectDisplay, sessionActivityPresentation } from '@/utils/agent'
+import { projectBaseName, projectDisplay, sessionActivityPresentation, shortSummary } from '@/utils/agent'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
 import {
   pickAndUpload,
@@ -273,6 +278,7 @@ import {
 } from '@/utils/attachments'
 import type { SessionMessage, AttachmentRef as ProtoAtt } from '@/types/protocol'
 
+const { t } = useI18n()
 const route = useRoute()
 const sessionStore = useSessionStore()
 const draftStore = useDraftStore()
@@ -294,7 +300,7 @@ let uploadController: AbortController | null = null
 
 const agentMeta = computed(() => getAgentMeta(sessionStore.currentSession?.agent_type))
 const agentLabelText = computed(() => {
-  return sessionStore.currentSession ? agentMeta.value.label : '线团'
+  return sessionStore.currentSession ? agentMeta.value.label : t('session.fallbackTitle')
 })
 
 const projectLine = computed(() => {
@@ -317,11 +323,11 @@ const sendBlocked = computed(
 )
 
 const composerPlaceholder = computed(() =>
-  sendBlocked.value ? '先写下一句，任务结束后再发送…' : '跟猫娘说点什么…'
+  sendBlocked.value ? t('session.placeholderBusy') : t('session.placeholder')
 )
 
 const sendButtonLabel = computed(() =>
-  sendBlocked.value ? '当前任务结束后可发送' : '发送'
+  sendBlocked.value ? t('session.sendBlocked') : t('session.send')
 )
 
 const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
@@ -343,10 +349,10 @@ const canInterrupt = sessionBusy
 
 const wsLabel = computed(() => {
   switch (sessionStore.wsStatus) {
-    case 'connected': return '通道畅通'
-    case 'connecting': return '接通中…'
-    case 'auth_error': return '钥匙不对'
-    default: return '通道断开'
+    case 'connected': return t('session.wsConnected')
+    case 'connecting': return t('session.wsConnecting')
+    case 'auth_error': return t('session.wsAuth')
+    default: return t('session.wsDisconnected')
   }
 })
 
@@ -355,11 +361,24 @@ const liveStatusText = computed(() => {
   if (showHeaderActivity.value) {
     parts.push(threadActivity.value.headline, threadActivity.value.detail)
   }
-  if (sessionStore.importing) parts.push('正在同步历史')
+  if (sessionStore.importing) parts.push(t('session.syncingHistory'))
   if (sessionStore.lastError) parts.push(sessionStore.lastError)
   if (uploadError.value) parts.push(uploadError.value)
-  return parts.join('，')
+  return parts.join(', ')
 })
+
+watch(
+  () => [
+    sessionStore.currentSession?.summary,
+    agentLabelText.value,
+    sessionId.value
+  ],
+  () => {
+    const summary = shortSummary(sessionStore.currentSession?.summary, 28)
+    setDocumentTitle(routePageTitle('session-detail'), `${summary} · ${agentLabelText.value}`)
+  },
+  { immediate: true }
+)
 
 const approvalParamsText = computed(() => {
   const p = sessionStore.currentSession?.pending_approval?.parameters
@@ -524,9 +543,9 @@ function deliveryStatus(msg: SessionMessage) {
 
 function deliveryLabel(msg: SessionMessage) {
   switch (deliveryStatus(msg)) {
-    case 'queued': return '排队中…'
-    case 'sending': return '发送中…'
-    case 'failed': return msg.metadata?.delivery_error || '没送出去'
+    case 'queued': return t('session.deliveryQueued')
+    case 'sending': return t('session.deliverySending')
+    case 'failed': return msg.metadata?.delivery_error || t('session.deliveryFailed')
     default: return ''
   }
 }
@@ -693,13 +712,52 @@ function handleInterrupt() {
 
 .page-header {
   flex: 0 0 auto;
+  display: grid;
+  gap: 4px;
   padding: 10px 14px;
+  border-bottom: 1px solid var(--neko-line);
+  background: var(--neko-surface);
+  backdrop-filter: blur(10px);
+}
+
+.header-row {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 8px;
-  border-bottom: 1px solid var(--neko-line);
-  background: rgba(255, 252, 250, 0.92);
-  backdrop-filter: blur(10px);
+}
+
+.header-row--meta {
+  min-height: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-left: 2px;
+}
+
+.interrupt-btn {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(191, 104, 116, 0.35);
+  border-radius: 12px;
+  color: var(--neko-danger);
+  background: rgba(249, 231, 233, 0.85);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.interrupt-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.send-btn {
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
 }
 
 .back-link {
@@ -908,7 +966,14 @@ function handleInterrupt() {
 }
 .msg-body.md :deep(pre code) { background: none; padding: 0; }
 .message-bubble.user .msg-body.md :deep(code) { background: rgba(255,255,255,0.2); }
-.msg-body.md :deep(a) { color: var(--neko-primary-deep); word-break: break-all; }
+.msg-body.md :deep(a) {
+  display: inline;
+  padding: 6px 0;
+  color: var(--neko-primary-deep);
+  line-height: 1.8;
+  word-break: break-all;
+  text-underline-offset: 2px;
+}
 .message-bubble.user .msg-body.md :deep(a) { color: #fff; text-decoration: underline; }
 .msg-body.md :deep(blockquote) {
   margin: 0.4em 0;

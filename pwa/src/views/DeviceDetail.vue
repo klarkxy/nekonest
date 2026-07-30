@@ -1,21 +1,21 @@
 <template>
   <div class="device-detail-page">
     <header class="device-nav">
-      <RouterLink class="back-link" :to="devicesLocation()" aria-label="返回猫窝">
+      <RouterLink class="back-link" :to="devicesLocation()" :aria-label="t('common.backNest')">
         <span aria-hidden="true">‹</span>
-        猫窝
+        {{ t('deviceDetail.backNest') }}
       </RouterLink>
       <div class="device-title">
-        <p>当前电脑</p>
+        <p>{{ t('deviceDetail.currentPc') }}</p>
         <h1>{{ device?.name || deviceId }}</h1>
       </div>
       <span
         class="device-status-mark"
         :class="device?.status === 'online' ? 'device-status-mark--online' : ''"
-        :title="device?.status === 'online' ? '在线' : '离线'"
+        :title="device?.status === 'online' ? t('common.online') : t('common.offline')"
       >
         <span class="status-dot" :class="device?.status || 'waiting'" aria-hidden="true"></span>
-        <span class="sr-only">{{ device?.status === 'online' ? '在线' : '离线' }}</span>
+        <span class="sr-only">{{ device?.status === 'online' ? t('common.online') : t('common.offline') }}</span>
       </span>
     </header>
 
@@ -29,52 +29,48 @@
         <span class="portrait-backdrop" aria-hidden="true"></span>
         <img
           src="/brand/nekonest-duo.webp"
-          alt="NekoNest 的两位原创猫娘看板娘"
+          :alt="t('brand.duoAlt')"
           width="104"
           height="104"
         />
       </div>
       <div class="scene-dialogue">
-        <p class="speaker">看板娘</p>
+        <p class="speaker">{{ t('deviceDetail.speaker') }}</p>
         <h2 id="welcome-title">{{ welcomeTitle }}</h2>
         <p>{{ welcomeBody }}</p>
         <span class="dialogue-tail" aria-hidden="true"></span>
       </div>
     </section>
 
-    <dl class="device-stats" aria-label="电脑概况">
+    <dl class="device-stats" :aria-label="t('deviceDetail.statsAria')">
       <div>
-        <dt>状态</dt>
+        <dt>{{ t('deviceDetail.statStatus') }}</dt>
         <dd>
           <span class="status-dot" :class="device?.status || 'waiting'" aria-hidden="true"></span>
-          {{ device ? (device.status === 'online' ? '在线' : '离线') : '读取中' }}
+          {{ device ? (device.status === 'online' ? t('common.online') : t('common.offline')) : t('common.loading') }}
         </dd>
       </div>
       <div>
-        <dt>猫娘</dt>
-        <dd>{{ device?.active_agents ?? 0 }}</dd>
-      </div>
-      <div>
-        <dt>线团</dt>
-        <dd>{{ sessionStore.sessions.length }}</dd>
+        <dt>{{ t('deviceDetail.statThreads') }}</dt>
+        <dd>{{ sessionStore.sessions.length || device?.active_agents || 0 }}</dd>
       </div>
     </dl>
 
     <section class="sessions-section" aria-labelledby="sessions-title">
       <div class="section-heading">
         <div>
-          <p class="section-kicker">目录 · 猫娘 · 线团</p>
-          <h2 id="sessions-title">工作目录</h2>
+          <p class="section-kicker">{{ t('deviceDetail.sectionKicker') }}</p>
+          <h2 id="sessions-title">{{ t('deviceDetail.sectionTitle') }}</h2>
         </div>
         <div class="session-overview" role="status" aria-live="polite">
           <span v-if="runningSessionCount" class="session-count-badge session-count-badge--active">
-            {{ runningSessionCount }} 条忙碌中
+            {{ t('deviceDetail.runningBadge', { n: runningSessionCount }) }}
           </span>
           <span v-if="waitingApprovalCount" class="session-count-badge session-count-badge--waiting">
-            {{ waitingApprovalCount }} 条电脑待批
+            {{ t('deviceDetail.waitingBadge', { n: waitingApprovalCount }) }}
           </span>
           <span v-if="device?.status !== 'online'" class="session-count-badge session-count-badge--offline">
-            电脑离线
+            {{ t('deviceDetail.offlineBadge') }}
           </span>
         </div>
       </div>
@@ -82,7 +78,7 @@
       <div v-if="loadError" class="load-error" role="alert">
         <p>{{ loadError }}</p>
         <button type="button" class="retry-load" :disabled="loadingSessions" @click="retryFetch">
-          {{ loadingSessions ? '重试中…' : '再试一次' }}
+          {{ loadingSessions ? t('common.retrying') : t('deviceDetail.retryOnce') }}
         </button>
       </div>
 
@@ -91,7 +87,7 @@
         class="load-pending"
         role="status"
       >
-        正在读取线团…
+        {{ t('deviceDetail.loadingThreads') }}
       </div>
 
       <SessionThreadList
@@ -105,7 +101,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, RouterLink } from 'vue-router'
+import { routePageTitle, setDocumentTitle } from '@/router/title'
 import { useDeviceStore } from '@/stores/device'
 import { useSessionStore } from '@/stores/session'
 import { useBindingStore } from '@/stores/binding'
@@ -115,6 +113,7 @@ import { nekoWS } from '@/api/websocket'
 import { devicesLocation } from '@/router/navigation'
 import SessionThreadList from '@/components/SessionThreadList.vue'
 
+const { t } = useI18n()
 const route = useRoute()
 const deviceStore = useDeviceStore()
 const sessionStore = useSessionStore()
@@ -140,20 +139,24 @@ const showWelcome = computed(
 )
 
 const welcomeTitle = computed(() => {
-  if (!isOnline.value) return '这台电脑现在没有回应。'
-  if (sessionStore.sessions.length === 0) return '还没有可续写的线团。'
-  return '欢迎回来。'
+  if (!isOnline.value) return t('deviceDetail.welcomeOfflineTitle')
+  if (sessionStore.sessions.length === 0) return t('deviceDetail.welcomeEmptyTitle')
+  return t('deviceDetail.welcomeBackTitle')
 })
 
 const welcomeBody = computed(() => {
-  if (!isOnline.value) {
-    return '请确认家里的猫窝服务还在跑；恢复在线后，线团会自己出现。'
-  }
-  if (sessionStore.sessions.length === 0) {
-    return '请先在电脑上打开或新建会话，这里只续写家里已有的线团。'
-  }
-  return '从工作目录走进对应猫娘，继续家里已有的线团。'
+  if (!isOnline.value) return t('deviceDetail.welcomeOfflineBody')
+  if (sessionStore.sessions.length === 0) return t('deviceDetail.welcomeEmptyBody')
+  return t('deviceDetail.welcomeBackBody')
 })
+
+watch(
+  () => device.value?.name,
+  (name) => {
+    setDocumentTitle(routePageTitle('device-detail'), name || undefined)
+  },
+  { immediate: true }
+)
 
 let fetchGen = 0
 let fetchController: AbortController | null = null
@@ -205,7 +208,7 @@ async function fetchSessions(want: string) {
     )
     if (!isCurrentRequest(want, gen, controller)) return
     if (!res.ok) {
-      loadError.value = '线团清单没读到，稍后再试。'
+      loadError.value = t('deviceDetail.loadError')
       return
     }
     const data = await res.json()
@@ -216,7 +219,7 @@ async function fetchSessions(want: string) {
     loadError.value = ''
   } catch (error) {
     if (!controller.signal.aborted && isCurrentRequest(want, gen, controller)) {
-      loadError.value = '网络不顺，线团清单没拿到。'
+      loadError.value = t('deviceDetail.loadNetwork')
       console.warn('[device] session fetch failed:', error)
     }
   } finally {
@@ -278,12 +281,11 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 .section-kicker,
 .speaker {
   margin: 0;
-  color: var(--neko-rose);
-  font-size: 9px;
+  color: var(--neko-primary-deep);
+  font-size: 12px;
   font-weight: 760;
-  letter-spacing: 0.11em;
+  letter-spacing: 0.04em;
   line-height: 1.4;
-  text-transform: uppercase;
 }
 
 .device-title h1 {
@@ -422,7 +424,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 
 .device-stats {
   display: grid;
-  grid-template-columns: 1.25fr 0.8fr 0.8fr;
+  grid-template-columns: 1fr 1fr;
   margin: 0 0 22px;
   padding: 10px 4px;
   border-block: 1px solid var(--neko-line);
@@ -440,8 +442,8 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 
 .device-stats dt {
   color: var(--neko-ink-faint);
-  font-size: 9px;
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
 .device-stats dd {

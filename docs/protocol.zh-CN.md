@@ -47,7 +47,7 @@ schema 上信封 `additionalProperties: false`——勿随意发明顶层键。
 | `os` | 当前为 `"windows"` |
 | `status` | `online` \| `offline` |
 | `last_seen` | Unix 秒 |
-| `active_agents` | 数量提示 |
+| `active_agents` | 会话数量提示（不是猫娘种类数）；PWA 展示为线团数 |
 
 ### AgentSession
 

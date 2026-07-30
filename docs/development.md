@@ -118,6 +118,16 @@ codegraph sync
 codegraph status
 ```
 
+## PWA i18n and theme
+
+- Locales: `pwa/src/i18n/locales/zh-CN.ts` (default) and `en.ts` — keep key sets identical (`pnpm test` includes parity check).
+- Runtime: `vue-i18n` Composition API; stores/utils use `tGlobal` from `@/i18n`.
+- User prefs: `localStorage` keys `nekonest_locale` (`zh-CN` \| `en`) and `nekonest_theme` (`system` \| `light` \| `dark`).
+- Wire enums and agent product names stay English; only UI chrome is translated.
+- Agent transcripts / Markdown body are never passed through i18n.
+
+When adding UI copy: add keys to both locale files, then `t()` / `tGlobal()`. Do not hardcode Chinese or English strings in views.
+
 ## Protocol and agent changes
 
 Wire changes must touch every applicable surface—see [protocol.md](./protocol.md) checklist and AGENTS.md “Wire protocol”.

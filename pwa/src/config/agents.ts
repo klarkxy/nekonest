@@ -62,7 +62,7 @@ export const AGENT_CATALOG: Readonly<Record<KnownAgentType, AgentMeta>> = {
 
 export const UNKNOWN_AGENT_META: AgentMeta = {
   id: 'unknown',
-  label: '未知猫娘',
+  label: 'Unknown agent',
   avatar: '/agents/unknown.webp',
   color: '#8F7FC2',
   softColor: '#EEEAF8',
@@ -73,7 +73,9 @@ export function getAgentMeta(type?: AgentType | null): AgentMeta {
   const normalized = String(type || '').trim()
   const known = AGENT_CATALOG[normalized as KnownAgentType]
   if (known) return known
-  if (!normalized || normalized === 'unknown') return UNKNOWN_AGENT_META
+  if (!normalized || normalized === 'unknown') {
+    return { ...UNKNOWN_AGENT_META }
+  }
   return {
     ...UNKNOWN_AGENT_META,
     id: normalized,

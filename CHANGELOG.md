@@ -7,12 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- PWA Chinese/English i18n (`vue-i18n`): language switch on Setup and device list;
+  locale persisted in `localStorage`
+- PWA light/dark/system theme preference with CSS tokens and Naive dark theme
+- Thread list local search (summary, folder, agent)
+
 ### Changed
 
+- Device list shows session-count hint as threads (not “N 位猫娘”)
+- Session header layout, larger interrupt/send touch targets, improved contrast
+- Document titles include device/session context when available
 - Reorganized documentation: English primary (`README.md`, `docs/*.md`) with
   full Simplified Chinese mirrors (`README.zh-CN.md`, `docs/*.zh-CN.md`)
 - Expanded operator/contributor guides: configuration, security, architecture,
   protocol overview, development, troubleshooting, and a docs index
+
+### Fixed
+
+- Naive UI label `for` targets real inputs (phone key, pair code)
+- UUID-like session summaries fall back to untitled-thread label
+- WebSocket reconnect copy no longer implies the home PC is offline
 
 ## [0.1.0] - 2026-07-30
 

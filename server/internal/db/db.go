@@ -341,7 +341,7 @@ func (db *DB) ConsumePairCode(code string) (string, error) {
 	return deviceID, nil
 }
 
-// UpdateDeviceSessions updates the active agent count for a device.
+// UpdateDeviceSessions updates the session-count hint stored in active_agents.
 func (db *DB) UpdateDeviceSessions(id string, count int) error {
 	_, err := db.conn.Exec(`UPDATE devices SET active_agents = ?, last_seen = ? WHERE id = ?`, count, time.Now().Unix(), id)
 	return err

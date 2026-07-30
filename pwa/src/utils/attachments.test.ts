@@ -29,7 +29,7 @@ describe('prepareFile', () => {
       { type: 'application/pdf' }
     )
 
-    await expect(prepareFile(file)).rejects.toThrow('超过 4MB')
+    await expect(prepareFile(file)).rejects.toThrow(/4MB/)
   })
 })
 

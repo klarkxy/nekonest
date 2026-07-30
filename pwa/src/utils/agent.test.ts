@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { tGlobal } from '@/i18n'
 import {
   agentColor,
   agentIcon,
@@ -30,32 +31,39 @@ describe('agent helpers', () => {
     expect(getAgentMeta('kimi_cli').avatar).toBe('/agents/kimi-cli.webp')
     expect(getAgentMeta('grok_build').label).toBe('Grok Build')
     expect(getAgentMeta('future_agent').avatar).toBe('/agents/unknown.webp')
-    expect(getAgentMeta('unknown').label).toBe('未知猫娘')
+    expect(agentLabel('unknown')).toBe(tGlobal('agent.unknown'))
     expect(agentLabel('other')).toBe('other')
   })
 
   it('status maps', () => {
-    expect(statusLabel('running')).toBe('忙碌中')
+    expect(statusLabel('running')).toBe(tGlobal('status.running.label'))
     expect(sessionActivityPresentation('running')).toEqual({
-      icon: '🐾',
-      label: '忙碌中',
-      headline: '线团还在转',
-      detail: '家里的猫娘还在干活，新消息会同步过来。',
+      icon: tGlobal('status.running.icon'),
+      label: tGlobal('status.running.label'),
+      headline: tGlobal('status.running.headline'),
+      detail: tGlobal('status.running.detail'),
       tone: 'active'
     })
-    expect(sessionActivityPresentation('idle').label).toBe('待命')
-    expect(sessionActivityPresentation('waiting_approval').label).toBe('电脑待批')
-    expect(sessionActivityPresentation('waiting_approval', true).label).toBe('电脑待批')
-    expect(sessionActivityPresentation('idle', true).label).toBe('回复中')
+    expect(sessionActivityPresentation('idle').label).toBe(tGlobal('status.idle.label'))
+    expect(sessionActivityPresentation('waiting_approval').label).toBe(
+      tGlobal('status.waiting_approval.label')
+    )
+    expect(sessionActivityPresentation('waiting_approval', true).label).toBe(
+      tGlobal('status.waiting_approval.label')
+    )
+    expect(sessionActivityPresentation('idle', true).label).toBe(tGlobal('status.streaming.label'))
     expect(sessionActivityPresentation('nope').tone).toBe('unknown')
     expect(statusTagType('waiting_approval')).toBe('warning')
     expect(statusTagType('nope')).toBe('default')
   })
 
   it('shortSummary', () => {
-    expect(shortSummary(undefined)).toBe('未命名线团')
+    expect(shortSummary(undefined)).toBe(tGlobal('agent.untitledThread'))
     expect(shortSummary('  a   b  ')).toBe('a b')
     expect(shortSummary('x'.repeat(60), 10)).toBe('x'.repeat(10) + '…')
+    expect(shortSummary('255d65ae-b684-44de-b181-60aacf81df0a')).toBe(
+      tGlobal('agent.untitledThread')
+    )
   })
 
   it('groupSessionsByAgent order', () => {

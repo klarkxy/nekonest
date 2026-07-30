@@ -2,31 +2,41 @@
   <div class="thread-list">
     <div class="toolbar">
       <label class="archive-toggle">
-        <input v-model="prefs.showArchived" type="checkbox" />
-        显示已收起
+        <input v-model="prefs.showArchived" type="checkbox" class="archive-checkbox" />
+        {{ t('threadList.showArchived') }}
       </label>
       <div class="sort-row">
-        <label class="sort-label" for="session-sort">排列</label>
+        <label class="sort-label" for="session-sort">{{ t('threadList.sort') }}</label>
         <select
           id="session-sort"
           class="sort-select"
           :value="prefs.sortMode"
           @change="onSortChange"
         >
-          <option value="recent">最近活跃</option>
-          <option value="name">摘要</option>
-          <option value="manual">手动</option>
+          <option value="recent">{{ t('threadList.sortRecent') }}</option>
+          <option value="name">{{ t('threadList.sortName') }}</option>
+          <option value="manual">{{ t('threadList.sortManual') }}</option>
         </select>
       </div>
     </div>
-    <p class="hint">按工作目录和猫娘收纳。收起只记在这台手机上；手动模式用 ▲▼ 调顺序。</p>
+    <label class="search-field">
+      <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
+      <input
+        v-model="searchQuery"
+        type="search"
+        class="search-input"
+        :placeholder="t('threadList.searchPlaceholder')"
+        autocomplete="off"
+      />
+    </label>
+    <p class="hint">{{ t('threadList.hint') }}</p>
 
     <div v-if="visibleProjects.length === 0" class="empty-hint">
-      <template v-if="prefs.showArchived">还没有线团</template>
+      <template v-if="prefs.showArchived">{{ t('threadList.emptyNone') }}</template>
       <template v-else-if="sessions.length === 0">
-        还没有可续写的线团。请先在电脑上打开或新建会话。
+        {{ t('threadList.emptyCreateOnPc') }}
       </template>
-      <template v-else>活跃线团都收起来了，打开上方开关可查看。</template>
+      <template v-else>{{ t('threadList.emptyAllArchived') }}</template>
     </div>
 
     <section
@@ -52,7 +62,7 @@
           <span v-if="project.path" class="project-path" :title="project.path">
             {{ shortPath(project.path, 54) }}
           </span>
-          <span v-else class="project-path">未标注工作目录</span>
+          <span v-else class="project-path">{{ t('threadList.noPath') }}</span>
         </span>
         <span class="project-count">{{ project.sessionCount }}</span>
         <span class="chevron" aria-hidden="true">
@@ -90,7 +100,7 @@
             />
             <span class="agent-copy">
               <span class="agent-title">{{ agent.label }}</span>
-              <span class="agent-subtitle">{{ agent.sessions.length }} 条线团</span>
+              <span class="agent-subtitle">{{ t('threadList.agentThreads', { n: agent.sessions.length }) }}</span>
             </span>
             <span class="agent-chevron" aria-hidden="true">
               {{ prefs.isCollapsed(agentNodeKey(project.key, agent.type)) ? '▸' : '▾' }}
@@ -114,7 +124,10 @@
               <RouterLink
                 class="session-main"
                 :to="sessionDetailLocation(deviceId, session.id)"
-                :aria-label="`打开线团：${shortSummary(session.summary)}。${sessionActivityPresentation(session.status).detail}`"
+                :aria-label="t('threadList.openThread', {
+                  summary: shortSummary(session.summary),
+                  detail: sessionActivityPresentation(session.status).detail
+                })"
               >
                 <span class="session-summary">{{ shortSummary(session.summary) }}</span>
                 <span
@@ -134,8 +147,8 @@
                   <button
                     type="button"
                     class="icon-btn"
-                    title="上移"
-                    aria-label="上移线团"
+                    :title="t('threadList.moveUp')"
+                    :aria-label="t('threadList.moveUpAria')"
                     :disabled="index === 0"
                     @click.stop="
                       prefs.moveSession(session.id, -1, agent.sessions.map(item => item.id))
@@ -144,8 +157,8 @@
                   <button
                     type="button"
                     class="icon-btn"
-                    title="下移"
-                    aria-label="下移线团"
+                    :title="t('threadList.moveDown')"
+                    :aria-label="t('threadList.moveDownAria')"
                     :disabled="index === agent.sessions.length - 1"
                     @click.stop="
                       prefs.moveSession(session.id, 1, agent.sessions.map(item => item.id))
@@ -156,11 +169,11 @@
                   type="button"
                   class="archive-btn"
                   :class="{ on: prefs.isArchived(session.id) }"
-                  :title="prefs.isArchived(session.id) ? '从手机侧放回' : '在手机上收起'"
-                  :aria-label="prefs.isArchived(session.id) ? '取消收起' : '收起线团'"
+                  :title="prefs.isArchived(session.id) ? t('threadList.unarchiveTitle') : t('threadList.archiveTitle')"
+                  :aria-label="prefs.isArchived(session.id) ? t('threadList.unarchiveAria') : t('threadList.archiveAria')"
                   @click.stop="prefs.toggleArchive(session.id)"
                 >
-                  {{ prefs.isArchived(session.id) ? '放回' : '收起' }}
+                  {{ prefs.isArchived(session.id) ? t('threadList.unarchive') : t('threadList.archive') }}
                 </button>
               </div>
             </div>
@@ -172,13 +185,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, type CSSProperties } from 'vue'
+import { computed, ref, type CSSProperties } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
 import { UNKNOWN_AGENT_META } from '@/config/agents'
 import { sessionDetailLocation } from '@/router/navigation'
 import { useSessionPrefsStore, type SessionSortMode } from '@/stores/sessionPrefs'
 import type { AgentSession, AgentType } from '@/types/protocol'
-import { sessionActivityPresentation, shortSummary } from '@/utils/agent'
+import { agentLabel, sessionActivityPresentation, shortSummary } from '@/utils/agent'
 import { buildSessionTree, type SessionTreeAgent } from '@/utils/sessionTree'
 
 const props = defineProps<{
@@ -186,12 +200,28 @@ const props = defineProps<{
   deviceId: string
 }>()
 
+const { t } = useI18n()
 const prefs = useSessionPrefsStore()
+const searchQuery = ref('')
 
 const visibleProjects = computed(() => {
-  const filtered = props.sessions.filter(
-    session => prefs.showArchived || !prefs.isArchived(session.id)
-  )
+  const q = searchQuery.value.trim().toLowerCase()
+  const filtered = props.sessions.filter(session => {
+    if (!prefs.showArchived && prefs.isArchived(session.id)) return false
+    if (!q) return true
+    const hay = [
+      session.summary,
+      session.project,
+      session.project_dir,
+      agentLabel(session.agent_type),
+      session.agent_type,
+      session.id
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return hay.includes(q)
+  })
   return buildSessionTree(filtered, list => prefs.sortSessions(list))
 })
 
@@ -267,6 +297,29 @@ function shortPath(path: string, max = 36): string {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.archive-checkbox {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  accent-color: var(--neko-primary);
+}
+
+.search-field {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.search-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--neko-line);
+  border-radius: 12px;
+  color: var(--neko-ink);
+  background: var(--neko-surface);
+  font: inherit;
 }
 
 .archive-toggle {

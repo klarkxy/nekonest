@@ -89,7 +89,8 @@ describe('device store loading states', () => {
     await store.fetchDevices()
 
     expect(store.loaded).toBe(false)
-    expect(store.loadError).toContain('连不上猫窝服务器')
+    expect(store.loadError.length).toBeGreaterThan(0)
+    expect(store.loadError).toMatch(/nest server|猫窝服务器/i)
     expect(store.loading).toBe(false)
   })
 

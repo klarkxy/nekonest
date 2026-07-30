@@ -1,4 +1,5 @@
 import { getPhoneSecret } from '@/api/http'
+import { tGlobal } from '@/i18n'
 
 export type AttachmentRef = {
   id: string
@@ -93,7 +94,7 @@ async function decodeImage(file: File): Promise<DecodedImage> {
     typeof Image === 'undefined' ||
     typeof URL.createObjectURL !== 'function'
   ) {
-    throw new Error(`${file.name} 无法在当前浏览器中读取`)
+    throw new Error(tGlobal('errors.attachUnreadable', { name: file.name }))
   }
 
   const objectURL = URL.createObjectURL(file)
@@ -112,7 +113,7 @@ async function decodeImage(file: File): Promise<DecodedImage> {
     }
   } catch {
     URL.revokeObjectURL(objectURL)
-    throw new Error(`${file.name} 无法读取，请转换为 JPG、PNG 或 WebP 后重试`)
+    throw new Error(tGlobal('errors.attachDecode', { name: file.name }))
   }
 }
 
@@ -121,7 +122,7 @@ export async function prepareFile(file: File): Promise<File> {
   const mime = file.type.toLowerCase()
   if (!mime.startsWith('image/') || mime === 'image/gif') {
     if (file.size > MAX_BYTES) {
-      throw new Error(`${file.name} 超过 4MB`)
+      throw new Error(tGlobal('errors.attachTooLarge', { name: file.name }))
     }
     return file
   }
@@ -144,7 +145,7 @@ export async function prepareFile(file: File): Promise<File> {
   const ctx = canvas.getContext('2d')
   if (!ctx) {
     decoded.close()
-    throw new Error(`${file.name} 无法在当前浏览器中压缩`)
+    throw new Error(tGlobal('errors.attachCompressFail', { name: file.name }))
   }
   ctx.drawImage(decoded.source, 0, 0, width, height)
   decoded.close()
@@ -152,10 +153,10 @@ export async function prepareFile(file: File): Promise<File> {
     canvas.toBlob(resolve, 'image/jpeg', 0.85)
   )
   if (!blob) {
-    throw new Error(`${file.name} 无法在当前浏览器中压缩`)
+    throw new Error(tGlobal('errors.attachCompressFail', { name: file.name }))
   }
   if (blob.size > MAX_BYTES) {
-    throw new Error(`${file.name} 压缩后仍超过 4MB`)
+    throw new Error(tGlobal('errors.attachStillLarge', { name: file.name }))
   }
   const base = file.name.replace(/\.[^.]+$/, '') || 'image'
   return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
@@ -166,11 +167,11 @@ export async function uploadAttachment(
   opts: { deviceId?: string; sessionId?: string; signal?: AbortSignal } = {}
 ): Promise<AttachmentRef> {
   if (file.size > MAX_BYTES) {
-    throw new Error(`${file.name} 超过 4MB`)
+    throw new Error(tGlobal('errors.attachTooLarge', { name: file.name }))
   }
   const mime = attachmentMime(file)
   if (!ALLOWED.has(mime) && mime !== 'application/octet-stream') {
-    throw new Error(`${file.name} 的文件类型不受支持`)
+    throw new Error(tGlobal('errors.attachType', { name: file.name }))
   }
   const uploadFile = mime === file.type
     ? file
@@ -196,7 +197,7 @@ export async function uploadAttachment(
   })
   if (!res.ok) {
     const t = await res.text()
-    throw new Error(t || `upload failed ${res.status}`)
+    throw new Error(t || tGlobal('errors.attachUpload', { status: res.status }))
   }
   const data = await res.json()
   return {

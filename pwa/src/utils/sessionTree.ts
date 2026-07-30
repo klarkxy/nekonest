@@ -1,7 +1,14 @@
 import { agentOrder, getAgentMeta } from '@/config/agents'
+import { collatorLocale, tGlobal } from '@/i18n'
 import type { AgentSession, AgentType } from '@/types/protocol'
 
 export const UNCATEGORIZED_PROJECT_KEY = '__uncategorized__'
+
+export function uncategorizedProjectLabel(): string {
+  return tGlobal('agent.uncategorized')
+}
+
+/** @deprecated use uncategorizedProjectLabel() for locale-aware label */
 export const UNCATEGORIZED_PROJECT_LABEL = '未分类'
 
 export type SessionTreeAgent = {
@@ -78,7 +85,7 @@ export function buildSessionTree(
     if (!project) {
       project = {
         key,
-        label: uncategorized ? UNCATEGORIZED_PROJECT_LABEL : projectLabel(path),
+        label: uncategorized ? uncategorizedProjectLabel() : projectLabel(path),
         path,
         uncategorized,
         agents: new Map()
@@ -117,7 +124,7 @@ export function buildSessionTree(
       })
       .sort((a, b) => {
         const order = agentOrder(a.type) - agentOrder(b.type)
-        return order || a.label.localeCompare(b.label, 'zh-CN')
+        return order || a.label.localeCompare(b.label, collatorLocale())
       })
 
     const allSessions = agents.flatMap(agent => agent.sessions)
@@ -134,8 +141,8 @@ export function buildSessionTree(
 
   return tree.sort((a, b) => {
     if (a.uncategorized !== b.uncategorized) return a.uncategorized ? 1 : -1
-    const label = a.label.localeCompare(b.label, 'zh-CN')
-    return label || a.path.localeCompare(b.path, 'zh-CN')
+    const label = a.label.localeCompare(b.label, collatorLocale())
+    return label || a.path.localeCompare(b.path, collatorLocale())
   })
 }
 

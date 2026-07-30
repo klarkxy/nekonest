@@ -50,9 +50,9 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data.json()
   } catch {
-    data = { title: '猫娘窝', body: event.data.text() }
+    data = { title: 'NekoNest', body: event.data.text() }
   }
-  const title = data.title || '猫娘窝'
+  const title = data.title || 'NekoNest'
   const tag = notificationTag(data)
   event.waitUntil(
     self.registration.showNotification(title, {

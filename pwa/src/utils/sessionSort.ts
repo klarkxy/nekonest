@@ -1,3 +1,4 @@
+import { collatorLocale } from '@/i18n'
 import type { AgentSession } from '@/types/protocol'
 
 export type SessionSortMode = 'recent' | 'name' | 'project' | 'manual'
@@ -15,14 +16,14 @@ export function sortSessionsByMode(
     return arr
   }
   if (mode === 'name') {
-    arr.sort((a, b) => (a.summary || a.id).localeCompare(b.summary || b.id, 'zh'))
+    arr.sort((a, b) => (a.summary || a.id).localeCompare(b.summary || b.id, collatorLocale()))
     return arr
   }
   if (mode === 'project') {
     arr.sort((a, b) => {
       const pa = a.project || a.project_dir || ''
       const pb = b.project || b.project_dir || ''
-      const c = pa.localeCompare(pb, 'zh')
+      const c = pa.localeCompare(pb, collatorLocale())
       if (c !== 0) return c
       return (b.last_activity || 0) - (a.last_activity || 0)
     })

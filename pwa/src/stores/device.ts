@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import type { Device } from '@/types/protocol'
 import { nekoWS } from '@/api/websocket'
 import { apiFetch } from '@/api/http'
+import { tGlobal } from '@/i18n'
 import { useBindingStore } from './binding'
 
 export const useDeviceStore = defineStore('devices', () => {
@@ -60,7 +61,7 @@ export const useDeviceStore = defineStore('devices', () => {
         return
       }
       if (!res.ok) {
-        loadError.value = `猫窝服务器暂时没有回应（${res.status}）`
+        loadError.value = tGlobal('errors.deviceServerStatus', { status: res.status })
         console.error('failed to fetch devices:', res.status)
         return
       }
@@ -79,7 +80,7 @@ export const useDeviceStore = defineStore('devices', () => {
         binding.setLastDevice(target)
       }
     } catch (err) {
-      loadError.value = '连不上猫窝服务器，请检查网络或服务地址。'
+      loadError.value = tGlobal('errors.deviceNetwork')
       console.error('failed to fetch devices:', err)
     } finally {
       loading.value = false

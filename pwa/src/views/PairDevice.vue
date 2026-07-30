@@ -1,38 +1,38 @@
 <template>
   <div class="pair-page">
     <div class="page-header">
-      <RouterLink class="back-link" :to="devicesLocation()" aria-label="返回猫窝">← 返回</RouterLink>
-      <h1>配对电脑</h1>
+      <RouterLink class="back-link" :to="devicesLocation()" :aria-label="t('common.backNest')">{{ t('common.back') }}</RouterLink>
+      <h1>{{ t('pair.title') }}</h1>
     </div>
 
     <div class="pair-content">
       <div class="pair-icon">
         <img
           src="/brand/nekonest-duo.webp"
-          alt="NekoNest 看板娘"
+          :alt="t('brand.duoAlt')"
           width="96"
           height="96"
         />
       </div>
       <p class="pair-desc">
-        在家里电脑上生成 6 位配对码，填到这里，手机就能看见那台电脑的线团。
+        {{ t('pair.desc') }}
       </p>
 
       <form class="pair-form" @submit.prevent="handlePair">
-        <label class="field-label" for="pair-code">配对码</label>
+        <label class="field-label" for="pair-code">{{ t('pair.codeLabel') }}</label>
         <n-input
-          id="pair-code"
           v-model:value="pairCodeModel"
           name="one-time-code"
           autocomplete="one-time-code"
           inputmode="text"
           autocapitalize="none"
           spellcheck="false"
-          placeholder="输入 6 位配对码…"
+          :placeholder="t('pair.placeholder')"
           size="large"
           class="pair-input"
           aria-describedby="pair-help"
           :status="fieldError ? 'error' : undefined"
+          :input-props="{ id: 'pair-code' }"
         />
         <p v-if="fieldError" class="field-error" role="alert">{{ fieldError }}</p>
 
@@ -44,37 +44,37 @@
           :loading="pairing"
           :disabled="pairCode.length !== 6"
         >
-          完成配对
+          {{ t('pair.submit') }}
         </n-button>
       </form>
 
       <div id="pair-help" class="pair-help">
-        <p class="help-title">怎么拿到配对码</p>
+        <p class="help-title">{{ t('pair.helpTitle') }}</p>
         <ol class="help-steps">
           <li>
-            <span>已注册的电脑运行</span>
+            <span>{{ t('pair.help1') }}</span>
             <div class="command-row">
               <code translate="no">{{ WINDOWS_PAIR_COMMANDS.pair }}</code>
               <button
                 type="button"
-                :aria-label="`复制命令 ${WINDOWS_PAIR_COMMANDS.pair}`"
+                :aria-label="t('pair.copyCmd', { cmd: WINDOWS_PAIR_COMMANDS.pair })"
                 @click="copyCommand(WINDOWS_PAIR_COMMANDS.pair)"
-              >复制</button>
+              >{{ t('common.copy') }}</button>
             </div>
           </li>
           <li>
-            <span>首次使用时，设置好服务器地址与注册令牌后运行</span>
+            <span>{{ t('pair.help2') }}</span>
             <div class="command-row">
               <code translate="no">{{ WINDOWS_PAIR_COMMANDS.register }}</code>
               <button
                 type="button"
-                :aria-label="`复制命令 ${WINDOWS_PAIR_COMMANDS.register}`"
+                :aria-label="t('pair.copyCmd', { cmd: WINDOWS_PAIR_COMMANDS.register })"
                 @click="copyCommand(WINDOWS_PAIR_COMMANDS.register)"
-              >复制</button>
+              >{{ t('common.copy') }}</button>
             </div>
           </li>
-          <li>把码填到上方，点完成配对</li>
-          <li>让本机服务保持在线</li>
+          <li>{{ t('pair.help3') }}</li>
+          <li>{{ t('pair.help4') }}</li>
         </ol>
       </div>
     </div>
@@ -83,6 +83,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter, RouterLink } from 'vue-router'
 import { NButton, NInput, useMessage } from 'naive-ui'
 import { apiFetch } from '@/api/http'
@@ -90,6 +91,7 @@ import { useBindingStore } from '@/stores/binding'
 import { devicesLocation } from '@/router/navigation'
 import { normalizePairCode, WINDOWS_PAIR_COMMANDS } from '@/utils/onboarding'
 
+const { t } = useI18n()
 const router = useRouter()
 const message = useMessage()
 const binding = useBindingStore()
@@ -117,20 +119,20 @@ async function handlePair() {
     })
 
     if (res.status === 401) {
-      fieldError.value = '手机钥匙不对，请先去钥匙设置。'
+      fieldError.value = t('pair.errAuth')
       return
     }
     if (!res.ok) {
-      fieldError.value = '配对码无效或已过期，请在电脑上重新生成。'
+      fieldError.value = t('pair.errCode')
       return
     }
 
     const data = await res.json()
     binding.addBinding(data.device_id, data.name || data.device_id)
-    message.success('配对成功')
+    message.success(t('pair.success'))
     void router.push(devicesLocation())
   } catch {
-    fieldError.value = '配对没成功，检查网络后再试。'
+    fieldError.value = t('pair.errNetwork')
   } finally {
     pairing.value = false
   }
@@ -140,9 +142,9 @@ async function copyCommand(command: string) {
   try {
     if (!navigator.clipboard) throw new Error('clipboard unavailable')
     await navigator.clipboard.writeText(command)
-    message.success('命令已复制')
+    message.success(t('pair.copied'))
   } catch {
-    message.error('复制失败，请长按命令手动复制')
+    message.error(t('pair.copyFail'))
   }
 }
 </script>
@@ -232,7 +234,7 @@ async function copyCommand(command: string) {
   margin-top: 28px;
   padding: 16px 18px;
   border-radius: 16px;
-  background: rgba(255, 252, 250, 0.82);
+  background: var(--neko-surface);
   border: 1px solid var(--neko-line);
 }
 

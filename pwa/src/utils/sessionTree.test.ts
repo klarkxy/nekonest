@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentSession, AgentType } from '@/types/protocol'
+import { tGlobal } from '@/i18n'
 import {
   buildSessionTree,
   normalizeProjectDir,
@@ -55,7 +56,7 @@ describe('buildSessionTree', () => {
 
     expect(tree).toHaveLength(1)
     expect(tree[0].key).toBe(UNCATEGORIZED_PROJECT_KEY)
-    expect(tree[0].label).toBe('未分类')
+    expect(tree[0].label).toBe(tGlobal('agent.uncategorized'))
     expect(tree[0].agents.map(agent => agent.type)).toEqual(['kimi_cli', 'grok_build'])
   })
 

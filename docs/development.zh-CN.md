@@ -118,6 +118,16 @@ codegraph sync
 codegraph status
 ```
 
+## PWA 国际化与主题
+
+- 文案：`pwa/src/i18n/locales/zh-CN.ts`（默认）与 `en.ts` — 键集合须一致（`pnpm test` 含对齐检查）。
+- 运行时：`vue-i18n` Composition API；stores/utils 用 `@/i18n` 的 `tGlobal`。
+- 用户偏好：`localStorage` 的 `nekonest_locale`（`zh-CN` \| `en`）与 `nekonest_theme`（`system` \| `light` \| `dark`）。
+- 线协议枚举与 agent 商品名保持英文；只翻译 UI 壳层。
+- Agent 转录 / Markdown 正文永不走 i18n。
+
+新增界面文案：两个 locale 文件同时加 key，再用 `t()` / `tGlobal()`，勿在视图硬编码中英文。
+
 ## 协议与智能体变更
 
 线协议变更须触及所有适用面——见 [protocol.zh-CN.md](./protocol.zh-CN.md) 清单与 AGENTS.md「Wire protocol」。

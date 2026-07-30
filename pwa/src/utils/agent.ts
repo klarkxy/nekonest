@@ -1,5 +1,6 @@
 import type { AgentSession, AgentStatus, AgentType } from '@/types/protocol'
 import { agentOrder, getAgentMeta } from '@/config/agents'
+import { collatorLocale, tGlobal } from '@/i18n'
 
 export type AgentGroup = {
   type: AgentType
@@ -19,36 +20,20 @@ export type SessionActivityPresentation = {
   tone: SessionActivityTone
 }
 
-const SESSION_ACTIVITY: Record<AgentStatus, SessionActivityPresentation> = {
-  running: {
-    icon: '🐾',
-    label: '忙碌中',
-    headline: '线团还在转',
-    detail: '家里的猫娘还在干活，新消息会同步过来。',
-    tone: 'active'
-  },
-  idle: {
-    icon: '🌙',
-    label: '待命',
-    headline: '线团空闲',
-    detail: '随时可以继续说一句。',
-    tone: 'idle'
-  },
-  waiting_approval: {
-    icon: '🔔',
-    label: '电脑待批',
-    headline: '等电脑点头',
-    detail: '请到家里电脑的终端批准或拒绝；手机不能代点。',
-    tone: 'waiting'
-  }
-}
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-const STREAMING_ACTIVITY: SessionActivityPresentation = {
-  icon: '🐾',
-  label: '回复中',
-  headline: '正在回复',
-  detail: '新内容会陆续出现在这里。',
-  tone: 'active'
+function activityFromKeys(
+  prefix: 'status.running' | 'status.idle' | 'status.waiting_approval' | 'status.streaming' | 'status.unknown',
+  tone: SessionActivityTone
+): SessionActivityPresentation {
+  return {
+    icon: tGlobal(`${prefix}.icon`),
+    label: tGlobal(`${prefix}.label`),
+    headline: tGlobal(`${prefix}.headline`),
+    detail: tGlobal(`${prefix}.detail`),
+    tone
+  }
 }
 
 export function agentIcon(type: AgentType | string): string {
@@ -56,6 +41,8 @@ export function agentIcon(type: AgentType | string): string {
 }
 
 export function agentLabel(type: AgentType | string): string {
+  const normalized = String(type || '').trim()
+  if (!normalized || normalized === 'unknown') return tGlobal('agent.unknown')
   return getAgentMeta(type).label
 }
 
@@ -67,14 +54,16 @@ export function sessionActivityPresentation(
   status: AgentStatus | string,
   streaming = false
 ): SessionActivityPresentation {
-  if (status === 'waiting_approval') return SESSION_ACTIVITY.waiting_approval
-  if (streaming) return STREAMING_ACTIVITY
-  return SESSION_ACTIVITY[status as AgentStatus] || {
-    icon: '✦',
-    label: status || '未知',
-    headline: '状态还不清楚',
-    detail: '等下一次同步。',
-    tone: 'unknown'
+  if (status === 'waiting_approval') {
+    return activityFromKeys('status.waiting_approval', 'waiting')
+  }
+  if (streaming) return activityFromKeys('status.streaming', 'active')
+  if (status === 'running') return activityFromKeys('status.running', 'active')
+  if (status === 'idle') return activityFromKeys('status.idle', 'idle')
+  const unknown = activityFromKeys('status.unknown', 'unknown')
+  return {
+    ...unknown,
+    label: status || unknown.label
   }
 }
 
@@ -110,13 +99,23 @@ export function groupSessionsByAgent(
     }))
     .sort((a, b) => {
       const order = agentOrder(a.type) - agentOrder(b.type)
-      return order || a.label.localeCompare(b.label, 'zh-CN')
+      return order || a.label.localeCompare(b.label, collatorLocale())
     })
 }
 
+function looksLikeOpaqueId(text: string): boolean {
+  const t = text.trim()
+  if (!t) return true
+  if (UUID_RE.test(t)) return true
+  // long hex / bare session ids without spaces
+  if (/^[0-9a-f]{16,}$/i.test(t)) return true
+  return false
+}
+
 export function shortSummary(text: string | undefined, max = 48): string {
-  if (!text) return '未命名线团'
+  if (!text || looksLikeOpaqueId(text)) return tGlobal('agent.untitledThread')
   const t = text.replace(/\s+/g, ' ').trim()
+  if (looksLikeOpaqueId(t)) return tGlobal('agent.untitledThread')
   if (t.length <= max) return t
   return t.slice(0, max) + '…'
 }
@@ -126,7 +125,14 @@ export function projectDisplay(s: AgentSession): { name: string; path: string } 
   const path = (s.project_dir || '').trim()
   const name = (s.project || '').trim() || leafName(path)
   if (!name && !path) return null
-  return { name: name || '项目', path }
+  return { name: name || tGlobal('common.project'), path }
+}
+
+/** Basename for cramped headers. */
+export function projectBaseName(pathOrName: string): string {
+  const n = pathOrName.replace(/\\/g, '/').replace(/\/+$/, '')
+  const i = n.lastIndexOf('/')
+  return i >= 0 ? n.slice(i + 1) : n
 }
 
 function leafName(p: string): string {

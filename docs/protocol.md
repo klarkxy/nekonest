@@ -47,7 +47,7 @@ Adding an agent requires adapter + registry, server types, PWA catalog/assets, s
 | `os` | Currently `"windows"` |
 | `status` | `online` \| `offline` |
 | `last_seen` | Unix seconds |
-| `active_agents` | Count hint |
+| `active_agents` | Session-count hint (not distinct agent types); PWA labels it as threads |
 
 ### AgentSession
 
