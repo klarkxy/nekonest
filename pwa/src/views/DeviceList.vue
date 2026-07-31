@@ -306,7 +306,7 @@ function osLabel(os: string): string {
   width: 104px;
   height: 38px;
   border-radius: 50%;
-  background: rgba(91, 69, 99, 0.15);
+  background: color-mix(in srgb, var(--neko-primary) 22%, transparent);
   filter: blur(13px);
   content: "";
   transform: rotate(-5deg);
@@ -324,9 +324,9 @@ function osLabel(os: string): string {
   display: block;
   width: 132px;
   height: 132px;
-  border: 4px solid rgba(255, 253, 251, 0.88);
+  border: 4px solid var(--neko-panel-border);
   border-radius: 31px 31px 40px 22px;
-  box-shadow: 0 16px 34px rgba(104, 74, 105, 0.2);
+  box-shadow: var(--neko-shadow-soft);
   object-fit: cover;
   transform: rotate(2deg);
 }
@@ -336,11 +336,11 @@ function osLabel(os: string): string {
   right: -1px;
   bottom: -7px;
   padding: 5px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--neko-line);
   border-radius: 8px 8px 11px 5px;
   color: var(--neko-primary-deep);
-  background: rgba(247, 239, 251, 0.94);
-  box-shadow: 0 5px 12px rgba(91, 67, 90, 0.1);
+  background: var(--neko-surface-solid);
+  box-shadow: var(--neko-shadow-soft);
   font-size: 11px;
   font-weight: 700;
 }
@@ -353,19 +353,28 @@ function osLabel(os: string): string {
   gap: 10px;
   margin-bottom: 12px;
   padding: 8px 9px 8px 13px;
-  border: 1px solid rgba(110, 89, 119, 0.12);
+  border: 1px solid var(--neko-line);
   border-radius: 13px;
-  background: rgba(247, 242, 241, 0.78);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  background: var(--neko-surface-muted);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--neko-surface-solid) 55%, transparent);
 }
 
 .connection-panel--connected {
-  background: rgba(232, 244, 237, 0.77);
+  border-color: var(--neko-success-line);
+  background: var(--neko-success-soft);
+}
+
+.connection-panel--connected .connection-label {
+  color: var(--neko-success-ink);
 }
 
 .connection-panel--error {
-  border-color: rgba(191, 104, 116, 0.22);
-  background: rgba(249, 232, 233, 0.74);
+  border-color: var(--neko-danger-line);
+  background: var(--neko-danger-soft);
+}
+
+.connection-panel--error .connection-label {
+  color: var(--neko-danger-ink);
 }
 
 .connection-copy {
@@ -401,7 +410,7 @@ function osLabel(os: string): string {
 }
 
 .connection-action:hover {
-  background: rgba(114, 91, 157, 0.1);
+  background: var(--neko-primary-soft);
 }
 
 .connection-action:disabled {
@@ -417,7 +426,7 @@ function osLabel(os: string): string {
   border-left: 3px solid var(--neko-danger);
   border-radius: 8px 14px 14px 8px;
   color: var(--neko-danger-ink);
-  background: rgba(249, 231, 233, 0.9);
+  background: var(--neko-danger-soft);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -464,10 +473,10 @@ function osLabel(os: string): string {
   display: grid;
   justify-items: center;
   padding: 30px 24px 33px;
-  border: 1px solid rgba(191, 104, 116, 0.2);
+  border: 1px solid var(--neko-danger-line);
   border-radius: 21px 21px 27px 14px;
   color: var(--neko-danger-ink);
-  background: rgba(249, 231, 233, 0.58);
+  background: var(--neko-danger-soft);
   text-align: center;
 }
 
@@ -532,19 +541,17 @@ function osLabel(os: string): string {
   gap: 13px;
   padding: 14px 14px 14px 0;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--neko-line);
   border-radius: 17px 17px 22px 12px;
-  color: inherit;
+  color: var(--neko-ink);
   background:
-    radial-gradient(circle at 90% -30%, rgba(224, 207, 236, 0.34), transparent 9rem),
-    rgba(255, 252, 250, 0.89);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    var(--neko-shadow-soft);
+    radial-gradient(circle at 90% -30%, var(--neko-primary-soft), transparent 9rem),
+    var(--neko-surface-solid);
+  box-shadow: var(--neko-shadow-soft);
   cursor: pointer;
   text-align: left;
   text-decoration: none;
-  transition: transform 190ms ease, box-shadow 190ms ease, background-color 190ms ease;
+  transition: transform 190ms ease, box-shadow 190ms ease, background-color 190ms ease, border-color 190ms ease;
 }
 
 .device-entry__accent {
@@ -554,12 +561,17 @@ function osLabel(os: string): string {
 }
 
 .device-entry--offline {
-  background: rgba(249, 246, 245, 0.83);
-  box-shadow: 0 6px 18px rgba(92, 67, 92, 0.06);
+  background: var(--neko-surface-muted);
+  opacity: 0.92;
 }
 
 .device-entry--offline .device-entry__accent {
-  background: #bcb2b8;
+  background: var(--neko-neutral-ink);
+}
+
+.device-entry--offline .device-name,
+.device-entry--offline .device-entry__meta {
+  color: var(--neko-ink-soft);
 }
 
 .device-entry__body {
@@ -637,17 +649,17 @@ function osLabel(os: string): string {
   min-width: 52px;
   min-height: 44px;
   padding: 0 10px;
-  border: 1px solid rgba(191, 104, 116, 0.28);
+  border: 1px solid var(--neko-danger-line);
   border-radius: 12px;
-  color: var(--neko-danger);
-  background: rgba(249, 231, 233, 0.72);
+  color: var(--neko-danger-ink);
+  background: var(--neko-danger-soft);
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
 }
 
 .unbind-btn:hover {
-  background: rgba(249, 231, 233, 0.95);
+  filter: brightness(1.06);
 }
 
 .device-skeleton {
@@ -656,7 +668,8 @@ function osLabel(os: string): string {
   min-height: 82px;
   padding: 19px 22px;
   border-radius: 17px 17px 22px 12px;
-  background: var(--neko-panel);
+  background: var(--neko-surface-solid);
+  border: 1px solid var(--neko-line);
 }
 
 .skeleton-line {
@@ -666,9 +679,9 @@ function osLabel(os: string): string {
   background:
     linear-gradient(
       90deg,
-      rgba(221, 211, 217, 0.52) 20%,
-      rgba(245, 238, 241, 0.8) 45%,
-      rgba(221, 211, 217, 0.52) 70%
+      color-mix(in srgb, var(--neko-ink-faint) 28%, transparent) 20%,
+      color-mix(in srgb, var(--neko-ink-faint) 14%, transparent) 45%,
+      color-mix(in srgb, var(--neko-ink-faint) 28%, transparent) 70%
     );
   background-size: 220% 100%;
   animation: skeleton-sheen 1.5s ease-in-out infinite;
@@ -696,9 +709,9 @@ function osLabel(os: string): string {
   display: grid;
   justify-items: center;
   padding: 30px 24px 33px;
-  border: 1px dashed rgba(126, 102, 140, 0.26);
+  border: 1px dashed var(--neko-line);
   border-radius: 21px 21px 27px 14px;
-  background: var(--neko-surface);
+  background: var(--neko-surface-solid);
   text-align: center;
 }
 
@@ -706,7 +719,7 @@ function osLabel(os: string): string {
   width: 88px;
   height: 88px;
   border-radius: 25px;
-  box-shadow: 0 10px 25px rgba(91, 67, 90, 0.14);
+  box-shadow: var(--neko-shadow-soft);
   object-fit: cover;
 }
 
@@ -736,7 +749,12 @@ function osLabel(os: string): string {
   font-size: 15px;
   font-weight: 650;
   text-decoration: none;
-  box-shadow: 0 8px 20px rgba(114, 91, 157, 0.28);
+  box-shadow: var(--neko-shadow-soft);
+}
+
+html[data-theme='dark'] .empty-pair-link,
+html[data-theme='dark'] .dock-pair {
+  color: #1a1422;
 }
 
 .bottom-dock {
@@ -748,9 +766,9 @@ function osLabel(os: string): string {
   width: min(100%, 540px);
   margin: 0 auto;
   padding: 12px 20px calc(12px + var(--neko-safe-bottom, 0px));
-  border-top: 1px solid rgba(110, 89, 119, 0.1);
-  background: rgba(250, 244, 242, 0.88);
-  box-shadow: 0 -12px 32px rgba(87, 64, 89, 0.07);
+  border-top: 1px solid var(--neko-line);
+  background: color-mix(in srgb, var(--neko-surface-solid) 92%, transparent);
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.18);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
@@ -770,8 +788,9 @@ function osLabel(os: string): string {
 
 @media (hover: hover) {
   .device-entry:hover {
-    background-color: rgba(255, 255, 255, 0.96);
-    box-shadow: 0 13px 28px rgba(92, 67, 92, 0.13);
+    border-color: color-mix(in srgb, var(--neko-primary) 40%, var(--neko-line));
+    background-color: var(--neko-surface-muted);
+    box-shadow: var(--neko-shadow);
     transform: translateY(-2px);
   }
 

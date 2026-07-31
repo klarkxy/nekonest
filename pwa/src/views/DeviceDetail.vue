@@ -366,16 +366,16 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   inset: -13px;
   z-index: -1;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.92), transparent 67%);
+  background: radial-gradient(circle, var(--neko-primary-soft), transparent 67%);
 }
 
 .scene-portrait img {
   display: block;
   width: 104px;
   height: 104px;
-  border: 3px solid rgba(255, 253, 251, 0.92);
+  border: 3px solid var(--neko-panel-border);
   border-radius: 30px 30px 37px 19px;
-  box-shadow: 0 13px 28px rgba(92, 67, 92, 0.18);
+  box-shadow: var(--neko-shadow-soft);
   object-fit: cover;
 }
 
@@ -383,14 +383,13 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   position: relative;
   min-height: 119px;
   padding: 16px 15px 15px 25px;
-  border: 1px solid rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--neko-line);
   border-radius: 18px 18px 25px 12px;
+  color: var(--neko-ink);
   background:
-    radial-gradient(circle at 96% 4%, rgba(225, 207, 237, 0.42), transparent 8rem),
-    rgba(255, 252, 250, 0.9);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.82),
-    var(--neko-shadow-soft);
+    radial-gradient(circle at 96% 4%, var(--neko-primary-soft), transparent 8rem),
+    var(--neko-surface-solid);
+  box-shadow: var(--neko-shadow-soft);
 }
 
 .scene-dialogue h2 {
@@ -416,7 +415,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   left: -8px;
   width: 16px;
   height: 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.82);
+  border-bottom: 1px solid var(--neko-line);
   background: var(--neko-surface-solid);
   clip-path: polygon(100% 0, 100% 100%, 0 100%);
   transform: rotate(45deg);
@@ -526,9 +525,9 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 }
 
 .load-error {
-  border: 1px solid rgba(191, 104, 116, 0.22);
+  border: 1px solid var(--neko-danger-line);
   color: var(--neko-danger-ink);
-  background: rgba(249, 231, 233, 0.72);
+  background: var(--neko-danger-soft);
 }
 
 .load-error p {
@@ -544,6 +543,10 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   background: var(--neko-primary);
   font-weight: 650;
   cursor: pointer;
+}
+
+html[data-theme='dark'] .retry-load {
+  color: #1a1422;
 }
 
 .retry-load:disabled {

@@ -78,7 +78,7 @@ function save() {
   border-radius: 26px 26px 32px 18px;
   object-fit: cover;
   box-shadow: 0 14px 30px rgba(104, 74, 105, 0.18);
-  border: 3px solid rgba(255, 253, 251, 0.92);
+  border: 3px solid var(--neko-panel-border);
 }
 
 h1 {

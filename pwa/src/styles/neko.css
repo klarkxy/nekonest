@@ -55,52 +55,65 @@ html[data-theme="light"] {
     system-ui, sans-serif;
 }
 
-/* Warm charcoal + soft violet — avoid muddy pink-gray wash */
+/* Warm charcoal + soft violet — high contrast surfaces, no light-wash cards */
 html[data-theme="dark"] {
   color-scheme: dark;
-  --neko-bg: #1a1620;
-  --neko-bg-deep: #121018;
-  --neko-surface: rgba(32, 28, 40, 0.96);
-  --neko-surface-solid: #221e2c;
-  --neko-surface-muted: #2b2636;
-  --neko-ink: #f0ebf5;
-  --neko-ink-soft: #b9b1c6;
-  --neko-ink-faint: #91899e;
-  --neko-primary: #c4b0e8;
-  --neko-primary-deep: #ddd0f4;
-  --neko-primary-soft: rgba(196, 176, 232, 0.16);
-  --neko-rose: #e0a8b6;
-  --neko-rose-soft: rgba(224, 168, 182, 0.14);
-  --neko-mint: #7ec9a4;
-  --neko-warning: #d8a86a;
-  --neko-danger: #e08b96;
-  --neko-line: rgba(196, 176, 232, 0.14);
-  --neko-shadow: 0 18px 46px rgba(0, 0, 0, 0.5);
-  --neko-shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.38);
-  --neko-page-bg: #0e0c12;
-  --neko-page-glow-a: rgba(90, 70, 130, 0.14);
-  --neko-page-glow-b: rgba(140, 90, 120, 0.1);
-  --neko-shell-glow-a: rgba(90, 70, 140, 0.12);
-  --neko-shell-glow-b: rgba(120, 80, 140, 0.1);
-  --neko-panel: rgba(32, 28, 40, 0.98);
-  --neko-panel-border: rgba(196, 176, 232, 0.12);
-  --neko-bubble-assistant: #2a2534;
-  --neko-bubble-tool-bg: #32281e;
-  --neko-bubble-tool-ink: #e2c9a0;
-  --neko-bubble-tool-line: rgba(216, 168, 106, 0.28);
-  --neko-success-soft: rgba(126, 201, 164, 0.14);
-  --neko-success-ink: #9fd9ba;
-  --neko-success-line: rgba(126, 201, 164, 0.32);
-  --neko-warning-soft: rgba(216, 168, 106, 0.14);
-  --neko-warning-ink: #e2c29a;
-  --neko-warning-line: rgba(216, 168, 106, 0.32);
-  --neko-danger-soft: rgba(224, 139, 150, 0.14);
-  --neko-danger-ink: #f0a8b0;
-  --neko-danger-line: rgba(224, 139, 150, 0.35);
-  --neko-neutral-soft: rgba(185, 177, 198, 0.12);
-  --neko-neutral-ink: #b9b1c6;
-  --neko-neutral-line: rgba(185, 177, 198, 0.22);
-  --neko-code-bg: rgba(255, 255, 255, 0.08);
+  --neko-bg: #16131c;
+  --neko-bg-deep: #100e16;
+  --neko-surface: rgba(36, 31, 46, 0.97);
+  --neko-surface-solid: #262131;
+  --neko-surface-muted: #312b3d;
+  --neko-ink: #f4f0f8;
+  --neko-ink-soft: #c7bfd4;
+  --neko-ink-faint: #9b93ab;
+  --neko-primary: #cbb8ef;
+  --neko-primary-deep: #e4daf8;
+  --neko-primary-soft: rgba(203, 184, 239, 0.18);
+  --neko-rose: #e6b0bc;
+  --neko-rose-soft: rgba(230, 176, 188, 0.16);
+  --neko-mint: #86d0ac;
+  --neko-warning: #e0b176;
+  --neko-danger: #e898a2;
+  --neko-line: rgba(203, 184, 239, 0.2);
+  --neko-shadow: 0 18px 46px rgba(0, 0, 0, 0.55);
+  --neko-shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --neko-page-bg: #0c0a10;
+  --neko-page-glow-a: rgba(110, 88, 160, 0.16);
+  --neko-page-glow-b: rgba(150, 90, 130, 0.1);
+  --neko-shell-glow-a: rgba(110, 88, 160, 0.14);
+  --neko-shell-glow-b: rgba(130, 90, 150, 0.1);
+  --neko-panel: rgba(36, 31, 46, 0.98);
+  --neko-panel-border: rgba(203, 184, 239, 0.18);
+  --neko-bubble-assistant: #2e2838;
+  --neko-bubble-tool-bg: #3a3024;
+  --neko-bubble-tool-ink: #edd2a8;
+  --neko-bubble-tool-line: rgba(224, 177, 118, 0.32);
+  --neko-success-soft: rgba(134, 208, 172, 0.16);
+  --neko-success-ink: #a8e0c0;
+  --neko-success-line: rgba(134, 208, 172, 0.36);
+  --neko-warning-soft: rgba(224, 177, 118, 0.16);
+  --neko-warning-ink: #edcfa0;
+  --neko-warning-line: rgba(224, 177, 118, 0.36);
+  --neko-danger-soft: rgba(232, 152, 162, 0.16);
+  --neko-danger-ink: #f4b4bc;
+  --neko-danger-line: rgba(232, 152, 162, 0.38);
+  --neko-neutral-soft: rgba(199, 191, 212, 0.14);
+  --neko-neutral-ink: #c7bfd4;
+  --neko-neutral-line: rgba(199, 191, 212, 0.26);
+  --neko-code-bg: rgba(255, 255, 255, 0.09);
+}
+
+/* Dark: status dots stay legible on charcoal */
+html[data-theme="dark"] .status-dot {
+  background: #7a7288;
+}
+
+html[data-theme="dark"] .status-dot.online {
+  box-shadow: 0 0 0 4px rgba(134, 208, 172, 0.18);
+}
+
+html[data-theme="dark"] .status-dot.waiting {
+  box-shadow: 0 0 0 4px rgba(224, 177, 118, 0.18);
 }
 
 *,
