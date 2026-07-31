@@ -39,9 +39,9 @@
     </div>
 
     <div v-if="visibleProjects.length === 0" class="empty-hint">
-      <template v-if="agentFilter && sessions.length > 0">{{ t('threadList.emptyFilter') }}</template>
+      <template v-if="agentFilter && mergedSessions.length > 0">{{ t('threadList.emptyFilter') }}</template>
       <template v-else-if="prefs.showArchived">{{ t('threadList.emptyNone') }}</template>
-      <template v-else-if="sessions.length === 0">
+      <template v-else-if="mergedSessions.length === 0">
         {{ t('threadList.emptyCreateOnPc') }}
       </template>
       <template v-else>{{ t('threadList.emptyAllArchived') }}</template>
@@ -90,30 +90,41 @@
           :style="agentStyle(agent)"
           :aria-labelledby="agentHeadingId(agent.key)"
         >
-          <button
-            :id="agentHeadingId(agent.key)"
-            type="button"
-            class="agent-header"
-            :aria-expanded="!prefs.isCollapsed(agentNodeKey(project.key, agent.type))"
-            :aria-controls="agentPanelId(agent.key)"
-            @click="prefs.toggleCollapse(agentNodeKey(project.key, agent.type))"
-          >
-            <img
-              class="agent-avatar"
-              :src="agent.avatar"
-              alt=""
-              width="36"
-              height="36"
-              @error="onAvatarError"
-            />
-            <span class="agent-copy">
-              <span class="agent-title">{{ agent.label }}</span>
-              <span class="agent-subtitle">{{ t('threadList.agentThreads', { n: agent.sessions.length }) }}</span>
-            </span>
-            <span class="agent-chevron" aria-hidden="true">
-              {{ prefs.isCollapsed(agentNodeKey(project.key, agent.type)) ? '▸' : '▾' }}
-            </span>
-          </button>
+          <div class="agent-header-row">
+            <button
+              :id="agentHeadingId(agent.key)"
+              type="button"
+              class="agent-header"
+              :aria-expanded="!prefs.isCollapsed(agentNodeKey(project.key, agent.type))"
+              :aria-controls="agentPanelId(agent.key)"
+              @click="prefs.toggleCollapse(agentNodeKey(project.key, agent.type))"
+            >
+              <img
+                class="agent-avatar"
+                :src="agent.avatar"
+                alt=""
+                width="36"
+                height="36"
+                @error="onAvatarError"
+              />
+              <span class="agent-copy">
+                <span class="agent-title">{{ agent.label }}</span>
+                <span class="agent-subtitle">{{ t('threadList.agentThreads', { n: agent.sessions.length }) }}</span>
+              </span>
+              <span class="agent-chevron" aria-hidden="true">
+                {{ prefs.isCollapsed(agentNodeKey(project.key, agent.type)) ? '▸' : '▾' }}
+              </span>
+            </button>
+            <button
+              v-if="canSpawnCodex(agent, project)"
+              type="button"
+              class="agent-add-btn"
+              :title="t('threadList.newCodexTitle')"
+              :aria-label="t('threadList.newCodexAria', { project: project.label })"
+              :disabled="!deviceOnline"
+              @click.stop="onNewCodex(project)"
+            >+</button>
+          </div>
 
           <div
             v-show="!prefs.isCollapsed(agentNodeKey(project.key, agent.type))"
@@ -124,7 +135,10 @@
               v-for="session in agent.sessions"
               :key="session.id"
               class="session-item"
-              :class="{ archived: prefs.isArchived(session.id) }"
+              :class="{
+                archived: prefs.isArchived(session.id),
+                draft: isLocalDraftSessionId(session.id)
+              }"
             >
               <RouterLink
                 class="session-main"
@@ -134,7 +148,13 @@
                   detail: sessionActivityPresentation(session.status).detail
                 })"
               >
-                <span class="session-summary">{{ shortSummary(session.summary) }}</span>
+                <span class="session-summary">
+                  <span
+                    v-if="isLocalDraftSessionId(session.id)"
+                    class="draft-badge"
+                  >{{ t('threadList.draftBadge') }}</span>
+                  {{ shortSummary(session.summary) || (isLocalDraftSessionId(session.id) ? t('threadList.draftSummary') : '') }}
+                </span>
                 <span
                   class="session-status"
                   :class="`session-status--${sessionActivityPresentation(session.status).tone}`"
@@ -170,29 +190,42 @@
 <script setup lang="ts">
 import { computed, ref, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { UNKNOWN_AGENT_META } from '@/config/agents'
 import { sessionDetailLocation } from '@/router/navigation'
 import { useSessionPrefsStore } from '@/stores/sessionPrefs'
+import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
 import type { AgentSession, AgentType } from '@/types/protocol'
 import { agentLabel, sessionActivityPresentation, shortSummary } from '@/utils/agent'
-import { buildSessionTree, type SessionTreeAgent } from '@/utils/sessionTree'
+import { buildSessionTree, type SessionTreeAgent, type SessionTreeProject } from '@/utils/sessionTree'
 import { sortSessionsByMode } from '@/utils/sessionSort'
 
 const props = defineProps<{
   sessions: AgentSession[]
   deviceId: string
+  deviceOnline?: boolean
 }>()
 
 const { t } = useI18n()
+const router = useRouter()
 const prefs = useSessionPrefsStore()
+const localThreads = useLocalThreadsStore()
 const searchQuery = ref('')
 /** Empty string = all agents. */
 const agentFilter = ref('')
+const deviceOnline = computed(() => props.deviceOnline !== false)
+
+const mergedSessions = computed(() => {
+  const remote = props.sessions
+  const local = localThreads.asSessions(props.deviceId)
+  // Local drafts first within same activity, then remote (dedupe by id).
+  const seen = new Set(remote.map(s => s.id))
+  return [...local.filter(s => !seen.has(s.id)), ...remote]
+})
 
 const agentOptions = computed(() => {
   const counts = new Map<string, number>()
-  for (const s of props.sessions) {
+  for (const s of mergedSessions.value) {
     const key = String(s.agent_type || '').trim() || 'unknown'
     counts.set(key, (counts.get(key) || 0) + 1)
   }
@@ -208,7 +241,7 @@ const agentOptions = computed(() => {
 const visibleProjects = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   const agent = agentFilter.value
-  const filtered = props.sessions.filter(session => {
+  const filtered = mergedSessions.value.filter(session => {
     if (!prefs.showArchived && prefs.isArchived(session.id)) return false
     if (agent && String(session.agent_type || '').trim() !== agent) return false
     if (!q) return true
@@ -227,6 +260,20 @@ const visibleProjects = computed(() => {
   // Product rule: always recent activity first (no manual reorder).
   return buildSessionTree(filtered, list => sortSessionsByMode(list, 'recent'))
 })
+
+function canSpawnCodex(agent: SessionTreeAgent, project: SessionTreeProject): boolean {
+  if (agent.type !== 'codex') return false
+  // Need a real project path (not 未分类 without path).
+  const path = (project.path || '').trim()
+  return !!path && !project.uncategorized
+}
+
+function onNewCodex(project: SessionTreeProject) {
+  const path = (project.path || '').trim()
+  if (!path || !deviceOnline.value) return
+  const draft = localThreads.createCodexDraft(props.deviceId, path, project.label)
+  void router.push(sessionDetailLocation(props.deviceId, draft.id))
+}
 
 function projectNodeKey(projectKey: string): string {
   return `project:${projectKey}`
@@ -465,9 +512,17 @@ function shortPath(path: string, max = 36): string {
   border-top: 1px solid var(--neko-line);
 }
 
+.agent-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+}
+
 .agent-header {
   display: flex;
   width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 10px;
   padding: 11px 2px 9px;
@@ -477,6 +532,42 @@ function shortPath(path: string, max = 36): string {
   cursor: pointer;
   font: inherit;
   text-align: left;
+}
+
+.agent-add-btn {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  margin-right: 2px;
+  border: 1px solid var(--neko-line);
+  border-radius: 12px;
+  color: var(--neko-primary-deep);
+  background: var(--neko-primary-soft);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.agent-add-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.session-item.draft {
+  border-left: 3px solid var(--neko-primary);
+}
+
+.draft-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--neko-primary-deep);
+  background: var(--neko-primary-soft);
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
 }
 
 .agent-avatar {

@@ -726,6 +726,11 @@ export const useSessionStore = defineStore('sessions', () => {
         return
       }
       const did = session.device_id || activeDeviceId || ''
+      // Phone-only drafts have no nest/native history until start_thread succeeds.
+      if (session.id.startsWith('local_draft_')) {
+        restoreOutboxMessages(did, session.id)
+        return
+      }
       const buffered = inbox.get(inboxKey(did, session.id))
       if (buffered?.length) {
         messages.value = mergeHistoryLists([], buffered)

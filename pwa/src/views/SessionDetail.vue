@@ -270,13 +270,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, RouterLink } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { routePageTitle, setDocumentTitle } from '@/router/title'
 import { NButton, NInput } from 'naive-ui'
 import { getAgentMeta, UNKNOWN_AGENT_META } from '@/config/agents'
-import { deviceDetailLocation } from '@/router/navigation'
+import { deviceDetailLocation, sessionDetailLocation } from '@/router/navigation'
 import { useSessionStore } from '@/stores/session'
 import { useDraftStore } from '@/stores/drafts'
+import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
 import { projectBaseName, projectDisplay, sessionActivityPresentation, shortSummary } from '@/utils/agent'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
 import {
@@ -289,12 +290,16 @@ import type { SessionMessage, AttachmentRef as ProtoAtt } from '@/types/protocol
 
 const { t } = useI18n()
 const route = useRoute()
+const router = useRouter()
 const sessionStore = useSessionStore()
 const draftStore = useDraftStore()
+const localThreads = useLocalThreadsStore()
 
 const deviceId = computed(() => String(route.params.deviceId || ''))
 // Vue Router already decodes params — do not decodeURIComponent again (breaks literal %).
 const sessionId = computed(() => String(route.params.sessionId || ''))
+const isLocalDraft = computed(() => isLocalDraftSessionId(sessionId.value))
+const pendingStartOpId = ref('')
 const inputText = ref('')
 const sending = ref(false)
 const uploading = ref(false)
@@ -481,9 +486,25 @@ function bindSession() {
     saveDraftFor(boundDraftKey.deviceId, boundDraftKey.sessionId)
   }
   sessionStore.subscribeDevice(did)
-  const session = sessionStore.sessions.find(s => s.id === sid)
+  const local = isLocalDraftSessionId(sid) ? localThreads.get(sid) : undefined
+  const session =
+    sessionStore.sessions.find(s => s.id === sid) ||
+    (local
+      ? localThreads.asSessions(did).find(s => s.id === sid)
+      : undefined)
   if (session) {
     sessionStore.setCurrentSession(session)
+  } else if (local) {
+    sessionStore.setCurrentSession({
+      id: local.id,
+      device_id: local.deviceId,
+      agent_type: 'codex',
+      status: 'idle',
+      summary: local.summary || t('threadList.draftSummary'),
+      last_activity: local.lastActivity,
+      project_dir: local.projectDir,
+      project: local.project
+    })
   } else {
     sessionStore.setCurrentSession({
       id: sid,
@@ -493,6 +514,10 @@ function bindSession() {
       summary: '',
       last_activity: 0
     })
+  }
+  // Local drafts have no native history yet.
+  if (!isLocalDraftSessionId(sid)) {
+    /* history fetch stays in setCurrentSession path */
   }
   restoreDraft()
   boundDraftKey = { deviceId: did, sessionId: sid }
@@ -675,7 +700,7 @@ function onEnterKey(event: KeyboardEvent) {
 
 async function handleSend() {
   if (sendBlocked.value) {
-    sessionStore.lastError = '猫娘还在处理上一条，结束后再发送'
+    sessionStore.lastError = t('session.sendBusyHint')
     return
   }
   let prompt = inputText.value.trim()
@@ -694,6 +719,84 @@ async function handleSend() {
     mime: a.mime,
     size: a.size
   }))
+  const draftSid = sessionId.value
+  const did = deviceId.value
+
+  // Local Codex draft: start native thread first, then send (with attachments).
+  if (isLocalDraftSessionId(draftSid)) {
+    const local = localThreads.get(draftSid)
+    if (!local?.projectDir) {
+      sessionStore.lastError = t('deviceDetail.startCodexNeedProject')
+      sending.value = false
+      return
+    }
+    localThreads.touch(draftSid, prompt || t('threadList.draftSummary'))
+    const { ok, operationId } = sessionStore.startThread(did, local.projectDir, prompt)
+    if (!ok) {
+      sending.value = false
+      return
+    }
+    pendingStartOpId.value = operationId
+    // Keep composer content until owned; clear after migrate.
+    const waitOwned = () =>
+      new Promise<{ sessionId?: string; error?: string; status: string }>((resolve) => {
+        const started = Date.now()
+        const tick = window.setInterval(() => {
+          const op = sessionStore.startOps[operationId]
+          if (!op) return
+          if (op.status === 'owned' || op.status === 'failed' || op.status === 'indeterminate') {
+            window.clearInterval(tick)
+            resolve({
+              sessionId: op.sessionId,
+              error: op.error,
+              status: op.status
+            })
+          } else if (Date.now() - started > 90000) {
+            window.clearInterval(tick)
+            resolve({ status: 'failed', error: t('deviceDetail.startCodexFailed') })
+          }
+        }, 200)
+      })
+    const result = await waitOwned()
+    if (result.status !== 'owned' || !result.sessionId) {
+      sessionStore.lastError = result.error || t('deviceDetail.startCodexFailed')
+      sending.value = false
+      return
+    }
+    const realId = result.sessionId
+    // Move input draft key to real session id.
+    draftStore.set(did, realId, prompt, pendingAtts.value)
+    draftStore.clear(did, draftSid)
+    localThreads.remove(draftSid)
+    inputText.value = ''
+    const attsSnapshot = [...pendingAtts.value]
+    pendingAtts.value = []
+    // Navigate to native session, then send attachments (prompt already in start_thread).
+    await router.replace(sessionDetailLocation(did, realId))
+    if (atts.length) {
+      const okSend = sessionStore.sendPrompt(did, realId, prompt || t('session.attachmentsFollowup'), atts)
+      if (!okSend) {
+        pendingAtts.value = attsSnapshot
+        inputText.value = prompt
+        scheduleSaveDraft()
+      } else {
+        for (const a of attsSnapshot) {
+          if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(a.previewUrl)
+          }
+        }
+      }
+    } else {
+      for (const a of attsSnapshot) {
+        if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(a.previewUrl)
+        }
+      }
+    }
+    sending.value = false
+    return
+  }
+
   inputText.value = ''
   const attsSnapshot = [...pendingAtts.value]
   pendingAtts.value = []
@@ -716,6 +819,7 @@ async function handleSend() {
 }
 
 function reloadHistory() {
+  if (isLocalDraftSessionId(sessionId.value)) return
   sessionStore.requestNativeHistory(deviceId.value, sessionId.value)
 }
 

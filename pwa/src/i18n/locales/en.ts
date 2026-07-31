@@ -131,19 +131,9 @@ export default {
     welcomeBackBody: 'Pick a workspace and agent to continue a thread already on this PC.',
     loadError: 'Could not load the thread list. Try again shortly.',
     loadNetwork: 'Network issue — thread list not loaded.',
-    startCodexTitle: 'New Codex thread',
-    startCodexHint: 'Only directories already discovered from native Codex sessions; created via host app-server.',
-    startCodexDir: 'Project directory',
-    startCodexPickDir: 'Choose a project directory…',
-    startCodexPrompt: 'First message (optional)',
-    startCodexPromptPh: 'Optional first prompt…',
-    startCodexSubmit: 'Create thread',
-    startCodexStarting: 'Creating…',
-    startCodexOwned: 'Created — opening…',
-    startCodexFailed: 'Create failed',
-    startCodexIndeterminate: 'Outcome unclear — check the list shortly',
-    startCodexNeedProject: 'No Codex project directories yet. Open a project with Codex on the PC first.',
-    startCodexNeedAppServer: 'Codex app-server spawn is unavailable. Upgrade/start codex app-server on the host.'
+    startCodexStarting: 'Creating Codex thread…',
+    startCodexFailed: 'Could not create Codex thread',
+    startCodexNeedProject: 'Missing project directory.'
   },
   threadList: {
     showArchived: 'Show archived',
@@ -163,7 +153,11 @@ export default {
     archiveTitle: 'Archive on this phone',
     unarchiveTitle: 'Restore on this phone',
     archiveAria: 'Archive thread',
-    unarchiveAria: 'Unarchive thread'
+    unarchiveAria: 'Unarchive thread',
+    newCodexTitle: 'New Codex thread in this folder',
+    newCodexAria: 'New Codex thread in {project}',
+    draftBadge: 'Draft',
+    draftSummary: 'Unsent new thread'
   },
   session: {
     interrupt: 'Stop',
@@ -182,6 +176,7 @@ export default {
     send: 'Send',
     sendBlocked: 'Send after the current task ends',
     sendBusyHint: 'The agent is still on the last prompt. You can draft the next one.',
+    attachmentsFollowup: '(attachments)',
     approvalTitle: 'Needs approval',
     approvalNote:
       'This agent cannot approve from the phone. Finish approve/deny in the host terminal; replies sync after that.',

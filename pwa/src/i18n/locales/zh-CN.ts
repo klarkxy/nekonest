@@ -130,19 +130,9 @@ export default {
     welcomeBackBody: '从工作目录走进对应猫娘，继续家里已有的线团。',
     loadError: '线团清单没读到，稍后再试。',
     loadNetwork: '网络不顺，线团清单没拿到。',
-    startCodexTitle: '新建 Codex 线团',
-    startCodexHint: '仅限已发现的项目目录，经本机 codex app-server 创建。',
-    startCodexDir: '项目目录',
-    startCodexPickDir: '选择项目目录…',
-    startCodexPrompt: '首条消息（可选）',
-    startCodexPromptPh: '可选：第一句想说的话…',
-    startCodexSubmit: '创建线团',
-    startCodexStarting: '正在创建…',
-    startCodexOwned: '已创建，正在打开…',
-    startCodexFailed: '创建失败',
-    startCodexIndeterminate: '结果未确认，请稍后在列表中查看',
-    startCodexNeedProject: '还没有 Codex 项目目录。请先在电脑上用 Codex 打开过某个项目。',
-    startCodexNeedAppServer: '当前 Codex 未提供 app-server 开线程能力，请升级/启动 codex app-server。'
+    startCodexStarting: '正在创建 Codex 线团…',
+    startCodexFailed: '创建 Codex 线团失败',
+    startCodexNeedProject: '缺少项目目录，无法创建。'
   },
   threadList: {
     showArchived: '显示已收起',
@@ -162,7 +152,11 @@ export default {
     archiveTitle: '在手机上收起',
     unarchiveTitle: '从手机侧放回',
     archiveAria: '收起线团',
-    unarchiveAria: '取消收起'
+    unarchiveAria: '取消收起',
+    newCodexTitle: '在此目录新建 Codex 线团',
+    newCodexAria: '在 {project} 新建 Codex 线团',
+    draftBadge: '草稿',
+    draftSummary: '未发送的新线团'
   },
   session: {
     interrupt: '中断',
@@ -180,6 +174,7 @@ export default {
     send: '发送',
     sendBlocked: '当前任务结束后可发送',
     sendBusyHint: '猫娘还在处理上一条，可以先把下一句写好。',
+    attachmentsFollowup: '（附件）',
     approvalTitle: '需要审批',
     approvalNote:
       '当前 agent 不支持手机审批。请到主机终端批准或拒绝；完成后回复会同步到这里。',

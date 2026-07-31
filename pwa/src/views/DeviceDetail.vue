@@ -90,65 +90,11 @@
         {{ t('deviceDetail.loadingThreads') }}
       </div>
 
-      <section
-        v-if="canStartCodex && isOnline"
-        class="start-thread-panel"
-        aria-labelledby="start-codex-title"
-      >
-        <div class="start-thread-head">
-          <h3 id="start-codex-title">{{ t('deviceDetail.startCodexTitle') }}</h3>
-          <p>{{ t('deviceDetail.startCodexHint') }}</p>
-          <p v-if="!codexSpawnReady" class="start-warn">{{ t('deviceDetail.startCodexNeedAppServer') }}</p>
-        </div>
-        <label class="start-field">
-          <span class="sr-only">{{ t('deviceDetail.startCodexDir') }}</span>
-          <select v-model="startCwd" class="start-select" :disabled="startBusy">
-            <option disabled value="">{{ t('deviceDetail.startCodexPickDir') }}</option>
-            <option
-              v-for="dir in codexProjectDirs"
-              :key="dir.path"
-              :value="dir.path"
-            >{{ dir.label }}</option>
-          </select>
-        </label>
-        <label class="start-field">
-          <span class="sr-only">{{ t('deviceDetail.startCodexPrompt') }}</span>
-          <input
-            v-model="startPrompt"
-            type="text"
-            class="start-input"
-            :placeholder="t('deviceDetail.startCodexPromptPh')"
-            :disabled="startBusy"
-            autocomplete="off"
-          />
-        </label>
-        <button
-          type="button"
-          class="start-btn"
-          :disabled="startBusy || !startCwd"
-          @click="onStartCodex"
-        >
-          {{ startBusy ? t('deviceDetail.startCodexStarting') : t('deviceDetail.startCodexSubmit') }}
-        </button>
-        <p v-if="startStatusText" class="start-status" role="status">{{ startStatusText }}</p>
-      </section>
-      <p
-        v-else-if="isOnline && codexProjectDirs.length === 0 && !loadingSessions"
-        class="start-unavailable"
-      >
-        {{ t('deviceDetail.startCodexNeedProject') }}
-      </p>
-      <p
-        v-else-if="isOnline && !canStartCodex && hasCodexSessions"
-        class="start-unavailable"
-      >
-        {{ t('deviceDetail.startCodexNeedAppServer') }}
-      </p>
-
       <SessionThreadList
-        v-if="sessionStore.sessions.length > 0 || (!loadingSessions && !loadError)"
+        v-if="sessionStore.sessions.length > 0 || localThreadCount > 0 || (!loadingSessions && !loadError)"
         :sessions="sessionStore.sessions"
         :device-id="deviceId"
+        :device-online="isOnline"
       />
     </section>
   </div>
@@ -157,24 +103,24 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter, RouterLink } from 'vue-router'
+import { useRoute, RouterLink } from 'vue-router'
 import { routePageTitle, setDocumentTitle } from '@/router/title'
 import { useDeviceStore } from '@/stores/device'
 import { useSessionStore } from '@/stores/session'
 import { useBindingStore } from '@/stores/binding'
+import { useLocalThreadsStore } from '@/stores/localThreads'
 import { apiFetch } from '@/api/http'
 import { ensurePushSubscription } from '@/api/push'
 import { nekoWS } from '@/api/websocket'
-import { devicesLocation, sessionDetailLocation } from '@/router/navigation'
+import { devicesLocation } from '@/router/navigation'
 import SessionThreadList from '@/components/SessionThreadList.vue'
-import { capabilityEnabled } from '@/types/protocol'
 
 const { t } = useI18n()
 const route = useRoute()
-const router = useRouter()
 const deviceStore = useDeviceStore()
 const sessionStore = useSessionStore()
 const binding = useBindingStore()
+const localThreads = useLocalThreadsStore()
 
 const deviceId = computed(() => String(route.params.deviceId || ''))
 const device = computed(() => deviceStore.devices.find(d => d.id === deviceId.value))
@@ -186,102 +132,29 @@ const waitingApprovalCount = computed(
 )
 const loadError = ref('')
 const loadingSessions = ref(false)
-const startCwd = ref('')
-const startPrompt = ref('')
-const activeStartOpId = ref('')
-
-const hasCodexSessions = computed(() =>
-  sessionStore.sessions.some(s => s.agent_type === 'codex')
-)
-
-const codexProjectDirs = computed(() => {
-  const map = new Map<string, string>()
-  for (const s of sessionStore.sessions) {
-    if (s.agent_type !== 'codex') continue
-    const path = (s.project_dir || '').trim()
-    if (!path) continue
-    const label = (s.project || path.replace(/\\/g, '/').split('/').filter(Boolean).pop() || path).trim()
-    if (!map.has(path)) map.set(path, label)
-  }
-  return [...map.entries()]
-    .map(([path, label]) => ({ path, label }))
-    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
-})
-
-const codexSpawnReady = computed(() =>
-  sessionStore.sessions.some(
-    s => s.agent_type === 'codex' && capabilityEnabled(s.capabilities, 'spawn')
-  )
-)
-
-const canStartCodex = computed(() => codexProjectDirs.value.length > 0)
-
-const startBusy = computed(() => {
-  const id = activeStartOpId.value
-  if (!id) return false
-  const op = sessionStore.startOps[id]
-  return !!op && op.status === 'starting'
-})
-
-const startStatusText = computed(() => {
-  const id = activeStartOpId.value
-  if (!id) return ''
-  const op = sessionStore.startOps[id]
-  if (!op) return ''
-  if (op.status === 'starting') return t('deviceDetail.startCodexStarting')
-  if (op.status === 'owned') return t('deviceDetail.startCodexOwned')
-  if (op.status === 'indeterminate') return t('deviceDetail.startCodexIndeterminate')
-  if (op.status === 'failed') return op.error || t('deviceDetail.startCodexFailed')
-  return ''
-})
-
-watch(
-  () => activeStartOpId.value && sessionStore.startOps[activeStartOpId.value],
-  (op) => {
-    if (!op || op.status !== 'owned' || !op.sessionId) return
-    const sid = op.sessionId
-    void router.push(sessionDetailLocation(deviceId.value, sid))
-  }
-)
-
-watch(codexProjectDirs, (dirs) => {
-  if (!startCwd.value && dirs.length === 1) {
-    startCwd.value = dirs[0].path
-  }
-  if (startCwd.value && !dirs.some(d => d.path === startCwd.value)) {
-    startCwd.value = dirs[0]?.path || ''
-  }
-})
-
-function onStartCodex() {
-  if (!startCwd.value || startBusy.value) return
-  const { ok, operationId } = sessionStore.startThread(
-    deviceId.value,
-    startCwd.value,
-    startPrompt.value.trim()
-  )
-  activeStartOpId.value = operationId
-  if (!ok) return
-  startPrompt.value = ''
-}
+const localThreadCount = computed(() => localThreads.listForDevice(deviceId.value).length)
 
 const isOnline = computed(() => device.value?.status === 'online')
 const compactWelcome = computed(
-  () => isOnline.value && sessionStore.sessions.length > 0
+  () => isOnline.value && (sessionStore.sessions.length > 0 || localThreadCount.value > 0)
 )
 const showWelcome = computed(
-  () => !isOnline.value || sessionStore.sessions.length === 0 || compactWelcome.value
+  () => !isOnline.value || (sessionStore.sessions.length === 0 && localThreadCount.value === 0) || compactWelcome.value
 )
 
 const welcomeTitle = computed(() => {
   if (!isOnline.value) return t('deviceDetail.welcomeOfflineTitle')
-  if (sessionStore.sessions.length === 0) return t('deviceDetail.welcomeEmptyTitle')
+  if (sessionStore.sessions.length === 0 && localThreadCount.value === 0) {
+    return t('deviceDetail.welcomeEmptyTitle')
+  }
   return t('deviceDetail.welcomeBackTitle')
 })
 
 const welcomeBody = computed(() => {
   if (!isOnline.value) return t('deviceDetail.welcomeOfflineBody')
-  if (sessionStore.sessions.length === 0) return t('deviceDetail.welcomeEmptyBody')
+  if (sessionStore.sessions.length === 0 && localThreadCount.value === 0) {
+    return t('deviceDetail.welcomeEmptyBody')
+  }
   return t('deviceDetail.welcomeBackBody')
 })
 
@@ -692,84 +565,6 @@ html[data-theme='dark'] .retry-load {
 .load-pending {
   color: var(--neko-ink-soft);
   background: var(--neko-panel);
-}
-
-.start-thread-panel {
-  display: grid;
-  gap: 8px;
-  margin: 0 0 14px;
-  padding: 12px;
-  border: 1px solid var(--neko-line);
-  border-radius: 16px;
-  background: var(--neko-surface-solid);
-}
-
-.start-thread-head h3 {
-  margin: 0;
-  color: var(--neko-ink);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.start-thread-head p {
-  margin: 4px 0 0;
-  color: var(--neko-ink-soft);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.start-warn {
-  color: var(--neko-warning-ink) !important;
-}
-
-.start-field {
-  display: block;
-  min-width: 0;
-}
-
-.start-select,
-.start-input {
-  width: 100%;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--neko-line);
-  border-radius: 12px;
-  color: var(--neko-ink);
-  background: var(--neko-surface-muted);
-  font: inherit;
-}
-
-.start-btn {
-  min-height: 44px;
-  border: 0;
-  border-radius: 12px;
-  color: #1a1422;
-  background: var(--neko-primary);
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.start-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.start-status {
-  margin: 0;
-  color: var(--neko-ink-soft);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.start-unavailable {
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  color: var(--neko-ink-faint);
-  background: var(--neko-surface-muted);
-  font-size: 12px;
-  line-height: 1.45;
 }
 
 @media (max-width: 370px) {
