@@ -245,7 +245,9 @@ export default {
     attachCompressFail: '{name} 无法在当前浏览器中压缩',
     attachStillLarge: '{name} 压缩后仍超过 4MB',
     attachType: '{name} 的文件类型不受支持',
-    attachUpload: 'upload failed {status}'
+    attachUpload: 'upload failed {status}',
+    attachUploadFail: '上传失败',
+    attachMax: '一次最多 {n} 个附件'
   },
   outbox: {
     attachmentsOnly: '（发送了 {n} 个附件）'

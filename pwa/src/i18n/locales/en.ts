@@ -248,7 +248,9 @@ export default {
     attachCompressFail: '{name} cannot be compressed in this browser',
     attachStillLarge: '{name} still exceeds 4MB after compression',
     attachType: '{name} file type is not supported',
-    attachUpload: 'upload failed {status}'
+    attachUpload: 'upload failed {status}',
+    attachUploadFail: 'Upload failed',
+    attachMax: 'At most {n} attachments at once'
   },
   outbox: {
     attachmentsOnly: '(sent {n} attachment(s))'

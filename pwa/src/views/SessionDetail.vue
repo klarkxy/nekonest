@@ -214,14 +214,11 @@
     </p>
 
     <div class="input-bar">
-      <label
-        for="session-attachment-input"
+      <div
         class="attachment-picker"
         :class="{ disabled: sending || uploading }"
-        :aria-disabled="sending || uploading ? 'true' : undefined"
       >
         <span class="attachment-picker-icon" aria-hidden="true">＋</span>
-        <span class="sr-only">{{ t('session.attachAria') }}</span>
         <input
           id="session-attachment-input"
           type="file"
@@ -230,9 +227,10 @@
           accept="image/*,.txt,.md,.markdown,.pdf,.json,text/plain,text/markdown,application/pdf,application/json"
           :aria-label="t('session.attachAria')"
           :disabled="sending || uploading"
+          :title="t('session.attachAria')"
           @change="onFileChange"
         />
-      </label>
+      </div>
       <n-input
         v-model:value="inputText"
         :placeholder="composerPlaceholder"
@@ -595,7 +593,7 @@ async function addFiles(fileList: FileList | File[]) {
   if (uploading.value) return
   uploadError.value = ''
   if (pendingAtts.value.length >= MAX_COUNT) {
-    uploadError.value = `一次最多 ${MAX_COUNT} 个附件`
+    uploadError.value = t('errors.attachMax', { n: MAX_COUNT })
     return
   }
   const generation = routeGeneration
@@ -629,7 +627,7 @@ async function addFiles(fileList: FileList | File[]) {
     pendingAtts.value.push(...uploaded)
   } catch (e: unknown) {
     if (!controller.signal.aborted && generation === routeGeneration) {
-      uploadError.value = e instanceof Error ? e.message : '上传失败'
+      uploadError.value = e instanceof Error ? e.message : t('errors.attachUploadFail')
     }
   } finally {
     if (uploadController === controller) {
@@ -739,10 +737,10 @@ function handleInterrupt() {
   min-width: 44px;
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid rgba(191, 104, 116, 0.35);
+  border: 1px solid var(--neko-danger-line);
   border-radius: 12px;
-  color: var(--neko-danger);
-  background: rgba(249, 231, 233, 0.85);
+  color: var(--neko-danger-ink);
+  background: var(--neko-danger-soft);
   font-size: 13px;
   font-weight: 650;
   cursor: pointer;
@@ -808,23 +806,23 @@ function handleInterrupt() {
   flex: 0 0 auto;
   align-items: center;
   padding: 3px 8px;
-  border: 1px solid #ded7dc;
+  border: 1px solid var(--neko-neutral-line);
   border-radius: 999px;
-  background: #f3eff2;
-  color: #756b72;
+  background: var(--neko-neutral-soft);
+  color: var(--neko-neutral-ink);
   font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
 }
 .thread-state-pill--active {
-  border-color: #bfdfca;
-  background: #e9f5ed;
-  color: #3e7654;
+  border-color: var(--neko-success-line);
+  background: var(--neko-success-soft);
+  color: var(--neko-success-ink);
 }
 .thread-state-pill--waiting {
-  border-color: #ead09f;
-  background: #fff4df;
-  color: #8a642f;
+  border-color: var(--neko-warning-line);
+  background: var(--neko-warning-soft);
+  color: var(--neko-warning-ink);
 }
 .ws-pill {
   font-size: 11px;
@@ -834,21 +832,21 @@ function handleInterrupt() {
   color: var(--neko-ink-soft);
   white-space: nowrap;
 }
-.ws-pill.connecting { background: #FFF5E0; color: #C09040; }
+.ws-pill.connecting { background: var(--neko-warning-soft); color: var(--neko-warning-ink); }
 .ws-pill.auth_error,
-.ws-pill.disconnected { background: #FDE8E8; color: #C05050; }
+.ws-pill.disconnected { background: var(--neko-danger-soft); color: var(--neko-danger-ink); }
 
 .thread-activity {
   flex: 0 0 auto;
   padding: 8px 16px;
-  border-bottom: 1px solid #d8e9dd;
-  background: #f2f8f4;
-  color: #3e7654;
+  border-bottom: 1px solid var(--neko-success-line);
+  background: var(--neko-success-soft);
+  color: var(--neko-success-ink);
 }
 .thread-activity--waiting {
-  border-bottom-color: #ead09f;
-  background: #fff8e9;
-  color: #815e2f;
+  border-bottom-color: var(--neko-warning-line);
+  background: var(--neko-warning-soft);
+  color: var(--neko-warning-ink);
 }
 .thread-activity-copy {
   display: grid;
@@ -860,7 +858,8 @@ function handleInterrupt() {
   font-weight: 720;
 }
 .thread-activity-copy > span {
-  color: #68736b;
+  color: inherit;
+  opacity: 0.88;
   font-size: 11px;
   line-height: 1.35;
   text-wrap: pretty;
@@ -868,8 +867,8 @@ function handleInterrupt() {
 
 .approval-banner {
   flex: 0 0 auto;
-  background: #FFF8E8;
-  border-bottom: 1px solid #F4D4A0;
+  background: var(--neko-warning-soft);
+  border-bottom: 1px solid var(--neko-warning-line);
   padding: 12px 16px;
 }
 .approval-title {
@@ -905,7 +904,7 @@ function handleInterrupt() {
 .approval-note {
   margin: 8px 0 0;
   font-size: 12px;
-  color: #9E8A6A;
+  color: var(--neko-warning-ink);
   line-height: 1.45;
 }
 
@@ -950,22 +949,28 @@ function handleInterrupt() {
 .msg-body.md :deep(li) { margin: 0.15em 0; }
 .msg-body.md :deep(pre) {
   overflow-x: auto;
-  background: rgba(0,0,0,0.06);
+  background: var(--neko-code-bg);
   padding: 10px 12px;
   border-radius: 8px;
   font-size: 12px;
   margin: 0.5em 0;
 }
 .message-bubble.user .msg-body.md :deep(pre) { background: rgba(255,255,255,0.18); }
+:global(html[data-theme="dark"]) .message-bubble.user .msg-body.md :deep(pre) {
+  background: rgba(26, 20, 34, 0.18);
+}
 .msg-body.md :deep(code) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
-  background: rgba(0,0,0,0.06);
+  background: var(--neko-code-bg);
   padding: 0.1em 0.35em;
   border-radius: 4px;
 }
 .msg-body.md :deep(pre code) { background: none; padding: 0; }
 .message-bubble.user .msg-body.md :deep(code) { background: rgba(255,255,255,0.2); }
+:global(html[data-theme="dark"]) .message-bubble.user .msg-body.md :deep(code) {
+  background: rgba(26, 20, 34, 0.16);
+}
 .msg-body.md :deep(a) {
   display: inline;
   padding: 6px 0;
@@ -974,11 +979,11 @@ function handleInterrupt() {
   word-break: break-all;
   text-underline-offset: 2px;
 }
-.message-bubble.user .msg-body.md :deep(a) { color: #fff; text-decoration: underline; }
+.message-bubble.user .msg-body.md :deep(a) { color: inherit; text-decoration: underline; }
 .msg-body.md :deep(blockquote) {
   margin: 0.4em 0;
   padding-left: 0.8em;
-  border-left: 3px solid #D0C8E8;
+  border-left: 3px solid var(--neko-primary);
   color: var(--neko-ink-soft);
 }
 .msg-body.md :deep(h1), .msg-body.md :deep(h2), .msg-body.md :deep(h3) {
@@ -993,7 +998,7 @@ function handleInterrupt() {
   overflow-x: auto;
 }
 .msg-body.md :deep(th), .msg-body.md :deep(td) {
-  border: 1px solid #E0DCE8;
+  border: 1px solid var(--neko-line);
   padding: 4px 8px;
 }
 
@@ -1026,7 +1031,8 @@ function handleInterrupt() {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.78);
 }
-.delivery-state.failed { color: #FFF1F1; }
+.delivery-state.failed { color: var(--neko-danger-ink); }
+.message-bubble.user .delivery-state.failed { color: inherit; opacity: 0.92; }
 .retry-btn {
   border: 1px solid rgba(255, 255, 255, 0.65);
   border-radius: 999px;
@@ -1047,7 +1053,7 @@ function handleInterrupt() {
   font-size: 13px;
   color: var(--neko-primary-deep);
   padding: 8px;
-  background: rgba(236, 229, 245, 0.85);
+  background: var(--neko-primary-soft);
   border-radius: 10px;
   margin-bottom: 8px;
 }
@@ -1086,7 +1092,7 @@ function handleInterrupt() {
   flex-wrap: wrap;
   gap: 8px;
   padding: 8px 16px 0;
-  background: rgba(255, 252, 250, 0.95);
+  background: var(--neko-panel);
 }
 .pending-chip {
   display: flex;
@@ -1137,9 +1143,9 @@ function handleInterrupt() {
   gap: 8px;
   margin: 0;
   padding: 8px 12px 8px 16px;
-  border-top: 1px solid rgba(191, 104, 116, 0.2);
-  background: rgba(249, 231, 233, 0.95);
-  color: #784951;
+  border-top: 1px solid var(--neko-danger-line);
+  background: var(--neko-danger-soft);
+  color: var(--neko-danger-ink);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -1165,9 +1171,9 @@ function handleInterrupt() {
   flex: 0 0 auto;
   margin: 0;
   padding: 7px 16px;
-  border-top: 1px solid rgba(188, 132, 72, 0.2);
-  color: #7d623f;
-  background: rgba(255, 247, 230, 0.94);
+  border-top: 1px solid var(--neko-warning-line);
+  color: var(--neko-warning-ink);
+  background: var(--neko-warning-soft);
   font-size: 11px;
   line-height: 1.45;
   text-align: center;
@@ -1182,7 +1188,7 @@ function handleInterrupt() {
   flex: 0 0 auto;
   padding: 12px 16px;
   border-top: 1px solid var(--neko-line);
-  background: rgba(255, 252, 250, 0.96);
+  background: var(--neko-panel);
   backdrop-filter: blur(10px);
   display: flex;
   gap: 8px;
@@ -1197,41 +1203,47 @@ function handleInterrupt() {
   flex: 0 0 auto;
   width: 44px;
   height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--neko-line);
   border-radius: 50%;
   color: var(--neko-ink);
   background: var(--neko-surface-muted);
-  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  user-select: none;
 }
-.attachment-picker:hover {
-  background: rgba(114, 91, 157, 0.12);
+.attachment-picker:hover:not(.disabled) {
+  background: var(--neko-primary-soft);
 }
 .attachment-picker:focus-within {
   outline: 2px solid var(--neko-primary);
   outline-offset: 2px;
 }
 .attachment-picker.disabled {
-  cursor: not-allowed;
   opacity: 0.5;
 }
 .attachment-picker-icon {
+  pointer-events: none;
   font-size: 20px;
   line-height: 1;
   font-weight: 500;
 }
 .attachment-file {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
   padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
   border: 0;
   opacity: 0;
+  cursor: pointer;
+  font-size: 20px;
+}
+.attachment-picker.disabled .attachment-file {
+  pointer-events: none;
+  cursor: not-allowed;
 }
 
 @media (max-width: 430px) {

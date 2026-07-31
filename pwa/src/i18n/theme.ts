@@ -39,7 +39,7 @@ export function applyTheme(pref: ThemePreference = getThemePreference()): Resolv
     document.documentElement.style.colorScheme = resolved
     const meta = document.querySelector('meta[name="theme-color"]')
     if (meta) {
-      meta.setAttribute('content', resolved === 'dark' ? '#1c171c' : '#F8F1ED')
+      meta.setAttribute('content', resolved === 'dark' ? '#1a1620' : '#F8F1ED')
     }
   }
   return resolved

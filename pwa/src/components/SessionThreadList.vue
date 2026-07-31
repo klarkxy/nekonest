@@ -361,15 +361,15 @@ function shortPath(path: string, max = 36): string {
 .project-group {
   margin-bottom: 14px;
   overflow: hidden;
-  border: 1px solid rgba(190, 174, 205, 0.42);
+  border: 1px solid var(--neko-line);
   border-radius: 18px;
-  background: rgba(255, 253, 255, 0.82);
-  box-shadow: 0 8px 24px rgba(105, 82, 118, 0.08);
+  background: var(--neko-surface-solid);
+  box-shadow: var(--neko-shadow-soft);
 }
 
 .project-group.uncategorized {
   border-style: dashed;
-  background: rgba(249, 247, 251, 0.8);
+  background: var(--neko-surface-muted);
 }
 
 .project-header {
@@ -381,8 +381,8 @@ function shortPath(path: string, max = 36): string {
   padding: 13px 14px;
   border: 0;
   background:
-    radial-gradient(circle at 4% 0%, rgba(229, 196, 218, 0.28), transparent 42%),
-    rgba(250, 246, 252, 0.92);
+    radial-gradient(circle at 4% 0%, var(--neko-rose-soft), transparent 42%),
+    var(--neko-surface);
   color: inherit;
   cursor: pointer;
   font: inherit;
@@ -454,7 +454,7 @@ function shortPath(path: string, max = 36): string {
 }
 
 .agent-group + .agent-group {
-  border-top: 1px solid rgba(210, 202, 214, 0.62);
+  border-top: 1px solid var(--neko-line);
 }
 
 .agent-header {
@@ -476,9 +476,9 @@ function shortPath(path: string, max = 36): string {
   width: 36px;
   height: 36px;
   flex: 0 0 36px;
-  border: 2px solid color-mix(in srgb, var(--agent-color) 58%, white);
+  border: 2px solid color-mix(in srgb, var(--agent-color) 58%, var(--neko-surface-solid));
   border-radius: 12px;
-  background: var(--agent-soft-color);
+  background: color-mix(in srgb, var(--agent-color) 18%, var(--neko-surface-solid));
   box-shadow: 0 4px 10px color-mix(in srgb, var(--agent-color) 22%, transparent);
   object-fit: cover;
 }
@@ -497,14 +497,14 @@ function shortPath(path: string, max = 36): string {
 
 .agent-subtitle {
   margin-top: 1px;
-  color: color-mix(in srgb, var(--agent-color) 70%, #777);
+  color: color-mix(in srgb, var(--agent-color) 45%, var(--neko-ink-soft));
   font-size: 10px;
 }
 
 .agent-body {
   margin: 0 0 3px 18px;
   padding-left: 12px;
-  border-left: 2px solid var(--agent-soft-color);
+  border-left: 2px solid color-mix(in srgb, var(--agent-color) 40%, transparent);
 }
 
 .session-item {
@@ -558,10 +558,10 @@ function shortPath(path: string, max = 36): string {
   align-items: center;
   gap: 4px;
   padding: 3px 8px;
-  border: 1px solid #ded7dc;
+  border: 1px solid var(--neko-neutral-line);
   border-radius: 999px;
-  background: #f3eff2;
-  color: #756b72;
+  background: var(--neko-neutral-soft);
+  color: var(--neko-neutral-ink);
   font-size: 10px;
   font-weight: 700;
   line-height: 1.2;
@@ -569,15 +569,15 @@ function shortPath(path: string, max = 36): string {
 }
 
 .session-status--active {
-  border-color: #bfdfca;
-  background: #e9f5ed;
-  color: #3e7654;
+  border-color: var(--neko-success-line);
+  background: var(--neko-success-soft);
+  color: var(--neko-success-ink);
 }
 
 .session-status--waiting {
-  border-color: #ead09f;
-  background: #fff4df;
-  color: #8a642f;
+  border-color: var(--neko-warning-line);
+  background: var(--neko-warning-soft);
+  color: var(--neko-warning-ink);
 }
 
 .session-status--unknown {
@@ -609,8 +609,8 @@ function shortPath(path: string, max = 36): string {
 
 .icon-btn,
 .archive-btn {
-  border: 1px solid #e3dce8;
-  color: #6d6275;
+  border: 1px solid var(--neko-line);
+  color: var(--neko-ink-soft);
   cursor: pointer;
   font-weight: 600;
   transition: transform 160ms ease, background-color 160ms ease;
@@ -621,7 +621,7 @@ function shortPath(path: string, max = 36): string {
   height: 44px;
   padding: 0;
   border-radius: 10px;
-  background: #fbf9fc;
+  background: var(--neko-surface-muted);
   font-size: 11px;
 }
 
@@ -634,18 +634,18 @@ function shortPath(path: string, max = 36): string {
   min-width: 52px;
   min-height: 44px;
   padding: 0 10px;
-  border-color: #dfd3e8;
+  border-color: var(--neko-line);
   border-radius: 8px;
-  background: #f6f0fa;
-  color: #705f9b;
+  background: var(--neko-primary-soft);
+  color: var(--neko-primary-deep);
   font-size: 11px;
   white-space: nowrap;
 }
 
 .archive-btn.on {
-  border-color: #ddd;
-  background: #eee;
-  color: #858085;
+  border-color: var(--neko-neutral-line);
+  background: var(--neko-neutral-soft);
+  color: var(--neko-neutral-ink);
 }
 
 @media (max-width: 430px) {
@@ -665,12 +665,12 @@ function shortPath(path: string, max = 36): string {
 
 @media (hover: hover) {
   .project-header:hover {
-    background-color: rgba(244, 237, 248, 0.94);
+    background-color: var(--neko-surface-muted);
   }
 
   .agent-header:hover,
   .session-main:hover {
-    background: color-mix(in srgb, var(--agent-soft-color, #eeeaf8) 56%, transparent);
+    background: color-mix(in srgb, var(--agent-color) 12%, transparent);
   }
 }
 

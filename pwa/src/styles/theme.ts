@@ -81,53 +81,56 @@ export const nekoThemeOverrides: GlobalThemeOverrides = {
 
 export const nekoThemeOverridesDark: GlobalThemeOverrides = {
   common: {
-    primaryColor: '#B5A0D8',
-    primaryColorHover: '#C4B2E2',
-    primaryColorPressed: '#9A84C4',
-    primaryColorSuppl: '#B5A0D8',
+    primaryColor: '#C4B0E8',
+    primaryColorHover: '#D2C2F0',
+    primaryColorPressed: '#B09AD8',
+    primaryColorSuppl: '#C4B0E8',
 
-    successColor: '#7FBE9E',
-    warningColor: '#D0A06A',
-    errorColor: '#D48892',
-    infoColor: '#8FA6C8',
+    successColor: '#7EC9A4',
+    warningColor: '#D8A86A',
+    errorColor: '#E08B96',
+    infoColor: '#9AB0D0',
 
-    textColorBase: '#F2EBEF',
-    textColor1: '#F2EBEF',
-    textColor2: '#C9BDC6',
-    textColor3: '#AFA3AC',
-    placeholderColor: '#AFA3AC',
+    textColorBase: '#F0EBF5',
+    textColor1: '#F0EBF5',
+    textColor2: '#B9B1C6',
+    textColor3: '#91899E',
+    placeholderColor: '#91899E',
 
-    borderColor: 'rgba(210, 190, 210, 0.18)',
+    borderColor: 'rgba(196, 176, 232, 0.16)',
     borderRadius: '14px',
     borderRadiusSmall: '9px',
 
-    boxShadow1: '0 8px 24px rgba(0, 0, 0, 0.35)',
-    boxShadow2: '0 18px 46px rgba(0, 0, 0, 0.45)',
+    boxShadow1: '0 8px 24px rgba(0, 0, 0, 0.38)',
+    boxShadow2: '0 18px 46px rgba(0, 0, 0, 0.5)',
 
     fontFamily:
       '"Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Segoe UI Variable Text", system-ui, sans-serif',
 
-    bodyColor: '#1C171C',
-    cardColor: '#261F26',
-    modalColor: '#261F26',
-    popoverColor: '#2C242C',
-    tableColor: '#261F26'
+    bodyColor: '#1A1620',
+    cardColor: '#221E2C',
+    modalColor: '#221E2C',
+    popoverColor: '#2B2636',
+    tableColor: '#221E2C'
   },
 
   Button: {
     borderRadiusMedium: '13px',
     borderRadiusLarge: '15px',
     borderRadiusSmall: '10px',
-    colorPrimary: '#B5A0D8',
-    colorHoverPrimary: '#C4B2E2',
-    colorPressedPrimary: '#9A84C4',
+    colorPrimary: '#C4B0E8',
+    colorHoverPrimary: '#D2C2F0',
+    colorPressedPrimary: '#B09AD8',
+    textColorPrimary: '#1A1422',
+    textColorHoverPrimary: '#1A1422',
+    textColorPressedPrimary: '#1A1422',
     fontWeight: '650'
   },
 
   Card: {
     borderRadius: '18px',
-    borderColor: 'rgba(210, 190, 210, 0.16)',
-    color: '#261F26',
+    borderColor: 'rgba(196, 176, 232, 0.14)',
+    color: '#221E2C',
     paddingMedium: '16px'
   },
 
@@ -137,8 +140,12 @@ export const nekoThemeOverridesDark: GlobalThemeOverrides = {
 
   Input: {
     borderRadius: '12px',
-    placeholderColor: '#AFA3AC',
-    color: '#2C242C',
-    colorFocus: '#322A32'
+    placeholderColor: '#91899E',
+    color: '#2B2636',
+    colorFocus: '#322C3E',
+    textColor: '#F0EBF5',
+    border: '1px solid rgba(196, 176, 232, 0.16)',
+    borderHover: '1px solid rgba(196, 176, 232, 0.28)',
+    borderFocus: '1px solid rgba(196, 176, 232, 0.45)'
   }
 }

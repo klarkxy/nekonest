@@ -317,7 +317,7 @@ function osLabel(os: string): string {
   inset: -14px;
   z-index: -1;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.92), transparent 68%);
+  background: radial-gradient(circle, var(--neko-shell-glow-a), transparent 68%);
 }
 
 .mascot-stage img {
@@ -416,7 +416,7 @@ function osLabel(os: string): string {
   padding: 13px 14px;
   border-left: 3px solid var(--neko-danger);
   border-radius: 8px 14px 14px 8px;
-  color: #784951;
+  color: var(--neko-danger-ink);
   background: rgba(249, 231, 233, 0.9);
   font-size: 12px;
   line-height: 1.55;
@@ -466,7 +466,7 @@ function osLabel(os: string): string {
   padding: 30px 24px 33px;
   border: 1px solid rgba(191, 104, 116, 0.2);
   border-radius: 21px 21px 27px 14px;
-  color: #784951;
+  color: var(--neko-danger-ink);
   background: rgba(249, 231, 233, 0.58);
   text-align: center;
 }
@@ -478,7 +478,7 @@ function osLabel(os: string): string {
   place-items: center;
   border-radius: 17px;
   color: var(--neko-danger);
-  background: rgba(255, 255, 255, 0.62);
+  background: var(--neko-panel);
   font-size: 27px;
   line-height: 1;
 }
@@ -656,7 +656,7 @@ function osLabel(os: string): string {
   min-height: 82px;
   padding: 19px 22px;
   border-radius: 17px 17px 22px 12px;
-  background: rgba(255, 252, 250, 0.7);
+  background: var(--neko-panel);
 }
 
 .skeleton-line {
@@ -698,7 +698,7 @@ function osLabel(os: string): string {
   padding: 30px 24px 33px;
   border: 1px dashed rgba(126, 102, 140, 0.26);
   border-radius: 21px 21px 27px 14px;
-  background: rgba(255, 251, 249, 0.62);
+  background: var(--neko-surface);
   text-align: center;
 }
 

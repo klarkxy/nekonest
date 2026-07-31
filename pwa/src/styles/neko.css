@@ -4,7 +4,7 @@ html[data-theme="light"] {
   color-scheme: light;
   --neko-bg: #f8f1ed;
   --neko-bg-deep: #efe4e5;
-  --neko-surface: rgba(255, 252, 250, 0.9);
+  --neko-surface: rgba(255, 252, 250, 0.92);
   --neko-surface-solid: #fffaf8;
   --neko-surface-muted: #f4ecee;
   --neko-ink: #463b48;
@@ -22,6 +22,29 @@ html[data-theme="light"] {
   --neko-shadow: 0 18px 46px rgba(92, 67, 92, 0.12);
   --neko-shadow-soft: 0 8px 24px rgba(92, 67, 92, 0.09);
   --neko-page-bg: #e8dcdf;
+  --neko-page-glow-a: rgba(255, 249, 246, 0.55);
+  --neko-page-glow-b: rgba(193, 166, 204, 0.2);
+  --neko-shell-glow-a: rgba(255, 255, 255, 0.55);
+  --neko-shell-glow-b: rgba(218, 197, 226, 0.28);
+  --neko-panel: rgba(255, 252, 250, 0.96);
+  --neko-panel-border: rgba(255, 255, 255, 0.78);
+  --neko-bubble-assistant: rgba(255, 251, 249, 0.96);
+  --neko-bubble-tool-bg: #fbf2e5;
+  --neko-bubble-tool-ink: #685947;
+  --neko-bubble-tool-line: rgba(188, 132, 72, 0.26);
+  --neko-success-soft: #e9f5ed;
+  --neko-success-ink: #3e7654;
+  --neko-success-line: #bfdfca;
+  --neko-warning-soft: #fff4df;
+  --neko-warning-ink: #8a642f;
+  --neko-warning-line: #ead09f;
+  --neko-danger-soft: #fde8e8;
+  --neko-danger-ink: #c05050;
+  --neko-danger-line: rgba(191, 104, 116, 0.35);
+  --neko-neutral-soft: #f3eff2;
+  --neko-neutral-ink: #756b72;
+  --neko-neutral-line: #ded7dc;
+  --neko-code-bg: rgba(0, 0, 0, 0.06);
   --neko-safe-top: env(safe-area-inset-top, 0px);
   --neko-safe-bottom: env(safe-area-inset-bottom, 0px);
   --neko-font:
@@ -32,28 +55,52 @@ html[data-theme="light"] {
     system-ui, sans-serif;
 }
 
+/* Warm charcoal + soft violet — avoid muddy pink-gray wash */
 html[data-theme="dark"] {
   color-scheme: dark;
-  --neko-bg: #221c22;
-  --neko-bg-deep: #1a151a;
-  --neko-surface: rgba(38, 31, 38, 0.94);
-  --neko-surface-solid: #261f26;
-  --neko-surface-muted: #2c242c;
-  --neko-ink: #f2ebef;
-  --neko-ink-soft: #c9bdc6;
-  --neko-ink-faint: #afa3ac;
-  --neko-primary: #b5a0d8;
-  --neko-primary-deep: #d0c0ea;
-  --neko-primary-soft: rgba(181, 160, 216, 0.18);
-  --neko-rose: #d4a0ad;
-  --neko-rose-soft: rgba(212, 160, 173, 0.18);
-  --neko-mint: #7fbe9e;
-  --neko-warning: #d0a06a;
-  --neko-danger: #d48892;
-  --neko-line: rgba(210, 190, 210, 0.16);
-  --neko-shadow: 0 18px 46px rgba(0, 0, 0, 0.45);
-  --neko-shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --neko-page-bg: #141014;
+  --neko-bg: #1a1620;
+  --neko-bg-deep: #121018;
+  --neko-surface: rgba(32, 28, 40, 0.96);
+  --neko-surface-solid: #221e2c;
+  --neko-surface-muted: #2b2636;
+  --neko-ink: #f0ebf5;
+  --neko-ink-soft: #b9b1c6;
+  --neko-ink-faint: #91899e;
+  --neko-primary: #c4b0e8;
+  --neko-primary-deep: #ddd0f4;
+  --neko-primary-soft: rgba(196, 176, 232, 0.16);
+  --neko-rose: #e0a8b6;
+  --neko-rose-soft: rgba(224, 168, 182, 0.14);
+  --neko-mint: #7ec9a4;
+  --neko-warning: #d8a86a;
+  --neko-danger: #e08b96;
+  --neko-line: rgba(196, 176, 232, 0.14);
+  --neko-shadow: 0 18px 46px rgba(0, 0, 0, 0.5);
+  --neko-shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.38);
+  --neko-page-bg: #0e0c12;
+  --neko-page-glow-a: rgba(90, 70, 130, 0.14);
+  --neko-page-glow-b: rgba(140, 90, 120, 0.1);
+  --neko-shell-glow-a: rgba(90, 70, 140, 0.12);
+  --neko-shell-glow-b: rgba(120, 80, 140, 0.1);
+  --neko-panel: rgba(32, 28, 40, 0.98);
+  --neko-panel-border: rgba(196, 176, 232, 0.12);
+  --neko-bubble-assistant: #2a2534;
+  --neko-bubble-tool-bg: #32281e;
+  --neko-bubble-tool-ink: #e2c9a0;
+  --neko-bubble-tool-line: rgba(216, 168, 106, 0.28);
+  --neko-success-soft: rgba(126, 201, 164, 0.14);
+  --neko-success-ink: #9fd9ba;
+  --neko-success-line: rgba(126, 201, 164, 0.32);
+  --neko-warning-soft: rgba(216, 168, 106, 0.14);
+  --neko-warning-ink: #e2c29a;
+  --neko-warning-line: rgba(216, 168, 106, 0.32);
+  --neko-danger-soft: rgba(224, 139, 150, 0.14);
+  --neko-danger-ink: #f0a8b0;
+  --neko-danger-line: rgba(224, 139, 150, 0.35);
+  --neko-neutral-soft: rgba(185, 177, 198, 0.12);
+  --neko-neutral-ink: #b9b1c6;
+  --neko-neutral-line: rgba(185, 177, 198, 0.22);
+  --neko-code-bg: rgba(255, 255, 255, 0.08);
 }
 
 *,
@@ -75,8 +122,8 @@ body {
   margin: 0;
   color: var(--neko-ink);
   background:
-    radial-gradient(circle at 16% 4%, rgba(255, 249, 246, 0.35), transparent 34rem),
-    radial-gradient(circle at 86% 84%, rgba(193, 166, 204, 0.18), transparent 38rem),
+    radial-gradient(circle at 16% 4%, var(--neko-page-glow-a), transparent 34rem),
+    radial-gradient(circle at 86% 84%, var(--neko-page-glow-b), transparent 38rem),
     var(--neko-page-bg, #e8dcdf);
   font-family: var(--neko-font);
   -webkit-font-smoothing: antialiased;
@@ -107,7 +154,7 @@ textarea:focus-visible {
 
 ::selection {
   color: var(--neko-ink);
-  background: #ddd1ee;
+  background: var(--neko-primary-soft);
 }
 
 .nekonest-app {
@@ -123,10 +170,10 @@ textarea:focus-visible {
   padding-bottom: var(--neko-safe-bottom);
   overflow-x: clip;
   background:
-    radial-gradient(circle at 12% 4%, rgba(255, 255, 255, 0.18), transparent 18rem),
-    radial-gradient(circle at 103% 30%, rgba(218, 197, 226, 0.22), transparent 19rem),
+    radial-gradient(circle at 12% 4%, var(--neko-shell-glow-a), transparent 18rem),
+    radial-gradient(circle at 103% 30%, var(--neko-shell-glow-b), transparent 19rem),
     linear-gradient(180deg, var(--neko-surface-solid) 0%, var(--neko-bg) 42%, var(--neko-bg-deep) 100%);
-  box-shadow: 0 0 64px rgba(72, 51, 75, 0.16);
+  box-shadow: 0 0 64px rgba(0, 0, 0, 0.22);
   isolation: isolate;
 }
 
@@ -181,7 +228,7 @@ textarea:focus-visible {
   left: -5rem;
   width: 15rem;
   height: 15rem;
-  background: radial-gradient(circle, rgba(231, 188, 196, 0.4), transparent 68%);
+  background: radial-gradient(circle, var(--neko-page-glow-b), transparent 68%);
 }
 
 .ambient-orb--violet {
@@ -189,7 +236,7 @@ textarea:focus-visible {
   right: -7rem;
   width: 17rem;
   height: 17rem;
-  background: radial-gradient(circle, rgba(191, 171, 210, 0.3), transparent 69%);
+  background: radial-gradient(circle, var(--neko-page-glow-a), transparent 69%);
 }
 
 .ambient-ribbon {
@@ -277,12 +324,10 @@ textarea:focus-visible {
 }
 
 .neko-card {
-  border: 1px solid rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--neko-panel-border);
   border-radius: 18px;
   background: var(--neko-surface);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.75),
-    var(--neko-shadow-soft);
+  box-shadow: var(--neko-shadow-soft);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
@@ -298,29 +343,35 @@ textarea:focus-visible {
 
 .message-bubble.assistant {
   margin-right: auto;
+  border: 1px solid var(--neko-line);
   border-bottom-left-radius: 5px;
   color: var(--neko-ink);
-  background: rgba(255, 251, 249, 0.94);
-  box-shadow: 0 5px 16px rgba(91, 67, 90, 0.07);
+  background: var(--neko-bubble-assistant);
+  box-shadow: var(--neko-shadow-soft);
 }
 
 .message-bubble.user {
   margin-left: auto;
   border-bottom-right-radius: 5px;
   color: #fff;
-  background: var(--neko-primary);
+  background: linear-gradient(145deg, #7d66a8 0%, #65508f 100%);
+}
+
+html[data-theme="dark"] .message-bubble.user {
+  color: #1a1422;
+  background: linear-gradient(145deg, #d2c2f0 0%, #b8a3e0 100%);
 }
 
 .message-bubble.thinking {
   color: var(--neko-ink-faint);
-  background: rgba(240, 234, 239, 0.9);
+  background: var(--neko-surface-muted);
   font-style: italic;
 }
 
 .message-bubble.tool-call {
-  border: 1px solid rgba(188, 132, 72, 0.26);
-  color: #685947;
-  background: #fbf2e5;
+  border: 1px solid var(--neko-bubble-tool-line);
+  color: var(--neko-bubble-tool-ink);
+  background: var(--neko-bubble-tool-bg);
 }
 
 .neko-loading {

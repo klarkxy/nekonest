@@ -287,7 +287,7 @@ async function copyCommand(command: string) {
   border: 1px solid rgba(114, 91, 157, 0.2);
   border-radius: 9px;
   color: var(--neko-primary-deep);
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--neko-panel);
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;

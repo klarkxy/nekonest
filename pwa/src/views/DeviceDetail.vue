@@ -417,7 +417,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   width: 16px;
   height: 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.82);
-  background: #fffaf8;
+  background: var(--neko-surface-solid);
   clip-path: polygon(100% 0, 100% 100%, 0 100%);
   transform: rotate(45deg);
 }
@@ -498,21 +498,21 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 }
 
 .session-count-badge--active {
-  border-color: #bfdfca;
-  background: #e9f5ed;
-  color: #3e7654;
+  border-color: var(--neko-success-line);
+  background: var(--neko-success-soft);
+  color: var(--neko-success-ink);
 }
 
 .session-count-badge--waiting {
-  border-color: #ead09f;
-  background: #fff4df;
-  color: #8a642f;
+  border-color: var(--neko-warning-line);
+  background: var(--neko-warning-soft);
+  color: var(--neko-warning-ink);
 }
 
 .session-count-badge--offline {
-  border-color: #ddd;
-  background: #f1ecee;
-  color: #7a7076;
+  border-color: var(--neko-neutral-line);
+  background: var(--neko-neutral-soft);
+  color: var(--neko-neutral-ink);
 }
 
 .load-error,
@@ -527,7 +527,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 
 .load-error {
   border: 1px solid rgba(191, 104, 116, 0.22);
-  color: #784951;
+  color: var(--neko-danger-ink);
   background: rgba(249, 231, 233, 0.72);
 }
 
@@ -553,7 +553,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 
 .load-pending {
   color: var(--neko-ink-soft);
-  background: rgba(255, 252, 250, 0.72);
+  background: var(--neko-panel);
 }
 
 @media (max-width: 370px) {

@@ -101,11 +101,11 @@ applyTheme(themePref.value)
 
 .prefs-chip.active {
   color: var(--neko-primary-deep);
-  border-color: rgba(114, 91, 157, 0.28);
+  border-color: var(--neko-line);
   background: var(--neko-primary-soft);
 }
 
 .prefs-chip:hover {
-  background: rgba(114, 91, 157, 0.1);
+  background: var(--neko-primary-soft);
 }
 </style>

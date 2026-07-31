@@ -47,3 +47,4 @@ Thumbs.db
 # Stale root scaffolding (kept locally only)
 _archive/
 
+.pnpm-store/
