@@ -1,32 +1,34 @@
 <template>
   <div class="thread-list">
     <div class="list-controls">
-      <label class="control-field">
-        <span class="sr-only">{{ t('threadList.filterAgent') }}</span>
-        <select
-          id="agent-filter"
-          class="control-select"
-          v-model="agentFilter"
-          :aria-label="t('threadList.filterAgent')"
-        >
-          <option value="">{{ t('threadList.filterAgentAll') }}</option>
-          <option
-            v-for="opt in agentOptions"
-            :key="opt.type"
-            :value="opt.type"
-          >{{ opt.label }} ({{ opt.count }})</option>
-        </select>
-      </label>
-      <label class="control-field">
-        <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
-        <input
-          v-model="searchQuery"
-          type="search"
-          class="control-input"
-          :placeholder="t('threadList.searchPlaceholder')"
-          autocomplete="off"
-        />
-      </label>
+      <div class="list-controls-row">
+        <label class="control-field control-field--filter">
+          <span class="sr-only">{{ t('threadList.filterAgent') }}</span>
+          <select
+            id="agent-filter"
+            class="control-select"
+            v-model="agentFilter"
+            :aria-label="t('threadList.filterAgent')"
+          >
+            <option value="">{{ t('threadList.filterAgentAll') }}</option>
+            <option
+              v-for="opt in agentOptions"
+              :key="opt.type"
+              :value="opt.type"
+            >{{ opt.label }} ({{ opt.count }})</option>
+          </select>
+        </label>
+        <label class="control-field control-field--search">
+          <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
+          <input
+            v-model="searchQuery"
+            type="search"
+            class="control-input"
+            :placeholder="t('threadList.searchPlaceholder')"
+            autocomplete="off"
+          />
+        </label>
+      </div>
       <div class="control-meta">
         <label class="archive-toggle">
           <input v-model="prefs.showArchived" type="checkbox" class="archive-checkbox" />
@@ -285,6 +287,13 @@ function shortPath(path: string, max = 36): string {
   margin-bottom: 12px;
 }
 
+.list-controls-row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
 .control-field {
   display: block;
   min-width: 0;
@@ -343,6 +352,12 @@ function shortPath(path: string, max = 36): string {
   font-size: 11px;
   line-height: 1.45;
   text-align: end;
+}
+
+@media (max-width: 360px) {
+  .list-controls-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .empty-hint {
