@@ -589,17 +589,21 @@ func (a *CodexAdapter) Approve(sessionID string, approvalID string) error {
 	// Prefer app-server when available (v1 full-control path).
 	if a.appServer != nil && a.appServer.Available() {
 		if err := a.appServer.Ensure(); err == nil {
+			// Approvals are typically server→client requests; responses use decision
+			// payloads. Try documented client methods then fall back to exec path.
 			for _, method := range []string{
-				"thread/approve",
-				"approval/approve",
-				"approve",
+				"thread/approveGuardianDeniedAction",
+				"approval/respond",
+				"respondToApproval",
 			} {
 				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 				_, err := a.appServer.Call(ctx, method, map[string]any{
+					"threadId":    sessionID,
 					"thread_id":   sessionID,
-					"session_id":  sessionID,
+					"approvalId":  approvalID,
 					"approval_id": approvalID,
-					"decision":    "approve",
+					"decision":    "accept",
+					"approved":    true,
 				})
 				cancel()
 				if err == nil {
@@ -615,16 +619,17 @@ func (a *CodexAdapter) Deny(sessionID string, approvalID string) error {
 	if a.appServer != nil && a.appServer.Available() {
 		if err := a.appServer.Ensure(); err == nil {
 			for _, method := range []string{
-				"thread/deny",
-				"approval/deny",
-				"deny",
+				"approval/respond",
+				"respondToApproval",
 			} {
 				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 				_, err := a.appServer.Call(ctx, method, map[string]any{
+					"threadId":    sessionID,
 					"thread_id":   sessionID,
-					"session_id":  sessionID,
+					"approvalId":  approvalID,
 					"approval_id": approvalID,
-					"decision":    "deny",
+					"decision":    "decline",
+					"approved":    false,
 				})
 				cancel()
 				if err == nil {
@@ -639,12 +644,14 @@ func (a *CodexAdapter) Deny(sessionID string, approvalID string) error {
 func (a *CodexAdapter) Interrupt(sessionID string) error {
 	if a.appServer != nil && a.appServer.Available() {
 		if err := a.appServer.Ensure(); err == nil {
+			// codex-cli 0.144.1 ClientRequest: turn/interrupt
 			for _, method := range []string{
+				"turn/interrupt",
 				"thread/interrupt",
-				"interrupt",
 			} {
 				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 				_, err := a.appServer.Call(ctx, method, map[string]any{
+					"threadId":   sessionID,
 					"thread_id":  sessionID,
 					"session_id": sessionID,
 				})
@@ -666,12 +673,15 @@ func (a *CodexAdapter) Steer(sessionID, text string) error {
 	if err := a.appServer.Ensure(); err != nil {
 		return err
 	}
-	for _, method := range []string{"thread/steer", "steer"} {
+	// codex-cli 0.144.1 ClientRequest: turn/steer
+	for _, method := range []string{"turn/steer", "thread/steer"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		_, err := a.appServer.Call(ctx, method, map[string]any{
+			"threadId":   sessionID,
 			"thread_id":  sessionID,
 			"session_id": sessionID,
 			"text":       text,
+			"input":      text,
 			"prompt":     text,
 		})
 		cancel()
@@ -690,11 +700,13 @@ func (a *CodexAdapter) StartThread(cwd, firstPrompt string) (threadID string, er
 	if err := a.appServer.Ensure(); err != nil {
 		return "", err
 	}
-	for _, method := range []string{"thread/start", "thread/create", "start_thread"} {
+	// codex-cli 0.144.1 ClientRequest: thread/start
+	for _, method := range []string{"thread/start"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		raw, callErr := a.appServer.Call(ctx, method, map[string]any{
 			"cwd":    cwd,
 			"prompt": firstPrompt,
+			"input":  firstPrompt,
 			"text":   firstPrompt,
 		})
 		cancel()
@@ -703,9 +715,15 @@ func (a *CodexAdapter) StartThread(cwd, firstPrompt string) (threadID string, er
 		}
 		var resp map[string]any
 		if json.Unmarshal(raw, &resp) == nil {
-			for _, k := range []string{"thread_id", "id", "session_id"} {
+			for _, k := range []string{"threadId", "thread_id", "id", "session_id"} {
 				if v, ok := resp[k].(string); ok && v != "" {
 					return v, nil
+				}
+				// nested thread object
+				if m, ok := resp["thread"].(map[string]any); ok {
+					if v, ok := m["id"].(string); ok && v != "" {
+						return v, nil
+					}
 				}
 			}
 		}

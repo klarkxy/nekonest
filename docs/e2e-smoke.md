@@ -2,48 +2,85 @@
 
 # End-to-end smoke checklist
 
-Acceptance path after deploy or deploy-sensitive changes. Cutting a release: [release.md](./release.md).
+Acceptance path after deploy or deploy-sensitive changes. Product target: [v1-product.md](./v1-product.md). Release cut: [release.md](./release.md). Migration: [migration-v1.md](./migration-v1.md).
 
-## Preconditions
+## Modes
+
+| Mode | Env | When |
+|---|---|---|
+| **Open (recommended first)** | `NEKONEST_TRANSPORT_MODE=open` on **server and daemon**; PWA default open | Daily use while sealing is validated |
+| **Sealed** | `NEKONEST_TRANSPORT_MODE=sealed` on server and daemon; PWA `VITE_NEKONEST_TRANSPORT_MODE=sealed` | After pair with QR JSON + key packages |
+
+One nest = one mode. Mismatch rejects the handshake (no sealed→open downgrade).
+
+## Preconditions (open mode)
 
 - [ ] VPS server running; `GET /health` → `{"status":"nyan~"}`
-- [ ] `NEKONEST_PHONE_SECRET` set (public)
+- [ ] `NEKONEST_ADMIN_SECRET` set (or legacy `NEKONEST_PHONE_SECRET`)
 - [ ] `NEKONEST_BOOTSTRAP_TOKEN` set and used at daemon register
+- [ ] `NEKONEST_TRANSPORT_MODE=open` on server **and** daemon
 - [ ] HTTPS / WSS work through the reverse proxy
 - [ ] `NEKONEST_ALLOWED_ORIGINS` includes the public origin (recommended)
-- [ ] Home PC registered; `config.json` holds a real device token
+- [ ] Host registered (`nekonest-daemon -register`); `config.json` has device token
+- [ ] `nekonest-daemon -doctor` critical checks green (or only expected missing CLIs)
 - [ ] Daemon process online (single instance for that config)
-- [ ] At least one supported agent CLI has a recent main-thread session on the PC
+- [ ] At least one supported agent CLI has a recent main-thread session on the host
 
-## Steps
+## A. Open-mode core path
 
-1. Open the PWA on the phone; enter the same phone secret as the VPS.  
-2. Pair with the 6-digit code (`-pair gen` if needed); device list shows **online**.  
-3. On the PC, open/use a supported agent so a recent thread exists.  
-4. On the phone: device → **directory → agent → thread** visible.  
-5. Open the session; tap the paperclip; system file picker opens; control is focusable / ~44px touch target.  
-6. Choose one PNG &lt; 4 MB and one TXT/Markdown/PDF/JSON; send a prompt that asks the agent to read the files.  
-7. Within seconds: agent correctly uses file content, **or** a clear upload / download / CLI error.  
-8. After a first-time PWA upgrade from an older build: fully close and reopen the PWA once; later SW updates should auto-refresh once.  
-9. Stop the daemon → phone shows device **offline**.  
-10. Start the daemon → **online** again.  
-11. Wrong phone secret → 401 / cannot operate.  
-12. Optional: send a prompt, kill network briefly, restore—outbox should not silently mint a new `client_msg_id` for the same send.  
-13. Optional: interrupt a long run if the agent supports it; confirm process tree does not linger on Windows.
+1. Open PWA; enter the nest admin secret (setup).  
+2. Pair: run `nekonest-daemon -pair gen` on the host; paste **QR JSON** (preferred) or 6-digit code; compare **fingerprint** with the PC screen.  
+3. Device list shows the host **online**.  
+4. On the host, open/use a supported agent so a recent thread exists.  
+5. Phone: **directory → agent → thread** visible; session capabilities appear when advertised.  
+6. Open a thread; history loads; send a short prompt; stream appears.  
+7. Delivery UX: outbox moves toward **committed** (not cleared only on bare WS write).  
+8. Attachments (optional): one small PNG and one text file; agent reads or clear error.  
+9. Interrupt a long run if the session advertises `interrupt`; process tree does not linger (Windows Job Object / Linux process group).  
+10. Stop daemon → phone shows **offline**; start → **online**.  
+11. Wrong secret / revoked phone token → 401 / cannot operate.  
+12. Reconnect mid-send: same `client_msg_id`; no double agent turn.
+
+## B. Codex control path (when CLI present)
+
+Local baseline used in development: **codex-cli 0.144.1** with `codex app-server`.
+
+1. `nekonest-daemon -doctor` logs app-server `available` / `ensure`.  
+2. If capabilities show `control_mode=app_server` and `approve=true`:  
+   - Trigger a real approval on host; phone shows approval UI; Approve/Deny resolve.  
+3. If `steer=true`: steer mid-turn; agent incorporates correction.  
+4. If `spawn=true`: start_thread only for a **currently discovered** Codex project dir; lifecycle `thread_starting → thread_owned | failed | indeterminate`; no ghost nest-only row.  
+5. If app-server unhealthy: Codex stays `exec_resume` (send/history/interrupt only); no fake approve/spawn.
+
+## C. Sealed mode (optional second pass)
+
+1. Set sealed on server + daemon + PWA build/env; restart all.  
+2. Re-pair with QR JSON so wrap keys match.  
+3. Confirm nest DB/logs do not contain prompt plaintext for new sealed `session_message` traffic.  
+4. Chat still works after key_package delivery.  
+5. Open-mode client against sealed nest is **rejected** (and the reverse).
+
+## D. Migration smoke (if upgrading from v0.1)
+
+1. Stop writers; `nekonest-server -migrate-v1 -data ./data -backup ./data-backup-v1`.  
+2. Device tokens still authenticate; old plaintext messages gone from live DB.  
+3. Phones re-login and re-pair.
 
 ## Known limitations (not failures)
 
-- Phone does not create threads; PC-first only  
-- Max 5 attachments, 4 MB each  
-- Codex / Claude Code / Kilo use their CLI file/image mechanisms  
-- Kimi CLI / Grok Build receive daemon-local paths in the prompt; sandbox may block reads  
-- Approvals may require the PC terminal  
-- Web Push needs full VAPID env; otherwise no real push  
-- Daemon targets Windows  
-- VPS sees and stores messages/attachments (no E2E encryption)
+- Sealed default is the **product target**; operators may run open until sealed e2e is signed off  
+- Codex app-server JSON-RPC method names vary by CLI version — doctor/probe may show available while a specific method alias fails  
+- Non-Codex agents: compatibility resume only (no approval/start/steer promise)  
+- Max 5 attachments, 4 MB each (open path)  
+- Web Push needs VAPID; sealed push bodies stay generic  
+- Formal hosts: Windows + Linux; macOS later  
+- Open mode: VPS can read application plaintext  
 
 ## Related
 
 - [Troubleshooting](./troubleshooting.md)
 - [VPS deploy](./deploy-vps.md)
 - [Windows deploy](./deploy-windows.md)
+- [Linux deploy](./deploy-linux.md)
+- [Security](./security.md)
+- [v1 product contract](./v1-product.md)
