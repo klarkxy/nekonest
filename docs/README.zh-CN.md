@@ -10,9 +10,12 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 
 | 文档 | 说明 |
 |---|---|
-| [../README.zh-CN.md](../README.zh-CN.md) | 产品介绍、快速开始、边界 |
+| [../README.zh-CN.md](../README.zh-CN.md) | 产品介绍、快速开始、**现行 v0.1 边界** |
+| [v1-product.zh-CN.md](./v1-product.zh-CN.md) | **v1.0.0 冻结目标合同**（Codex 优先 E2E；不是现行 v0.1 切片） |
 | [deploy-vps.zh-CN.md](./deploy-vps.zh-CN.md) | 构建并运行 VPS Server |
 | [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md) | 注册并运行 Windows Daemon |
+| [deploy-linux.zh-CN.md](./deploy-linux.zh-CN.md) | 注册并运行 Linux Daemon（systemd 用户单元） |
+| [migration-v1.zh-CN.md](./migration-v1.zh-CN.md) | v0.1 → v1.0 破坏性离线迁移 |
 | [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) | 部署后验收清单 |
 | [troubleshooting.zh-CN.md](./troubleshooting.zh-CN.md) | 症状 → 排查 |
 
@@ -20,6 +23,7 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 
 | 文档 | 说明 |
 |---|---|
+| [v1-product.zh-CN.md](./v1-product.zh-CN.md) | 冻结 v1.0.0 目录：Windows+Linux、Codex 全控制、默认密封 |
 | [configuration.zh-CN.md](./configuration.zh-CN.md) | 环境变量、flags、配置文件、限额 |
 | [security.zh-CN.md](./security.zh-CN.md) | 信任模型、密钥、加固 |
 | [architecture.zh-CN.md](./architecture.zh-CN.md) | 组件、发现、提示词路径 |
@@ -35,6 +39,7 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 | English | 简体中文 |
 |---|---|
 | [README.md](../README.md) | [README.zh-CN.md](../README.zh-CN.md) |
+| [v1-product.md](./v1-product.md) | [v1-product.zh-CN.md](./v1-product.zh-CN.md) |
 | [deploy-vps.md](./deploy-vps.md) | [deploy-vps.zh-CN.md](./deploy-vps.zh-CN.md) |
 | [deploy-windows.md](./deploy-windows.md) | [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md) |
 | [e2e-smoke.md](./e2e-smoke.md) | [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) |
@@ -48,6 +53,8 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 | [brand-art.md](./brand-art.md) | [brand-art.zh-CN.md](./brand-art.zh-CN.md) |
 | [README.md](./README.md)（本索引） | [README.zh-CN.md](./README.zh-CN.md) |
 
-## 归档
+## 归档与合同
 
-[archive/](./archive/) 保存冻结的早期施工快照，**不是**现行产品合同。引用前请对照当前代码、README 与 AGENTS.md。
+- **现行 v0.1 产品边界：** [../README.zh-CN.md](../README.zh-CN.md) 中的「当前边界（v0.1）」与今日运维指南。
+- **目标 v1.0.0 产品合同：** [v1-product.zh-CN.md](./v1-product.zh-CN.md) — 朝完整版推进时，以它为准，不再沿用 v0.1 妥协。
+- **冻结施工快照：** [archive/](./archive/)。**不是**产品合同。引用前请对照当前代码、README、AGENTS.md，以及（v1 工作）`v1-product.zh-CN.md`。

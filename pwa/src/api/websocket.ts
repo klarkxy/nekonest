@@ -1,12 +1,13 @@
 import type { NekoMessage } from '@/types/protocol'
-import { getPhoneSecret } from './http'
+import { nestTransportMode, PROTOCOL_VERSION } from '@/types/protocol'
+import { getAuthCredential, getPhoneSecret, getPhoneToken } from './http'
 
 type MessageHandler = (msg: NekoMessage) => void
 type StatusHandler = (status: 'connecting' | 'connected' | 'disconnected' | 'auth_error') => void
 
 /**
  * NekoNest WebSocket 客户端
- * send() 仅表示帧已交给浏览器 socket；业务 ACK 由 prompt_sent 等完成。
+ * send() 仅表示帧已交给浏览器 socket；业务 ACK 由 prompt_committed 等完成。
  * 不自动重试用户消息（避免重复 client_msg_id）；断线由上层 outbox 原样重发。
  */
 export class NekoWebSocket {
@@ -180,13 +181,23 @@ export class NekoWebSocket {
       deviceId: this.subscribedDevice,
       socketGeneration: this.generation
     }
-    const secret = getPhoneSecret()
+    const phoneToken = getPhoneToken()
+    const adminSecret = getPhoneSecret()
+    const cred = getAuthCredential()
     this.trySend({
+      protocol_version: PROTOCOL_VERSION,
+      transport_mode: nestTransportMode(),
       type: 'subscribe',
       device_id: this.subscribedDevice,
       timestamp: Math.floor(Date.now() / 1000),
       payload: {
-        ...(secret ? { secret } : {}),
+        ...(phoneToken
+          ? { phone_token: phoneToken }
+          : adminSecret
+            ? { secret: adminSecret }
+            : cred
+              ? { secret: cred }
+              : {}),
         subscription_id: subscriptionId
       }
     })
@@ -208,7 +219,7 @@ export class NekoWebSocket {
 
   /**
    * Attempt to send. Returns true only if socket accepted the frame.
-   * Does NOT mean server processed the message — wait for prompt_sent etc.
+   * Does NOT mean server processed the message — wait for prompt_committed etc.
    * Never auto-retries (caller owns outbox + same client_msg_id).
    */
   send(msg: Partial<NekoMessage>): boolean {
@@ -221,6 +232,12 @@ export class NekoWebSocket {
     }
     if (!msg.timestamp) {
       msg.timestamp = Math.floor(Date.now() / 1000)
+    }
+    if (!msg.protocol_version) {
+      msg.protocol_version = PROTOCOL_VERSION
+    }
+    if (!msg.transport_mode) {
+      msg.transport_mode = nestTransportMode()
     }
 
     if (this.ws?.readyState !== WebSocket.OPEN || !this.sessionReady) {

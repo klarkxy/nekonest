@@ -1,0 +1,20 @@
+[Unit]
+Description=NekoNest host daemon (outbound nest bridge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Install the binary to ~/.local/bin or adjust ExecStart.
+ExecStart=%h/.local/bin/nekonest-daemon
+Restart=on-failure
+RestartSec=5
+Environment=NEKONEST_TRANSPORT_MODE=open
+# Prefer sealed once E2E message path is enabled end-to-end:
+# Environment=NEKONEST_TRANSPORT_MODE=sealed
+
+# Config defaults to ~/.nekonest/config.json (XDG may be used later).
+# WorkingDirectory=%h
+
+[Install]
+WantedBy=default.target

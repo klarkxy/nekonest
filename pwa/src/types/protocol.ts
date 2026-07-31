@@ -1,4 +1,8 @@
-/** NekoNest 协议类型定义 (PWA 端) */
+/** NekoNest protocol types (PWA) — keep in lockstep with protocol/protocol.json */
+
+export const PROTOCOL_VERSION = '1.0' as const
+
+export type TransportMode = 'sealed' | 'open'
 
 export type MessageType =
   | 'device_online'
@@ -8,34 +12,67 @@ export type MessageType =
   | 'session_update'
   | 'session_message'
   | 'send_prompt'
-  | 'prompt_sent'
+  | 'prompt_status_query'
+  | 'prompt_not_seen'
+  | 'prompt_accepted'
+  | 'prompt_committed'
   | 'prompt_failed'
+  | 'prompt_sent' // deprecated: clear outbox on prompt_committed
   | 'approve'
   | 'deny'
   | 'interrupt'
+  | 'steer'
+  | 'start_thread'
+  | 'thread_starting'
+  | 'thread_owned'
+  | 'thread_failed'
+  | 'thread_indeterminate'
   | 'heartbeat'
   | 'error'
   | 'register_device'
   | 'auth_response'
   | 'pair_request'
   | 'pair_confirm'
+  | 'pair_ready'
+  | 'pair_failed'
+  | 'key_package'
+  | 'phone_revoked'
+  | 'attention_event'
   | 'subscribe'
   | 'fetch_history'
   | 'session_history'
   | 'subscribe_ack'
 
+export type KeyScope = 'device_catalog' | 'session'
+
+export interface SealedPayload {
+  alg: string
+  version?: number
+  key_scope: KeyScope
+  epoch: number
+  sender_id: string
+  recipient_id: string
+  sequence: number
+  nonce: string
+  ciphertext: string
+}
+
 export interface NekoMessage {
+  protocol_version?: string
+  transport_mode?: TransportMode
   type: MessageType
   device_id: string
   session_id?: string
+  client_msg_id?: string
   timestamp: number
   payload?: Record<string, unknown>
+  sealed_payload?: SealedPayload
 }
 
 export interface Device {
   id: string
   name: string
-  os: 'windows'
+  os: 'windows' | 'linux' | string
   status: 'online' | 'offline'
   last_seen: number
   active_agents: number
@@ -50,7 +87,39 @@ export type KnownAgentType =
 
 /** Known agents keep editor completion while future daemon adapters remain wire-compatible. */
 export type AgentType = KnownAgentType | (string & {})
-export type AgentStatus = 'running' | 'idle' | 'waiting_approval'
+export type AgentStatus = 'running' | 'idle' | 'waiting_user' | 'waiting_approval' | 'error'
+
+export type ControlMode = 'app_server' | 'exec_resume' | 'compatibility'
+export type AttachmentMode =
+  | 'native_image_and_file'
+  | 'native_image'
+  | 'path_best_effort'
+  | 'unsupported'
+
+/** Absent fields mean unsupported / false. */
+export interface SessionCapabilities {
+  control_mode?: ControlMode
+  approve?: boolean
+  deny?: boolean
+  interrupt?: boolean
+  steer?: boolean
+  queue?: boolean
+  spawn?: boolean
+  attachment_mode?: AttachmentMode
+}
+
+export function capabilityEnabled(
+  caps: SessionCapabilities | null | undefined,
+  key: keyof Pick<SessionCapabilities, 'approve' | 'deny' | 'interrupt' | 'steer' | 'queue' | 'spawn'>
+): boolean {
+  return Boolean(caps?.[key])
+}
+
+export function attachmentModeOf(
+  caps: SessionCapabilities | null | undefined
+): AttachmentMode {
+  return caps?.attachment_mode || 'unsupported'
+}
 
 export interface AgentSession {
   id: string
@@ -59,10 +128,11 @@ export interface AgentSession {
   status: AgentStatus
   summary: string
   last_activity: number
-  /** Full project/workspace path on the PC */
+  /** Full project/workspace path on the host */
   project_dir?: string
   /** Short project folder name */
   project?: string
+  capabilities?: SessionCapabilities
   pending_approval?: PendingApproval
 }
 
@@ -82,6 +152,15 @@ export interface AttachmentRef {
   key?: string
 }
 
+export type DeliveryStatus =
+  | 'queued'
+  | 'sending'
+  | 'accepted'
+  | 'committed'
+  | 'not_seen'
+  | 'failed'
+  | 'indeterminate'
+
 export interface SessionMessage {
   id: string
   role: 'assistant' | 'user' | 'tool' | 'system'
@@ -91,9 +170,17 @@ export interface SessionMessage {
   metadata?: {
     attachments?: AttachmentRef[]
     /** Local delivery state for a prompt waiting on daemon acceptance. */
-    delivery_status?: 'queued' | 'sending' | 'failed'
+    delivery_status?: DeliveryStatus
     delivery_error?: string
     delivery_retry_allowed?: boolean
     [key: string]: unknown
   }
+}
+
+/** Nest transport preference until sealed crypto is fully client-side. */
+export function nestTransportMode(): TransportMode {
+  const raw = (import.meta.env.VITE_NEKONEST_TRANSPORT_MODE as string | undefined)?.trim()
+  if (raw === 'sealed' || raw === 'open') return raw
+  // Default open while E2E crypto lands; sealed becomes default with crypto.
+  return 'open'
 }

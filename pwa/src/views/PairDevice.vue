@@ -34,6 +34,23 @@
           :status="fieldError ? 'error' : undefined"
           :input-props="{ id: 'pair-code' }"
         />
+
+        <label class="field-label" for="pair-qr">{{ t('pair.qrLabel') }}</label>
+        <n-input
+          v-model:value="qrPaste"
+          type="textarea"
+          :placeholder="t('pair.qrPlaceholder')"
+          :rows="3"
+          class="pair-input"
+          :input-props="{ id: 'pair-qr' }"
+          @update:value="onQrPaste"
+        />
+
+        <p v-if="expectedFingerprint" class="fingerprint" role="status">
+          {{ t('pair.fingerprint') }}:
+          <code translate="no">{{ expectedFingerprint }}</code>
+        </p>
+
         <p v-if="fieldError" class="field-error" role="alert">{{ fieldError }}</p>
 
         <n-button
@@ -86,7 +103,14 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, RouterLink } from 'vue-router'
 import { NButton, NInput, useMessage } from 'naive-ui'
-import { apiFetch } from '@/api/http'
+import { apiFetch, setPhoneId, setPhoneToken } from '@/api/http'
+import {
+  loadOrCreatePhoneIdentity,
+  parsePairQRPayload,
+  shortFingerprint,
+  type PairQRPayload
+} from '@/crypto/identity'
+import { completePairKeySetup } from '@/crypto/keys'
 import { useBindingStore } from '@/stores/binding'
 import { devicesLocation } from '@/router/navigation'
 import { normalizePairCode, WINDOWS_PAIR_COMMANDS } from '@/utils/onboarding'
@@ -96,6 +120,9 @@ const router = useRouter()
 const message = useMessage()
 const binding = useBindingStore()
 const pairCode = ref('')
+const qrPaste = ref('')
+const expectedFingerprint = ref('')
+const trustedQR = ref<PairQRPayload | null>(null)
 const pairing = ref(false)
 const fieldError = ref('')
 const pairCodeModel = computed({
@@ -106,6 +133,20 @@ const pairCodeModel = computed({
   }
 })
 
+function onQrPaste(value: string) {
+  qrPaste.value = value
+  fieldError.value = ''
+  const qr = parsePairQRPayload(value)
+  if (!qr) {
+    trustedQR.value = null
+    expectedFingerprint.value = ''
+    return
+  }
+  trustedQR.value = qr
+  if (qr.code) pairCode.value = normalizePairCode(qr.code)
+  expectedFingerprint.value = shortFingerprint(qr.identity_fingerprint || '', 32)
+}
+
 async function handlePair() {
   fieldError.value = ''
   const code = normalizePairCode(pairCode.value)
@@ -113,13 +154,26 @@ async function handlePair() {
   pairCode.value = code
   pairing.value = true
   try {
+    // Ensure phone E2E identity exists (IndexedDB).
+    const phoneId = await loadOrCreatePhoneIdentity()
+
     const res = await apiFetch('/api/pair/consume', {
       method: 'POST',
-      body: JSON.stringify({ code })
+      body: JSON.stringify({
+        code,
+        expected_fingerprint: trustedQR.value?.identity_fingerprint || undefined,
+        device_id: trustedQR.value?.device_id || undefined,
+        phone_ed25519_public: phoneId.ed25519_public,
+        phone_x25519_public: phoneId.x25519_public
+      })
     })
 
     if (res.status === 401) {
       fieldError.value = t('pair.errAuth')
+      return
+    }
+    if (res.status === 409) {
+      fieldError.value = t('pair.errFingerprint')
       return
     }
     if (!res.ok) {
@@ -127,8 +181,54 @@ async function handlePair() {
       return
     }
 
-    const data = await res.json()
+    const data = (await res.json()) as {
+      device_id: string
+      name?: string
+      phone_id?: string
+      phone_token?: string
+      identity_fingerprint?: string
+      ed25519_public?: string
+      x25519_public?: string
+    }
+
+    if (
+      trustedQR.value?.identity_fingerprint &&
+      data.identity_fingerprint &&
+      trustedQR.value.identity_fingerprint !== data.identity_fingerprint
+    ) {
+      fieldError.value = t('pair.errFingerprint')
+      return
+    }
+    if (
+      trustedQR.value?.device_id &&
+      data.device_id &&
+      trustedQR.value.device_id !== data.device_id
+    ) {
+      fieldError.value = t('pair.errFingerprint')
+      return
+    }
+
+    if (data.phone_token) setPhoneToken(data.phone_token)
+    if (data.phone_id) setPhoneId(data.phone_id)
     binding.addBinding(data.device_id, data.name || data.device_id)
+
+    // Derive wrap key and pull catalog key packages when daemon keys are known.
+    const daemonEd = trustedQR.value?.ed25519_public || data.ed25519_public || ''
+    const daemonX = trustedQR.value?.x25519_public || data.x25519_public || ''
+    if (daemonEd && daemonX) {
+      try {
+        await completePairKeySetup({
+          code,
+          deviceId: data.device_id,
+          daemonEd25519: daemonEd,
+          daemonX25519: daemonX,
+          qr: trustedQR.value
+        })
+      } catch {
+        /* open mode still works without packages */
+      }
+    }
+
     message.success(t('pair.success'))
     void router.push(devicesLocation())
   } catch {
@@ -219,7 +319,19 @@ async function copyCommand(command: string) {
 }
 
 .pair-input {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.fingerprint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--neko-ink-soft);
+  word-break: break-all;
+}
+
+.fingerprint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--neko-ink);
 }
 
 .field-error {

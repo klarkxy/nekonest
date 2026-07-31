@@ -27,6 +27,7 @@ func testServer(t *testing.T, secret string) *Server {
 	t.Cleanup(func() { _ = d.Close() })
 	s := NewWithSecret(d, secret)
 	s.SetDataDir(dir)
+	_ = s.SetTransportMode(protocol.TransportOpen)
 	return s
 }
 

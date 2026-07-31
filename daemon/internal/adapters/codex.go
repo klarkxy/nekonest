@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ type CodexAdapter struct {
 	watchers    map[string]*fsnotify.Watcher
 	lastPaths   map[string]string
 	commander   *agentexec.CodexCommander
+	appServer   *agentexec.CodexAppServer
 }
 
 // NewCodexAdapter creates a new Codex adapter.
@@ -35,7 +37,16 @@ func NewCodexAdapter() *CodexAdapter {
 		watchers:    make(map[string]*fsnotify.Watcher),
 		lastPaths:   make(map[string]string),
 		commander:   agentexec.NewCodexCommander(),
+		appServer:   agentexec.NewCodexAppServer(),
 	}
+}
+
+// AppServerHealthy reports whether codex app-server is usable for full control.
+func (a *CodexAdapter) AppServerHealthy() bool {
+	if a.appServer == nil {
+		return false
+	}
+	return a.appServer.Available()
 }
 
 func (a *CodexAdapter) Name() string { return "codex" }
@@ -49,6 +60,9 @@ func (a *CodexAdapter) IsAvailable() bool {
 func (a *CodexAdapter) Close() error {
 	if a.commander != nil {
 		a.commander.StopAll()
+	}
+	if a.appServer != nil {
+		_ = a.appServer.Close()
 	}
 	a.watcherMu.Lock()
 	defer a.watcherMu.Unlock()
@@ -572,15 +586,135 @@ func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error
 }
 
 func (a *CodexAdapter) Approve(sessionID string, approvalID string) error {
+	// Prefer app-server when available (v1 full-control path).
+	if a.appServer != nil && a.appServer.Available() {
+		if err := a.appServer.Ensure(); err == nil {
+			for _, method := range []string{
+				"thread/approve",
+				"approval/approve",
+				"approve",
+			} {
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				_, err := a.appServer.Call(ctx, method, map[string]any{
+					"thread_id":   sessionID,
+					"session_id":  sessionID,
+					"approval_id": approvalID,
+					"decision":    "approve",
+				})
+				cancel()
+				if err == nil {
+					return nil
+				}
+			}
+		}
+	}
 	return a.commander.Approve(sessionID, approvalID)
 }
 
 func (a *CodexAdapter) Deny(sessionID string, approvalID string) error {
+	if a.appServer != nil && a.appServer.Available() {
+		if err := a.appServer.Ensure(); err == nil {
+			for _, method := range []string{
+				"thread/deny",
+				"approval/deny",
+				"deny",
+			} {
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				_, err := a.appServer.Call(ctx, method, map[string]any{
+					"thread_id":   sessionID,
+					"session_id":  sessionID,
+					"approval_id": approvalID,
+					"decision":    "deny",
+				})
+				cancel()
+				if err == nil {
+					return nil
+				}
+			}
+		}
+	}
 	return a.commander.Deny(sessionID, approvalID)
 }
 
 func (a *CodexAdapter) Interrupt(sessionID string) error {
+	if a.appServer != nil && a.appServer.Available() {
+		if err := a.appServer.Ensure(); err == nil {
+			for _, method := range []string{
+				"thread/interrupt",
+				"interrupt",
+			} {
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				_, err := a.appServer.Call(ctx, method, map[string]any{
+					"thread_id":  sessionID,
+					"session_id": sessionID,
+				})
+				cancel()
+				if err == nil {
+					return nil
+				}
+			}
+		}
+	}
 	return a.commander.Interrupt(sessionID)
+}
+
+// Steer sends a mid-turn correction via app-server when available.
+func (a *CodexAdapter) Steer(sessionID, text string) error {
+	if a.appServer == nil || !a.appServer.Available() {
+		return fmt.Errorf("codex app-server unavailable for steer")
+	}
+	if err := a.appServer.Ensure(); err != nil {
+		return err
+	}
+	for _, method := range []string{"thread/steer", "steer"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		_, err := a.appServer.Call(ctx, method, map[string]any{
+			"thread_id":  sessionID,
+			"session_id": sessionID,
+			"text":       text,
+			"prompt":     text,
+		})
+		cancel()
+		if err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("steer not supported by this codex app-server version")
+}
+
+// StartThread starts a native Codex thread in cwd via app-server.
+func (a *CodexAdapter) StartThread(cwd, firstPrompt string) (threadID string, err error) {
+	if a.appServer == nil || !a.appServer.Available() {
+		return "", fmt.Errorf("codex app-server unavailable for start_thread")
+	}
+	if err := a.appServer.Ensure(); err != nil {
+		return "", err
+	}
+	for _, method := range []string{"thread/start", "thread/create", "start_thread"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		raw, callErr := a.appServer.Call(ctx, method, map[string]any{
+			"cwd":    cwd,
+			"prompt": firstPrompt,
+			"text":   firstPrompt,
+		})
+		cancel()
+		if callErr != nil {
+			continue
+		}
+		var resp map[string]any
+		if json.Unmarshal(raw, &resp) == nil {
+			for _, k := range []string{"thread_id", "id", "session_id"} {
+				if v, ok := resp[k].(string); ok && v != "" {
+					return v, nil
+				}
+			}
+		}
+		var s string
+		if json.Unmarshal(raw, &s) == nil && s != "" {
+			return s, nil
+		}
+	}
+	return "", fmt.Errorf("start_thread not supported by this codex app-server version")
 }
 
 // --- Codex-specific helpers ---

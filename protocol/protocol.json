@@ -2,9 +2,19 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://nekonest.local/protocol.json",
   "title": "NekoNest Protocol",
-  "description": "JSON envelope for NekoNest phone ↔ server ↔ daemon communication",
+  "description": "JSON envelope for NekoNest phone ↔ server ↔ daemon communication (v1)",
   "$ref": "#/definitions/NekoMessage",
   "definitions": {
+    "ProtocolVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "major.minor wire version; major mismatch rejects, minor is backward compatible"
+    },
+    "TransportMode": {
+      "type": "string",
+      "enum": ["sealed", "open"],
+      "description": "Nest transport mode; one mode per nest, no sealed→open downgrade"
+    },
     "MessageType": {
       "type": "string",
       "enum": [
@@ -24,23 +34,82 @@
         "approve",
         "deny",
         "interrupt",
+        "steer",
+        "start_thread",
+        "thread_starting",
+        "thread_owned",
+        "thread_failed",
+        "thread_indeterminate",
         "heartbeat",
         "error",
         "register_device",
         "auth_response",
         "pair_request",
         "pair_confirm",
+        "pair_ready",
+        "pair_failed",
+        "key_package",
+        "phone_revoked",
+        "attention_event",
         "subscribe",
         "subscribe_ack",
         "fetch_history",
         "session_history"
       ]
     },
+    "SealedPayload": {
+      "type": "object",
+      "required": [
+        "alg",
+        "key_scope",
+        "epoch",
+        "sender_id",
+        "recipient_id",
+        "sequence",
+        "nonce",
+        "ciphertext"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "type": "string",
+          "description": "AEAD algorithm identifier (e.g. aes-256-gcm)"
+        },
+        "version": {
+          "type": "integer",
+          "description": "Sealed payload format version"
+        },
+        "key_scope": {
+          "type": "string",
+          "enum": ["device_catalog", "session"]
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sender_id": { "type": "string" },
+        "recipient_id": { "type": "string" },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nonce": {
+          "type": "string",
+          "description": "Base64url-encoded 96-bit nonce"
+        },
+        "ciphertext": {
+          "type": "string",
+          "description": "Base64url-encoded ciphertext"
+        }
+      }
+    },
     "NekoMessage": {
       "type": "object",
       "required": ["type", "device_id", "timestamp"],
       "additionalProperties": false,
       "properties": {
+        "protocol_version": { "$ref": "#/definitions/ProtocolVersion" },
+        "transport_mode": { "$ref": "#/definitions/TransportMode" },
         "type": { "$ref": "#/definitions/MessageType" },
         "device_id": {
           "type": "string",
@@ -50,13 +119,21 @@
           "type": "string",
           "description": "Agent session identifier (optional for device-level messages)"
         },
+        "client_msg_id": {
+          "type": "string",
+          "description": "Client idempotency id (relay-visible for prompt/start)"
+        },
         "timestamp": {
           "type": "integer",
           "description": "Unix timestamp in seconds"
         },
         "payload": {
           "type": "object",
-          "description": "Message-specific payload"
+          "description": "Open-mode or plaintext control payload; must be absent when sealed_payload is set"
+        },
+        "sealed_payload": {
+          "$ref": "#/definitions/SealedPayload",
+          "description": "Sealed application payload; must be absent in open mode"
         }
       }
     },
@@ -66,10 +143,36 @@
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string" },
-        "os": { "type": "string", "enum": ["windows"] },
+        "os": { "type": "string", "enum": ["windows", "linux"] },
         "status": { "type": "string", "enum": ["online", "offline"] },
         "last_seen": { "type": "integer" },
         "active_agents": { "type": "integer" }
+      }
+    },
+    "SessionCapabilities": {
+      "type": "object",
+      "description": "Absent fields default to false/unsupported",
+      "additionalProperties": false,
+      "properties": {
+        "control_mode": {
+          "type": "string",
+          "enum": ["app_server", "exec_resume", "compatibility"]
+        },
+        "approve": { "type": "boolean" },
+        "deny": { "type": "boolean" },
+        "interrupt": { "type": "boolean" },
+        "steer": { "type": "boolean" },
+        "queue": { "type": "boolean" },
+        "spawn": { "type": "boolean" },
+        "attachment_mode": {
+          "type": "string",
+          "enum": [
+            "native_image_and_file",
+            "native_image",
+            "path_best_effort",
+            "unsupported"
+          ]
+        }
       }
     },
     "AgentSession": {
@@ -82,11 +185,15 @@
           "type": "string",
           "enum": ["claude_code", "codex", "kilo", "kimi_cli", "grok_build"]
         },
-        "status": { "type": "string", "enum": ["running", "idle", "waiting_approval"] },
+        "status": {
+          "type": "string",
+          "enum": ["idle", "running", "waiting_user", "waiting_approval", "error"]
+        },
         "summary": { "type": "string" },
         "last_activity": { "type": "integer" },
         "project_dir": { "type": "string" },
         "project": { "type": "string" },
+        "capabilities": { "$ref": "#/definitions/SessionCapabilities" },
         "pending_approval": {
           "type": "object",
           "properties": {

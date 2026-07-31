@@ -27,7 +27,8 @@
           v-if="canInterrupt"
           type="button"
           class="interrupt-btn"
-          :disabled="sessionStore.wsStatus !== 'connected'"
+          :disabled="sessionStore.wsStatus !== 'connected' || !interruptSupported"
+          :title="interruptSupported ? undefined : t('session.interruptUnavailable')"
           :aria-label="t('session.interruptAria')"
           @click="handleInterrupt"
         >{{ t('session.interrupt') }}</button>
@@ -84,7 +85,17 @@
         v-if="approvalParamsText"
         class="approval-params"
       >{{ approvalParamsText }}</pre>
-      <p class="approval-note">{{ t('session.approvalNote') }}</p>
+      <template v-if="approveSupported">
+        <div class="approval-actions">
+          <button type="button" class="approval-btn approval-btn--ok" @click="handleApprove">
+            {{ t('session.approve') }}
+          </button>
+          <button type="button" class="approval-btn approval-btn--no" @click="handleDeny">
+            {{ t('session.deny') }}
+          </button>
+        </div>
+      </template>
+      <p v-else class="approval-note">{{ t('session.approvalNote') }}</p>
     </div>
 
     <div
@@ -330,10 +341,29 @@ const sendButtonLabel = computed(() =>
 
 const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
 
+const sessionCaps = computed(() => sessionStore.currentSession?.capabilities)
+
+const interruptSupported = computed(() => {
+  const c = sessionCaps.value
+  // Default true when capabilities absent (legacy open-mode hosts).
+  return c?.interrupt !== false
+})
+
+const approveSupported = computed(() => {
+  const c = sessionCaps.value
+  return !!(c?.approve && c?.deny)
+})
+
 const showHeaderActivity = computed(() => {
   if (hasPendingApproval.value) return true
   const status = sessionStore.currentSession?.status
-  return sessionStore.streaming || status === 'running' || status === 'waiting_approval'
+  return (
+    sessionStore.streaming ||
+    status === 'running' ||
+    status === 'waiting_approval' ||
+    status === 'waiting_user' ||
+    status === 'error'
+  )
 })
 
 /** Full banner only when busy and not already covered by approval card. */
@@ -689,7 +719,20 @@ function reloadHistory() {
   sessionStore.requestNativeHistory(deviceId.value, sessionId.value)
 }
 
+function handleApprove() {
+  const id = sessionStore.currentSession?.pending_approval?.id
+  if (!id || !approveSupported.value) return
+  sessionStore.approve(deviceId.value, sessionId.value, id)
+}
+
+function handleDeny() {
+  const id = sessionStore.currentSession?.pending_approval?.id
+  if (!id || !approveSupported.value) return
+  sessionStore.deny(deviceId.value, sessionId.value, id)
+}
+
 function handleInterrupt() {
+  if (!interruptSupported.value) return
   sessionStore.interrupt(deviceId.value, sessionId.value)
 }
 </script>
@@ -906,6 +949,30 @@ function handleInterrupt() {
   font-size: 12px;
   color: var(--neko-warning-ink);
   line-height: 1.45;
+}
+.approval-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+.approval-btn {
+  min-height: 44px;
+  min-width: 96px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.approval-btn--ok {
+  background: var(--neko-primary);
+  color: #fff;
+}
+.approval-btn--no {
+  background: var(--neko-surface-muted);
+  color: var(--neko-ink);
+  border-color: var(--neko-line);
 }
 
 .messages-area {

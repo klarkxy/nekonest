@@ -7,33 +7,44 @@ How NekoNest trusts components, what secrets protect which surfaces, and what op
 ## Trust topology
 
 ```text
-Phone PWA  ──HTTPS/WSS──►  VPS Server  ◄──outbound WSS──  Windows Daemon  ──►  local agent CLIs/stores
+Phone PWA  ──HTTPS/WSS──►  VPS Server  ◄──outbound WSS──  Host Daemon (Win/Linux)  ──►  local agent CLIs/stores
 ```
 
 | Component | Trust role |
 |---|---|
-| **Phone** | Holds the phone shared secret; sees paired devices and session traffic for this nest |
-| **VPS** | Authenticates phone and daemons; relays WebSocket traffic; **persists** devices, messages, and attachments |
-| **Home PC / Daemon** | Initiates outbound connection only; reads native agent stores; runs headless CLIs |
+| **Phone** | Holds admin bootstrap secret (setup) and/or independent phone token; E2E private keys in IndexedDB |
+| **VPS** | Authenticates phone and daemons; relays WebSocket traffic; persists devices and (mode-dependent) messages/attachments |
+| **Home PC / Daemon** | Initiates outbound connection only; holds E2E identity + content keys; reads native agent stores; runs headless CLIs |
 | **Agent CLIs** | Authoritative session/history stores; execute tools with the user’s local privileges |
 
-**There is no end-to-end encryption between phone and home PC.** The VPS can read metadata, message bodies, and attachment bytes it stores. Treat the VPS host, `data/` directory, backups, and reverse-proxy logs as **sensitive systems**.
+### Transport modes (v1)
+
+| Mode | Default | VPS sees |
+|---|---|---|
+| **sealed** | Yes for new nests | Ciphertext bodies; routing metadata (device ID, session ID, timestamps, sizes, connection state). **Not** prompt/response/tool plaintext when fully sealed. |
+| **open** | Admin-only explicit config | Application plaintext as in v0.1 — treat VPS as sensitive |
+
+One nest has one fixed mode; clients must match; **no** automatic sealed→open downgrade.
+
+Pairing trust: QR carries daemon public-key fingerprint; six-digit code alone is a lower-assurance fallback (compare fingerprint on PC screen).
 
 ## Product boundaries that affect security
 
-- The phone **resumes** existing PC threads; it does not create remote agent sessions.
+- The phone primarily **resumes** native threads; Codex-only `start_thread` may spawn into **currently discovered** project directories via app-server.
 - The daemon **never requires inbound** ports on the home PC.
 - Each agent’s **native local store** is authoritative for discovery and history.
-- Tool approval depends on each agent’s **non-interactive** CLI; blocked work may require the PC terminal.
+- Codex app-server is the only full-control approval path; other agents advertise honest capability flags.
 
 ## Secrets and credentials
 
 | Secret | Who holds it | Protects |
 |---|---|---|
-| `NEKONEST_PHONE_SECRET` | Operator + phone clients | Phone REST (`Authorization: Bearer` or `X-Neko-Secret`) and phone WebSocket |
+| `NEKONEST_ADMIN_SECRET` (alias `NEKONEST_PHONE_SECRET`) | Operator | Admin bootstrap / mint phone tokens; legacy full phone access |
+| Phone token | Each phone | Day-to-day REST/WS; scoped by device grants; revocable |
 | `NEKONEST_BOOTSTRAP_TOKEN` | Operator + daemon at register time | `POST /api/devices/register` (`X-Neko-Bootstrap`) |
 | Device `token` in daemon `config.json` | Home PC only | Daemon WebSocket identity after registration |
-| Pair code (6 digits) | Short-lived, printed by daemon | Binding a phone UI to a registered device |
+| Daemon `identity.json` / sealed keys | Home PC only | E2E long-term keys and content keys |
+| Pair code + QR fingerprint | Short-lived | Binding a phone to a registered device |
 | VAPID keys | Operator | Optional Web Push |
 
 ### Rules

@@ -88,18 +88,22 @@ export default {
   },
   pair: {
     title: 'Pair PC',
-    desc: 'Generate a 6-digit pair code on the home PC, enter it here, and this phone can see that PC’s threads.',
+    desc: 'Generate a pair code on the home PC (or paste the QR JSON), verify the fingerprint, and this phone can see that PC’s threads.',
     codeLabel: 'Pair code',
     placeholder: 'Enter 6-digit code…',
+    qrLabel: 'QR payload (optional, recommended)',
+    qrPlaceholder: 'Paste the JSON printed by nekonest-daemon -pair gen…',
+    fingerprint: 'Host fingerprint',
     submit: 'Finish pairing',
     helpTitle: 'How to get a pair code',
     help1: 'On a registered PC, run',
     help2: 'First time: set server URL and bootstrap token, then run',
-    help3: 'Enter the code above and finish pairing',
-    help4: 'Keep the local daemon online',
+    help3: 'Enter the code (or paste QR JSON) and finish pairing',
+    help4: 'Keep the local daemon online; compare fingerprint with the PC screen',
     copyCmd: 'Copy command {cmd}',
     errAuth: 'Phone key is wrong. Open key settings first.',
     errCode: 'Pair code invalid or expired. Generate a new one on the PC.',
+    errFingerprint: 'Host fingerprint mismatch. Do not pair — regenerate on the PC.',
     errNetwork: 'Pairing failed. Check the network and try again.',
     success: 'Paired',
     copied: 'Command copied',
@@ -170,12 +174,17 @@ export default {
     send: 'Send',
     sendBlocked: 'Send after the current task ends',
     sendBusyHint: 'The agent is still on the last prompt. You can draft the next one.',
-    approvalTitle: 'Waiting for PC approval',
+    approvalTitle: 'Needs approval',
     approvalNote:
-      'Approve or deny in that agent’s terminal on the home PC. The phone cannot approve. After approval, replies sync here.',
+      'This agent cannot approve from the phone. Finish approve/deny in the host terminal; replies sync after that.',
+    approve: 'Approve',
+    deny: 'Deny',
+    interruptUnavailable: 'Interrupt is not available for this agent session',
     deliveryQueued: 'Queued',
     deliverySending: 'Sending',
+    deliveryAccepted: 'Accepted',
     deliveryFailed: 'Failed',
+    deliveryNotSeen: 'Not seen',
     retry: 'Retry',
     wsConnected: 'Channel OK',
     wsConnecting: 'Connecting…',
@@ -199,10 +208,21 @@ export default {
     },
     waiting_approval: {
       icon: '🔔',
-      label: 'PC approval',
-      headline: 'Waiting for PC approval',
-      detail:
-        'Approve or deny in the agent terminal on your PC. The phone cannot approve. Replies continue after approval.'
+      label: 'Needs approval',
+      headline: 'Waiting for approval',
+      detail: 'Approve or deny from the phone when this agent supports it; otherwise finish on the host terminal.'
+    },
+    waiting_user: {
+      icon: '🙋',
+      label: 'Needs you',
+      headline: 'Waiting for your input',
+      detail: 'The agent is blocked on a question or choice. Open the thread to continue.'
+    },
+    error: {
+      icon: '⚠️',
+      label: 'Error',
+      headline: 'Thread error',
+      detail: 'The last run failed. Check the thread for details.'
     },
     streaming: {
       icon: '🐾',
@@ -253,6 +273,7 @@ export default {
     attachMax: 'At most {n} attachments at once'
   },
   outbox: {
-    attachmentsOnly: '(sent {n} attachment(s))'
+    attachmentsOnly: '(sent {n} attachment(s))',
+    notSeen: 'Daemon has not seen this prompt. You can retry safely.'
   }
 } as const

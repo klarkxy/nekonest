@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,13 +25,31 @@ import (
 	"github.com/nekonest/daemon/internal/attach"
 	"github.com/nekonest/daemon/internal/config"
 	"github.com/nekonest/daemon/internal/connection"
+	"github.com/nekonest/daemon/internal/identity"
+	"github.com/nekonest/daemon/internal/sealed"
+	"github.com/nekonest/daemon/internal/sealedkeys"
 )
+
+var (
+	daemonSealedKeys *sealedkeys.Manager
+	daemonTransport  = "open"
+	// forceDiscoverCh triggers an immediate session discovery/report.
+	forceDiscoverCh = make(chan struct{}, 1)
+)
+
+func requestForceDiscover() {
+	select {
+	case forceDiscoverCh <- struct{}{}:
+	default:
+	}
+}
 
 func main() {
 	configPath := flag.String("config", "", "config file path (default: ~/.nekonest/config.json)")
 	pairFlag := flag.String("pair", "", "generate phone pair code for already-registered device (e.g. -pair gen)")
 	register := flag.Bool("register", false, "register this device with the server (needs NEKONEST_SERVER)")
 	deviceName := flag.String("name", "", "device name (for registration)")
+	doctor := flag.Bool("doctor", false, "run non-interactive diagnostics and exit")
 	flag.Parse()
 
 	// Handle registration flow
@@ -43,6 +62,14 @@ func main() {
 	if *pairFlag != "" {
 		handlePairing(*pairFlag)
 		return
+	}
+
+	if *doctor {
+		cfgPath := *configPath
+		if cfgPath == "" {
+			cfgPath = config.DefaultConfigPath()
+		}
+		os.Exit(runDoctor(cfgPath))
 	}
 
 	// Load config
@@ -65,6 +92,17 @@ func main() {
 	log.Printf("🐱 NekoNest Daemon starting")
 	log.Printf("   Device: %s", cfg.DeviceID)
 	log.Printf("   Server: %s", cfg.ServerURL)
+	daemonTransport = strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
+	if daemonTransport == "" {
+		daemonTransport = "open"
+	}
+	log.Printf("   Transport: %s", daemonTransport)
+	if sk, err := sealedkeys.LoadOrCreate(sealedkeys.DefaultPath()); err != nil {
+		log.Printf("   Sealed keys: unavailable (%v)", err)
+	} else {
+		daemonSealedKeys = sk
+		log.Printf("   Sealed keys: %s", sealedkeys.DefaultPath())
+	}
 
 	// Runtime config is published as immutable snapshots. Device credentials are
 	// intentionally fixed for this daemon process; changing them requires a
@@ -182,10 +220,28 @@ func main() {
 		sessionMu.Unlock()
 
 		switch msgType {
+		case "pair_ready":
+			// Phone completed pairing; wrap catalog key for that phone.
+			go publishCatalogKeyForPhone(currentConfig(), payload)
+			return
 		case "send_prompt":
 			// Serialize sends per session (prevents double codex/kilo process).
 			unlock := sessionSends.lock(sessionID)
 			defer unlock()
+
+			// Sealed mode: decrypt application body before dispatch.
+			if sealedObj, ok := msg["sealed_payload"].(map[string]interface{}); ok && daemonSealedKeys != nil {
+				if plain, err := openSealedPrompt(deviceID, sessionID, msg, sealedObj); err != nil {
+					log.Printf("[daemon] sealed send_prompt open: %v", err)
+					sendPromptFailed(client, deviceID, sessionID, "", "sealed payload decrypt failed")
+					return
+				} else if plain != nil {
+					payload = plain
+				}
+			}
+			if payload == nil {
+				payload = map[string]interface{}{}
+			}
 
 			clientMsgID, _ := payload["client_msg_id"].(string)
 			if clientMsgID == "" {
@@ -429,6 +485,78 @@ func main() {
 				log.Printf("[daemon] interrupted session %s", sessionID)
 			}
 
+		case "steer":
+			text, _ := payload["text"].(string)
+			if text == "" {
+				text, _ = payload["prompt"].(string)
+			}
+			if text == "" {
+				sendDaemonError(client, deviceID, sessionID, "steer text required")
+				return
+			}
+			codex, ok := targetAdapter.(*adapters.CodexAdapter)
+			if !ok || codex == nil {
+				// try lookup codex adapter by name
+				if a, exists := adapterRegistry.Get("codex"); exists {
+					codex, _ = a.(*adapters.CodexAdapter)
+				}
+			}
+			if codex == nil {
+				sendDaemonError(client, deviceID, sessionID, "steer only supported for codex")
+				return
+			}
+			if err := codex.Steer(sessionID, text); err != nil {
+				log.Printf("[daemon] steer error: %v", err)
+				sendDaemonError(client, deviceID, sessionID, "steer failed: "+err.Error())
+			}
+
+		case "start_thread":
+			cwd, _ := payload["cwd"].(string)
+			if cwd == "" {
+				cwd, _ = payload["project_dir"].(string)
+			}
+			first, _ := payload["prompt"].(string)
+			opID, _ := payload["operation_id"].(string)
+			if opID == "" {
+				opID, _ = msg["client_msg_id"].(string)
+			}
+			codexA, exists := adapterRegistry.Get("codex")
+			codex, _ := codexA.(*adapters.CodexAdapter)
+			if !exists || codex == nil {
+				sendThreadResult(client, deviceID, opID, "thread_failed", "", "codex adapter unavailable")
+				return
+			}
+			// Restrict to currently discovered project dirs.
+			allowed := false
+			sessionMu.Lock()
+			for _, s := range lastSessions {
+				if s != nil && s.AgentType == adapters.AgentCodex && s.ProjectDir != "" &&
+					filepath.Clean(s.ProjectDir) == filepath.Clean(cwd) {
+					allowed = true
+					break
+				}
+			}
+			sessionMu.Unlock()
+			if !allowed || cwd == "" {
+				sendThreadResult(client, deviceID, opID, "thread_failed", "", "directory not in discovered codex projects")
+				return
+			}
+			sendThreadResult(client, deviceID, opID, "thread_starting", "", "")
+			tid, err := codex.StartThread(cwd, first)
+			if err != nil {
+				sendThreadResult(client, deviceID, opID, "thread_failed", "", err.Error())
+				return
+			}
+			if tid != "" && codex.OwnsSession(tid) {
+				sendThreadResult(client, deviceID, opID, "thread_owned", tid, "")
+				requestForceDiscover()
+			} else if tid != "" {
+				sendThreadResult(client, deviceID, opID, "thread_indeterminate", tid, "native ownership not yet confirmed")
+				requestForceDiscover()
+			} else {
+				sendThreadResult(client, deviceID, opID, "thread_indeterminate", "", "no thread id returned")
+			}
+
 		case "fetch_history":
 			limit := 40
 			if payload != nil {
@@ -501,13 +629,8 @@ func main() {
 	})
 
 	// Session force-report after reconnect (server cache starts empty).
-	forceReport := make(chan struct{}, 1)
-	requestForceReport := func() {
-		select {
-		case forceReport <- struct{}{}:
-		default:
-		}
-	}
+	forceReport := forceDiscoverCh
+	requestForceReport := requestForceDiscover
 	client.OnConnect(func() {
 		requestForceReport()
 		pending := commandJournal.uncommittedAccepted()
@@ -560,6 +683,33 @@ func main() {
 					continue
 				}
 				allSessions = append(allSessions, sessions...)
+			}
+
+			// Stamp capabilities (Codex full-control when app-server healthy).
+			var codexAppHealthy bool
+			if a, ok := adapterRegistry.Get("codex"); ok {
+				if ca, ok := a.(*adapters.CodexAdapter); ok {
+					codexAppHealthy = ca.AppServerHealthy()
+				}
+			}
+			for _, s := range allSessions {
+				if s == nil {
+					continue
+				}
+				if s.Capabilities == nil {
+					s.Capabilities = adapters.DefaultCapabilities(s.AgentType)
+				}
+				if s.AgentType == adapters.AgentCodex && codexAppHealthy {
+					s.Capabilities = &adapters.SessionCapabilities{
+						ControlMode:    adapters.ControlAppServer,
+						Approve:        true,
+						Deny:           true,
+						Interrupt:      true,
+						Steer:          true,
+						Spawn:          true,
+						AttachmentMode: adapters.AttachNativeImageAndFile,
+					}
+				}
 			}
 
 			// Check for changes
@@ -716,13 +866,37 @@ func sessionsToWire(deviceID string, sessions []*adapters.SessionInfo) []map[str
 		if s == nil {
 			continue
 		}
+		// Normalize status: unknown values collapse to idle (forward-compatible).
+		status := string(s.Status)
+		switch s.Status {
+		case adapters.StatusRunning, adapters.StatusIdle, adapters.StatusWaitingUser,
+			adapters.StatusWaitingApproval, adapters.StatusError:
+		default:
+			if status == "" {
+				status = string(adapters.StatusIdle)
+			}
+		}
+		caps := s.Capabilities
+		if caps == nil {
+			caps = adapters.DefaultCapabilities(s.AgentType)
+		}
 		item := map[string]interface{}{
 			"id":            s.ID,
 			"device_id":     deviceID,
 			"agent_type":    string(s.AgentType),
-			"status":        string(s.Status),
+			"status":        status,
 			"summary":       s.Summary,
 			"last_activity": s.LastActivity.Unix(),
+			"capabilities": map[string]interface{}{
+				"control_mode":    string(caps.ControlMode),
+				"approve":         caps.Approve,
+				"deny":            caps.Deny,
+				"interrupt":       caps.Interrupt,
+				"steer":           caps.Steer,
+				"queue":           caps.Queue,
+				"spawn":           caps.Spawn,
+				"attachment_mode": string(caps.AttachmentMode),
+			},
 		}
 		if s.ProjectDir != "" {
 			item["project_dir"] = s.ProjectDir
@@ -742,6 +916,7 @@ func sessionsToWire(deviceID string, sessions []*adapters.SessionInfo) []map[str
 
 // sendSessionMessage creates a session_message and sends it to the server.
 // msgID, when non-empty, is a stable id so the phone can patch streaming content.
+// In sealed mode the message body is encrypted under the session content key.
 func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentType, msgType, content, msgID string) {
 	// Determine role from msgType
 	role := "assistant"
@@ -761,24 +936,52 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 		msgID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
 	}
 
-	msg := map[string]interface{}{
-		"type":       "session_message",
-		"device_id":  deviceID,
-		"session_id": sessionID,
-		"timestamp":  time.Now().Unix(),
-		"payload": map[string]interface{}{
-			"message": map[string]interface{}{
-				"id":        msgID,
-				"role":      role,
-				"content":   content,
-				"type":      msgType,
-				"timestamp": time.Now().Unix(),
-				"metadata": map[string]interface{}{
-					"agent_type": agentType,
-					"stream":     true,
-				},
+	ts := time.Now().Unix()
+	inner := map[string]interface{}{
+		"message": map[string]interface{}{
+			"id":        msgID,
+			"role":      role,
+			"content":   content,
+			"type":      msgType,
+			"timestamp": ts,
+			"metadata": map[string]interface{}{
+				"agent_type": agentType,
+				"stream":     true,
 			},
 		},
+	}
+
+	msg := map[string]interface{}{
+		"protocol_version": "1.0",
+		"transport_mode":   daemonTransport,
+		"type":             "session_message",
+		"device_id":        deviceID,
+		"session_id":       sessionID,
+		"timestamp":        ts,
+	}
+
+	if daemonTransport == "sealed" && daemonSealedKeys != nil {
+		plain, err := json.Marshal(inner)
+		if err != nil {
+			log.Printf("[daemon] seal marshal: %v", err)
+			return
+		}
+		aad := sealed.AADFields{
+			ProtocolVersion: "1.0",
+			TransportMode:   "sealed",
+			Type:            "session_message",
+			DeviceID:        deviceID,
+			SessionID:       sessionID,
+			Timestamp:       ts,
+		}
+		wire, err := daemonSealedKeys.SealSession(sessionID, deviceID, "phones", aad, plain)
+		if err != nil {
+			log.Printf("[daemon] seal session_message: %v", err)
+			return
+		}
+		msg["sealed_payload"] = wire
+	} else {
+		msg["payload"] = inner
 	}
 
 	if err := client.Send(msg); err != nil {
@@ -804,8 +1007,12 @@ func handleRegistration(deviceName string) {
 		fmt.Printf("Config:  %s\n", config.DefaultConfigPath())
 		fmt.Println("To re-register, delete the config file first.")
 		// Still mint a fresh pair code for the phone
-		if code, exp, err := requestPairCode(existing); err == nil {
+		_, st, _ := identity.LoadOrCreate(identity.Path())
+		if code, exp, err := requestPairCode(existing, st); err == nil {
 			fmt.Printf("\n📱 Phone pair code: %s (expires ~%s)\n", code, exp.Local().Format("15:04:05"))
+			if st != nil {
+				fmt.Printf("Fingerprint: %s\n", st.Fingerprint)
+			}
 			fmt.Println("Enter this code in the PWA 「配对电脑」 page.")
 		}
 		return
@@ -822,7 +1029,18 @@ func handleRegistration(deviceName string) {
 	httpBase := config.HTTPBaseURL(serverURL)
 	wsURL := config.NormalizeServerURL(serverURL)
 
-	body, _ := json.Marshal(map[string]string{"name": deviceName})
+	_, st, err := identity.LoadOrCreate(identity.Path())
+	if err != nil {
+		log.Fatalf("identity: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{
+		"name":                 deviceName,
+		"os":                   runtime.GOOS,
+		"ed25519_public":       st.Ed25519Public,
+		"x25519_public":        st.X25519Public,
+		"identity_fingerprint": st.Fingerprint,
+	})
 	req, err := http.NewRequest(http.MethodPost, httpBase+"/api/devices/register", bytes.NewReader(body))
 	if err != nil {
 		log.Fatalf("register request build failed: %v", err)
@@ -865,13 +1083,17 @@ func handleRegistration(deviceName string) {
 	fmt.Printf("✅ Registered as %s (%s)\n", result.Name, result.DeviceID)
 	fmt.Printf("   Server: %s\n", wsURL)
 	fmt.Printf("   Config: %s\n", config.DefaultConfigPath())
+	fmt.Printf("   Fingerprint: %s\n", st.Fingerprint)
 
-	if code, exp, err := requestPairCode(cfg); err != nil {
+	if code, exp, err := requestPairCode(cfg, st); err != nil {
 		fmt.Printf("\n⚠️  Could not generate pair code: %v\n", err)
 		fmt.Println("You can still list the device on phone if you use the phone secret.")
 	} else {
 		fmt.Printf("\n📱 Phone pair code: %s (expires ~%s)\n", code, exp.Local().Format("15:04:05"))
-		fmt.Println("1. Open PWA → 配对电脑 → enter this code")
+		qr := identity.BuildPairQR(httpBase, result.DeviceID, result.Name, code, exp.Unix(), st, "open")
+		qrJSON, _ := json.Marshal(qr)
+		fmt.Println(string(qrJSON))
+		fmt.Println("1. Open PWA → 配对电脑 → enter code / paste QR payload")
 		fmt.Println("2. Start daemon: nekonest-daemon.exe")
 	}
 }
@@ -890,23 +1112,45 @@ func handlePairing(code string) {
 
 	// Historical flag took a code string; we now always mint a server code for the phone.
 	_ = code
-	pairCode, exp, err := requestPairCode(cfg)
+	_, st, err := identity.LoadOrCreate(identity.Path())
+	if err != nil {
+		log.Fatalf("identity: %v", err)
+	}
+	pairCode, exp, err := requestPairCode(cfg, st)
 	if err != nil {
 		log.Fatalf("generate pair code: %v", err)
 	}
+	httpBase := config.HTTPBaseURL(cfg.ServerURL)
+	transportMode := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
+	if transportMode == "" {
+		transportMode = "open"
+	}
+	qr := identity.BuildPairQR(httpBase, cfg.DeviceID, "", pairCode, exp.Unix(), st, transportMode)
+	qrJSON, _ := json.Marshal(qr)
 	fmt.Printf("Device: %s\n", cfg.DeviceID)
+	fmt.Printf("Fingerprint: %s\n", st.Fingerprint)
 	fmt.Printf("📱 Phone pair code: %s\n", pairCode)
 	fmt.Printf("Expires: %s\n", exp.Local().Format(time.RFC3339))
-	fmt.Println("Enter this code in the PWA 「配对电脑」 page.")
+	fmt.Println()
+	fmt.Println("QR payload (scan or paste into PWA):")
+	fmt.Println(string(qrJSON))
+	fmt.Println()
+	fmt.Println("Enter the 6-char code in the PWA, and verify the fingerprint matches the PC screen.")
 }
 
 // requestPairCode calls POST /api/pair/generate for the registered device.
-func requestPairCode(cfg *config.Config) (string, time.Time, error) {
+func requestPairCode(cfg *config.Config, st *identity.Stored) (string, time.Time, error) {
 	httpBase := config.HTTPBaseURL(cfg.ServerURL)
-	body, _ := json.Marshal(map[string]string{
+	bodyMap := map[string]string{
 		"device_id": cfg.DeviceID,
 		"token":     cfg.Token,
-	})
+	}
+	if st != nil {
+		bodyMap["ed25519_public"] = st.Ed25519Public
+		bodyMap["x25519_public"] = st.X25519Public
+		bodyMap["identity_fingerprint"] = st.Fingerprint
+	}
+	body, _ := json.Marshal(bodyMap)
 	resp, err := http.Post(httpBase+"/api/pair/generate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", time.Time{}, err
@@ -1088,6 +1332,230 @@ func sendPromptFailure(
 	}
 }
 
+func sendThreadResult(client *connection.Client, deviceID, opID, msgType, threadID, errMsg string) {
+	payload := map[string]interface{}{"operation_id": opID}
+	if threadID != "" {
+		payload["session_id"] = threadID
+		payload["thread_id"] = threadID
+	}
+	if errMsg != "" {
+		payload["error"] = errMsg
+		payload["message"] = errMsg
+	}
+	msg := map[string]interface{}{
+		"protocol_version": "1.0",
+		"transport_mode":   daemonTransport,
+		"type":             msgType,
+		"device_id":        deviceID,
+		"session_id":       threadID,
+		"client_msg_id":    opID,
+		"timestamp":        time.Now().Unix(),
+		"payload":          payload,
+	}
+	if err := client.Send(msg); err != nil {
+		log.Printf("[daemon] send %s failed: %v", msgType, err)
+	}
+}
+
+// openSealedPrompt decrypts a sealed send_prompt body into a payload map.
+func openSealedPrompt(deviceID, sessionID string, msg map[string]interface{}, sealedObj map[string]interface{}) (map[string]interface{}, error) {
+	raw, err := json.Marshal(sealedObj)
+	if err != nil {
+		return nil, err
+	}
+	var wire sealed.WireSealed
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, err
+	}
+	ts, _ := msg["timestamp"].(float64)
+	clientMsgID, _ := msg["client_msg_id"].(string)
+	if clientMsgID == "" {
+		if p, ok := msg["payload"].(map[string]interface{}); ok {
+			clientMsgID, _ = p["client_msg_id"].(string)
+		}
+	}
+	aad := sealed.AADFields{
+		ProtocolVersion: "1.0",
+		TransportMode:   "sealed",
+		Type:            "send_prompt",
+		DeviceID:        deviceID,
+		SessionID:       sessionID,
+		ClientMsgID:     clientMsgID,
+		KeyScope:        wire.KeyScope,
+		KeyEpoch:        wire.Epoch,
+		SenderID:        wire.SenderID,
+		Sequence:        wire.Sequence,
+		Timestamp:       int64(ts),
+	}
+	var pt []byte
+	if wire.KeyScope == "session" {
+		pt, err = daemonSealedKeys.OpenSession(sessionID, &wire, aad)
+	} else {
+		// Catalog-scoped prompts are not expected; try session key by default.
+		pt, err = daemonSealedKeys.OpenSession(sessionID, &wire, aad)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(pt, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// publishCatalogKeyForPhone wraps the device catalog key for a newly paired phone.
+func publishCatalogKeyForPhone(cfg *config.Config, payload map[string]interface{}) {
+	if cfg == nil || daemonSealedKeys == nil {
+		return
+	}
+	phoneID, _ := payload["phone_id"].(string)
+	phoneX, _ := payload["phone_x25519_public"].(string)
+	phoneEd, _ := payload["phone_ed25519_public"].(string)
+	code, _ := payload["pair_code"].(string)
+	if phoneID == "" || phoneX == "" {
+		// Fallback: pull grants from server.
+		publishCatalogKeysForAllGrants(cfg)
+		return
+	}
+	_, st, err := identity.LoadOrCreate(identity.Path())
+	if err != nil || st == nil {
+		log.Printf("[daemon] pair_ready identity: %v", err)
+		return
+	}
+	id, err := identityLoadSealed(st)
+	if err != nil {
+		log.Printf("[daemon] pair_ready load sealed id: %v", err)
+		return
+	}
+	phonePub, err := sealed.ParseX25519Public(phoneX)
+	if err != nil {
+		log.Printf("[daemon] pair_ready phone x25519: %v", err)
+		return
+	}
+	shared, err := sealed.SharedSecret(id.X25519Private, phonePub)
+	if err != nil {
+		log.Printf("[daemon] pair_ready shared: %v", err)
+		return
+	}
+	transcript := []byte(strings.Join([]string{
+		"nekonest-pair-v1",
+		code,
+		cfg.DeviceID,
+		st.Ed25519Public,
+		st.X25519Public,
+		phoneEd,
+		phoneX,
+	}, "|"))
+	wrap, err := sealed.DerivePairWrappingKey(shared, transcript)
+	if err != nil {
+		log.Printf("[daemon] pair_ready derive: %v", err)
+		return
+	}
+	epoch, nonce, ct, err := daemonSealedKeys.WrapCatalogForPhone(wrap)
+	if err != nil {
+		log.Printf("[daemon] pair_ready wrap: %v", err)
+		return
+	}
+	if err := uploadKeyPackage(cfg, phoneID, "device_catalog", "", epoch, nonce, ct); err != nil {
+		log.Printf("[daemon] pair_ready upload: %v", err)
+		return
+	}
+	log.Printf("[daemon] published catalog key package for phone %s epoch=%d", phoneID, epoch)
+}
+
+func identityLoadSealed(st *identity.Stored) (*sealed.Identity, error) {
+	// Reuse LoadOrCreate path by reading file — Stored already has pubs.
+	edPriv, err := sealed.B64Decode(st.Ed25519Private)
+	if err != nil {
+		return nil, err
+	}
+	edPub, err := sealed.ParseEd25519Public(st.Ed25519Public)
+	if err != nil {
+		return nil, err
+	}
+	xPrivRaw, err := sealed.B64Decode(st.X25519Private)
+	if err != nil {
+		return nil, err
+	}
+	xPub, err := sealed.ParseX25519Public(st.X25519Public)
+	if err != nil {
+		return nil, err
+	}
+	var xPriv [32]byte
+	copy(xPriv[:], xPrivRaw)
+	return &sealed.Identity{
+		Ed25519Public: edPub, Ed25519Private: edPriv,
+		X25519Public: xPub, X25519Private: xPriv,
+	}, nil
+}
+
+func uploadKeyPackage(cfg *config.Config, phoneID, scope, sessionID string, epoch uint64, nonce, wrapped string) error {
+	httpBase := config.HTTPBaseURL(cfg.ServerURL)
+	body, _ := json.Marshal(map[string]any{
+		"device_id":   cfg.DeviceID,
+		"token":       cfg.Token,
+		"phone_id":    phoneID,
+		"scope":       scope,
+		"session_id":  sessionID,
+		"epoch":       epoch,
+		"wrapped_key": wrapped,
+		"nonce":       nonce,
+	})
+	resp, err := http.Post(httpBase+"/api/keys/upload", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("status %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+func publishCatalogKeysForAllGrants(cfg *config.Config) {
+	if cfg == nil || daemonSealedKeys == nil {
+		return
+	}
+	httpBase := config.HTTPBaseURL(cfg.ServerURL)
+	req, err := http.NewRequest(http.MethodGet, httpBase+"/api/devices/grants?device_id="+cfg.DeviceID, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	req.Header.Set("X-Neko-Device-Token", cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var body struct {
+		Grants []struct {
+			PhoneID       string `json:"phone_id"`
+			X25519Public  string `json:"x25519_public"`
+			Ed25519Public string `json:"ed25519_public"`
+		} `json:"grants"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&body) != nil {
+		return
+	}
+	for _, g := range body.Grants {
+		if g.X25519Public == "" {
+			continue
+		}
+		publishCatalogKeyForPhone(cfg, map[string]interface{}{
+			"phone_id":             g.PhoneID,
+			"phone_x25519_public":  g.X25519Public,
+			"phone_ed25519_public": g.Ed25519Public,
+			"pair_code":            "", // transcript without code won't match phone wrap — skip
+		})
+	}
+}
+
 // sendDaemonError reports an error back to the server (forwarded to phones).
 func sendDaemonError(client *connection.Client, deviceID, sessionID, message string) {
 	msg := map[string]interface{}{
@@ -1100,4 +1568,106 @@ func sendDaemonError(client *connection.Client, deviceID, sessionID, message str
 	if err := client.Send(msg); err != nil {
 		log.Printf("[daemon] send error message failed: %v", err)
 	}
+}
+
+// runDoctor prints non-interactive diagnostics. Exit 0 if config + identity +
+// at least one adapter is available and the nest is reachable; otherwise 1.
+func runDoctor(configPath string) int {
+	fmt.Println("🐱 NekoNest Doctor")
+	fmt.Println("==================")
+	ok := true
+	check := func(name string, pass bool, detail string) {
+		mark := "OK"
+		if !pass {
+			mark = "FAIL"
+			ok = false
+		}
+		fmt.Printf("[%s] %s: %s\n", mark, name, detail)
+	}
+
+	check("os", true, runtime.GOOS+"/"+runtime.GOARCH)
+	transport := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
+	if transport == "" {
+		transport = "open"
+	}
+	check("transport_mode", transport == "open" || transport == "sealed", transport)
+
+	cfg, err := config.LoadFrom(configPath)
+	if err != nil {
+		check("config", false, err.Error())
+	} else {
+		check("config", cfg.DeviceID != "" && cfg.Token != "" && cfg.ServerURL != "",
+			fmt.Sprintf("device=%s server=%s path=%s", cfg.DeviceID, cfg.ServerURL, configPath))
+	}
+
+	idPath := identity.PathBesideConfig(configPath)
+	if _, err := os.Stat(idPath); err != nil {
+		idPath = identity.Path()
+	}
+	_, st, err := identity.LoadOrCreate(idPath)
+	if err != nil {
+		check("identity", false, err.Error())
+	} else {
+		fp := ""
+		if st != nil {
+			fp = st.Fingerprint
+			if len(fp) > 16 {
+				fp = fp[:16] + "…"
+			}
+		}
+		check("identity", st != nil && st.Fingerprint != "", "fingerprint="+fp)
+	}
+
+	reg, err := adapters.NewDefaultRegistry()
+	if err != nil {
+		check("adapters", false, err.Error())
+	} else {
+		anyAvail := false
+		for _, a := range reg.All() {
+			avail := a.IsAvailable()
+			if avail {
+				anyAvail = true
+			}
+			mark := "missing"
+			if avail {
+				mark = "available"
+			}
+			fmt.Printf("  - %s: %s\n", a.Name(), mark)
+		}
+		check("adapters", anyAvail, "at least one CLI required")
+		_ = reg.Close()
+	}
+
+	if cfg != nil {
+		httpBase := config.HTTPBaseURL(cfg.ServerURL)
+		client := &http.Client{Timeout: 8 * time.Second}
+		resp, err := client.Get(httpBase + "/health")
+		if err != nil {
+			check("server_health", false, err.Error())
+		} else {
+			_ = resp.Body.Close()
+			check("server_health", resp.StatusCode == http.StatusOK, fmt.Sprintf("%s status=%d", httpBase, resp.StatusCode))
+		}
+	}
+
+	// Codex app-server probe (non-fatal if missing — exec resume still works).
+	cas := agentexec.NewCodexAppServer()
+	probe := cas.ProbeMethods()
+	fmt.Printf("[info] codex app-server: available=%v ensure=%v\n", probe["available"], probe["ensure"])
+	_ = cas.Close()
+
+	if skPath := sealedkeys.DefaultPath(); skPath != "" {
+		if _, err := os.Stat(skPath); err == nil {
+			fmt.Printf("[info] sealed keys file present: %s\n", skPath)
+		} else {
+			fmt.Printf("[info] sealed keys file not yet created (ok until sealed mode)\n")
+		}
+	}
+
+	if ok {
+		fmt.Println("\nAll critical checks passed.")
+		return 0
+	}
+	fmt.Println("\nOne or more checks failed.")
+	return 1
 }

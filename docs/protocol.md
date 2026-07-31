@@ -11,19 +11,32 @@ Language-neutral wire contract for NekoNest phone ↔ server ↔ daemon communic
 
 Keep JSON field names, enums, optionality, timestamps, and meanings identical across surfaces.
 
+## Version and transport mode
+
+| Field | Rule |
+|---|---|
+| `protocol_version` | `major.minor` (current **1.0**). Major mismatch rejects; minor is backward compatible (unknown optional fields ignored). |
+| `transport_mode` | Nest-wide `sealed` \| `open`. One mode per nest; **no** sealed→open automatic downgrade. Default for new nests is **sealed**. |
+
+First frames (`register_device` for daemon, `subscribe` for phone) **must** include both fields. Server returns negotiated version/mode on `auth_response` / `subscribe_ack`. Stable error codes: `version_mismatch`, `transport_mode_mismatch`, `invalid_envelope`.
+
 ## Envelope
 
 Every WebSocket application message is a `NekoMessage`:
 
 | Field | Required | Description |
 |---|---|---|
+| `protocol_version` | first-frame yes | `major.minor` |
+| `transport_mode` | first-frame yes | `sealed` \| `open` |
 | `type` | yes | One of `MessageType` enum strings |
 | `device_id` | yes | Device identifier (daemon identity or routing context) |
 | `timestamp` | yes | Unix timestamp in **seconds** |
 | `session_id` | no | Agent session / thread id when message is session-scoped |
-| `payload` | no | Type-specific object |
+| `client_msg_id` | no | Idempotency id for prompt/start (relay-visible) |
+| `payload` | no | Open-mode or plaintext control body; **must be absent** when `sealed_payload` is set |
+| `sealed_payload` | no | Ciphertext envelope; **must be absent** in open mode |
 
-`additionalProperties` is false on the envelope in the schema—unknown top-level keys should not be invented casually.
+`payload` and `sealed_payload` are mutually exclusive. `additionalProperties` is false on the envelope in the schema.
 
 ## Agent type identifiers
 
@@ -44,7 +57,7 @@ Adding an agent requires adapter + registry, server types, PWA catalog/assets, s
 | Field | Notes |
 |---|---|
 | `id`, `name` | Identity and display |
-| `os` | Currently `"windows"` |
+| `os` | Formal v1: `windows` \| `linux` |
 | `status` | `online` \| `offline` |
 | `last_seen` | Unix seconds |
 | `active_agents` | Session-count hint (not distinct agent types); PWA labels it as threads |
@@ -56,10 +69,19 @@ Adding an agent requires adapter + registry, server types, PWA catalog/assets, s
 | `id` | Public/wire session id |
 | `device_id` | Owning device |
 | `agent_type` | Wire agent id |
-| `status` | `running` \| `idle` \| `waiting_approval` |
+| `status` | `idle` \| `running` \| `waiting_user` \| `waiting_approval` \| `error` |
 | `summary`, `last_activity` | List UX |
 | `project_dir` / `project` | Directory grouping |
+| `capabilities` | Optional; absent fields default false/unsupported |
 | `pending_approval` | Optional tool approval blob |
+
+### SessionCapabilities
+
+| Field | Notes |
+|---|---|
+| `control_mode` | `app_server` \| `exec_resume` \| `compatibility` |
+| `approve`, `deny`, `interrupt`, `steer`, `queue`, `spawn` | bool; default false |
+| `attachment_mode` | `native_image_and_file` \| `native_image` \| `path_best_effort` \| `unsupported` |
 
 ### SessionMessage
 
@@ -108,12 +130,23 @@ Grouped by role. Payload shapes for critical flows are implemented in Go/TS—wh
 | `send_prompt` | Phone → … → daemon: user prompt (+ attachments) |
 | `prompt_status_query` | Ask current delivery state |
 | `prompt_not_seen` | Daemon/server has no record of id |
-| `prompt_accepted` | Accepted into daemon pipeline |
-| `prompt_committed` | Journal committed |
+| `prompt_accepted` | Accepted into daemon pipeline (outbox **not** cleared) |
+| `prompt_committed` | Journal committed — **clear durable outbox here** |
 | `prompt_failed` | Failed visibly |
-| `prompt_sent` | Sent/ack signal used by clients (outbox clearing) |
+| `prompt_sent` | **Deprecated** transitional alias; clients should clear on `prompt_committed` |
 
 **Do not** collapse “WebSocket write succeeded” into `prompt_accepted` / business success.
+
+### Control and lifecycle (v1)
+
+| Type | Role |
+|---|---|
+| `approve` / `deny` | Tool approval (Codex app-server when capable) |
+| `interrupt` | Stop running work |
+| `steer` | Mid-turn correction (Codex) |
+| `start_thread` / `thread_*` | Codex-only phone start into discovered dirs |
+| `pair_*` / `key_package` / `phone_revoked` | Pairing and E2E key distribution |
+| `attention_event` | Generic push-driving event class (sealed-safe) |
 
 ### History and subscription
 
@@ -145,8 +178,9 @@ Grouped by role. Payload shapes for critical flows are implemented in Go/TS—wh
 
 ## Explicit non-goals on the wire
 
-- **No phone-side `create_session`** (or equivalent) in the supported product contract. Threads are created on the PC in the native agent UI/CLI first.
-- Do not reintroduce remote thread creation without an explicit product decision and full-stack update.
+- **No generic phone-side `create_session`** or nest-only ghost threads.
+- The **only** allowed phone creation path is Codex-only `start_thread` via native `codex app-server`, into **currently discovered** project directories, with lifecycle `thread_starting → thread_owned | thread_failed | thread_indeterminate`.
+- Do not invent permanent nest-only session rows.
 
 ## REST companion APIs
 

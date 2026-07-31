@@ -1,0 +1,9 @@
+{
+  "aad": "{\"protocol_version\":\"1.0\",\"transport_mode\":\"sealed\",\"type\":\"send_prompt\",\"device_id\":\"dev\",\"key_scope\":\"session\",\"key_epoch\":1,\"sender_id\":\"phone\",\"sequence\":1,\"timestamp\":1}",
+  "alg": "aes-256-gcm",
+  "ciphertext_b64": "CtlmIQv89dwZZ6LXoWaVo6I2tx-Ubo25LxoswKTUmbGlYg",
+  "key_b64": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+  "nonce_b64": "CgsMDQ4PEBESExQV",
+  "plaintext": "{\"prompt\":\"hello\"}",
+  "version": 1
+}

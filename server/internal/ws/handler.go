@@ -133,8 +133,17 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 
 	var authMsg protocol.NekoMessage
 	if err := json.Unmarshal(data, &authMsg); err != nil || authMsg.Type != protocol.MsgRegisterDevice {
-		conn.WriteJSON(protocol.NekoMessage{Type: protocol.MsgError, Payload: map[string]any{"message": "expected auth message"}})
+		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
+			Type:      protocol.MsgError,
+			Timestamp: time.Now().Unix(),
+			Payload:   map[string]any{"message": "expected auth message"},
+		}))
 		conn.Close()
+		return
+	}
+
+	if hs := s.negotiateFirstFrame(&authMsg); hs.ErrorCode != "" {
+		s.writeHandshakeError(conn, hs)
 		return
 	}
 
@@ -142,19 +151,34 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 	token, _ := authMsg.Payload["token"].(string)
 
 	if !s.db.ValidateDeviceToken(deviceID, token) {
-		conn.WriteJSON(protocol.NekoMessage{Type: protocol.MsgError, Payload: map[string]any{"message": "invalid token"}})
+		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
+			Type:      protocol.MsgError,
+			Timestamp: time.Now().Unix(),
+			Payload:   map[string]any{"message": "invalid token"},
+		}))
 		conn.Close()
 		return
 	}
 	conn.SetReadLimit(authenticatedReadLimit)
 
-	// Send auth success
-	conn.WriteJSON(protocol.NekoMessage{
+	// Send auth success with negotiated protocol metadata.
+	hs := protocol.NegotiateHandshake(
+		authMsg.ProtocolVersion,
+		string(authMsg.TransportMode),
+		s.TransportMode(),
+		0,
+	)
+	_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 		Type:      protocol.MsgAuthResponse,
 		DeviceID:  deviceID,
 		Timestamp: time.Now().Unix(),
-		Payload:   map[string]any{"status": "authenticated"},
-	})
+		Payload: map[string]any{
+			"status":           "authenticated",
+			"protocol_version": hs.NegotiatedVersion,
+			"transport_mode":   string(hs.TransportMode),
+			"server_version":   protocol.CurrentProtocolVersion,
+		},
+	}))
 
 	// Set read deadline + pong handler for daemon connection
 	conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -244,18 +268,53 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 	case protocol.MsgSessionUpdate:
 		// Single session update (status change, new approval, etc.)
 		s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
-		if needsApprovalPush(msg.Payload) {
-			s.sendPushNotification(dc.DeviceID, msg.SessionID, "⚠️ 操作需要审批", "点击查看详情")
+		if msg.SealedPayload == nil && needsApprovalPush(msg.Payload) {
+			s.sendPushNotification(dc.DeviceID, msg.SessionID, "有会话需要处理", "打开 NekoNest 查看")
 		}
 
+	case protocol.MsgAttentionEvent:
+		// Generic sealed-safe push: no application plaintext in notification body.
+		s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
+		className := ""
+		if msg.Payload != nil {
+			if c, ok := msg.Payload["class"].(string); ok {
+				className = c
+			}
+			if c, ok := msg.Payload["event_class"].(string); ok && c != "" {
+				className = c
+			}
+		}
+		title := "NekoNest"
+		body := "有一个会话需要处理"
+		switch className {
+		case "waiting_approval", "approval":
+			body = "有会话等待审批"
+		case "waiting_user", "needs_you":
+			body = "有会话在等你"
+		case "failed", "error":
+			body = "有会话运行失败"
+		case "completed", "success":
+			body = "有会话已完成"
+		case "device_offline":
+			body = "设备已离线"
+		}
+		s.sendPushNotification(dc.DeviceID, msg.SessionID, title, body)
+
 	case protocol.MsgSessionMessage:
-		// P2-A: Persist message to database
-		if msgData, ok := msg.Payload["message"]; ok {
-			data, _ := json.Marshal(msgData)
-			var sessionMsg protocol.SessionMessage
-			if err := json.Unmarshal(data, &sessionMsg); err == nil {
-				if err := s.db.SaveMessage(dc.DeviceID, msg.SessionID, &sessionMsg); err != nil {
-					log.Printf("[ws] save message error: %v", err)
+		// Open mode: persist plaintext message. Sealed mode: persist opaque
+		// ciphertext only (no application plaintext on the nest).
+		if msg.SealedPayload != nil {
+			if err := s.db.SaveSealedMessage(dc.DeviceID, msg.SessionID, msg); err != nil {
+				log.Printf("[ws] save sealed message error: %v", err)
+			}
+		} else if msg.Payload != nil {
+			if msgData, ok := msg.Payload["message"]; ok {
+				data, _ := json.Marshal(msgData)
+				var sessionMsg protocol.SessionMessage
+				if err := json.Unmarshal(data, &sessionMsg); err == nil {
+					if err := s.db.SaveMessage(dc.DeviceID, msg.SessionID, &sessionMsg); err != nil {
+						log.Printf("[ws] save message error: %v", err)
+					}
 				}
 			}
 		}
@@ -264,7 +323,8 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 
 		// A tool_call is informational unless the daemon explicitly marks it as
 		// a permission request or includes pending approval state.
-		if needsApprovalPush(msg.Payload) {
+		// Sealed mode: only daemon-originated attention_event should push details.
+		if msg.SealedPayload == nil && needsApprovalPush(msg.Payload) {
 			s.sendPushNotification(dc.DeviceID, msg.SessionID, "⚠️ 操作需要审批", "点击查看详情")
 		}
 
@@ -447,37 +507,52 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 
 	var subscribeMsg protocol.NekoMessage
 	if err := json.Unmarshal(data, &subscribeMsg); err != nil {
-		conn.WriteJSON(protocol.NekoMessage{
+		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 			Type:      protocol.MsgError,
 			Timestamp: time.Now().Unix(),
 			Payload:   map[string]any{"message": "invalid json"},
-		})
+		}))
 		conn.Close()
 		return
 	}
 	if subscribeMsg.Type != protocol.MsgSubscribe {
-		conn.WriteJSON(protocol.NekoMessage{
+		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 			Type:      protocol.MsgError,
 			Timestamp: time.Now().Unix(),
 			Payload:   map[string]any{"message": "first message must be subscribe"},
-		})
+		}))
 		return
 	}
 
-	// Phone auth: secret from query/header or first-message payload
+	if hs := s.negotiateFirstFrame(&subscribeMsg); hs.ErrorCode != "" {
+		s.writeHandshakeError(conn, hs)
+		return
+	}
+
+	// Phone auth: admin secret or independent phone token from query/header/payload.
+	var phoneAuth *db.PhoneAuth
 	if s.phoneSecret != "" {
 		secret := phoneSecretFromRequest(r)
 		if secret == "" && subscribeMsg.Payload != nil {
 			if p, ok := subscribeMsg.Payload["secret"].(string); ok {
 				secret = p
 			}
+			if secret == "" {
+				if p, ok := subscribeMsg.Payload["phone_token"].(string); ok {
+					secret = p
+				}
+			}
 		}
-		if secret != s.phoneSecret {
-			conn.WriteJSON(protocol.NekoMessage{
+		if secureEqual(secret, s.phoneSecret) {
+			phoneAuth = &db.PhoneAuth{AdminBypass: true, Name: "admin"}
+		} else if auth, err := s.db.ValidatePhoneToken(secret); err == nil {
+			phoneAuth = auth
+		} else {
+			_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 				Type:      protocol.MsgError,
 				Timestamp: time.Now().Unix(),
 				Payload:   map[string]any{"message": "unauthorized"},
-			})
+			}))
 			conn.Close()
 			return
 		}
@@ -490,29 +565,38 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if deviceID == "" {
-		conn.WriteJSON(protocol.NekoMessage{
+		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 			Type:      protocol.MsgError,
 			Timestamp: time.Now().Unix(),
 			Payload:   map[string]any{"message": "device_id required in first message (type=subscribe)"},
-		})
+		}))
 		conn.Close()
 		return
 	}
 	deviceID = strings.TrimSpace(deviceID)
 	if len(deviceID) > 256 {
-		conn.WriteJSON(protocol.NekoMessage{
+		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 			Type:      protocol.MsgError,
 			Timestamp: time.Now().Unix(),
 			Payload:   map[string]any{"message": "invalid device_id"},
-		})
+		}))
 		return
 	}
 	if !s.db.DeviceExists(deviceID) {
-		conn.WriteJSON(protocol.NekoMessage{
+		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 			Type:      protocol.MsgError,
 			Timestamp: time.Now().Unix(),
 			Payload:   map[string]any{"message": "unknown device"},
-		})
+		}))
+		return
+	}
+	if !s.phoneMayAccessDevice(phoneAuth, deviceID) {
+		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
+			Type:      protocol.MsgError,
+			Timestamp: time.Now().Unix(),
+			Payload:   map[string]any{"message": "forbidden"},
+		}))
+		conn.Close()
 		return
 	}
 	subscriptionID, validSubscriptionID := subscribeRequestID(subscribeMsg.Payload)
@@ -718,11 +802,14 @@ func subscribeRequestID(payload map[string]any) (string, bool) {
 }
 
 func (s *Server) writeSubscribeAck(conn *websocket.Conn, deviceID, subscriptionID string) {
-	ack := protocol.NewMessage(protocol.MsgSubscribeAck, deviceID)
+	ack := s.stampEnvelope(protocol.NewMessage(protocol.MsgSubscribeAck, deviceID))
 	ack.Payload = map[string]any{
-		"status":          "subscribed",
-		"device_id":       deviceID,
-		"subscription_id": subscriptionID,
+		"status":           "subscribed",
+		"device_id":        deviceID,
+		"subscription_id":  subscriptionID,
+		"protocol_version": protocol.CurrentProtocolVersion,
+		"transport_mode":   string(s.TransportMode()),
+		"server_version":   protocol.CurrentProtocolVersion,
 	}
 	s.connMgr.SafeWritePhone(conn, ack)
 }

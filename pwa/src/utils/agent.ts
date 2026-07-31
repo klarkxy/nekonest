@@ -10,7 +10,7 @@ export type AgentGroup = {
   sessions: AgentSession[]
 }
 
-export type SessionActivityTone = 'active' | 'idle' | 'waiting' | 'unknown'
+export type SessionActivityTone = 'active' | 'idle' | 'waiting' | 'error' | 'unknown'
 
 export type SessionActivityPresentation = {
   icon: string
@@ -24,7 +24,14 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function activityFromKeys(
-  prefix: 'status.running' | 'status.idle' | 'status.waiting_approval' | 'status.streaming' | 'status.unknown',
+  prefix:
+    | 'status.running'
+    | 'status.idle'
+    | 'status.waiting_approval'
+    | 'status.waiting_user'
+    | 'status.error'
+    | 'status.streaming'
+    | 'status.unknown',
   tone: SessionActivityTone
 ): SessionActivityPresentation {
   return {
@@ -57,6 +64,12 @@ export function sessionActivityPresentation(
   if (status === 'waiting_approval') {
     return activityFromKeys('status.waiting_approval', 'waiting')
   }
+  if (status === 'waiting_user') {
+    return activityFromKeys('status.waiting_user', 'waiting')
+  }
+  if (status === 'error') {
+    return activityFromKeys('status.error', 'error')
+  }
   if (streaming) return activityFromKeys('status.streaming', 'active')
   if (status === 'running') return activityFromKeys('status.running', 'active')
   if (status === 'idle') return activityFromKeys('status.idle', 'idle')
@@ -71,8 +84,16 @@ export function statusLabel(status: AgentStatus | string): string {
   return sessionActivityPresentation(status).label
 }
 
-export function statusTagType(status: AgentStatus | string): 'success' | 'default' | 'warning' {
-  return ({ running: 'success', idle: 'default', waiting_approval: 'warning' } as Record<string, 'success' | 'default' | 'warning'>)[status] || 'default'
+export function statusTagType(status: AgentStatus | string): 'success' | 'default' | 'warning' | 'error' {
+  return (
+    {
+      running: 'success',
+      idle: 'default',
+      waiting_approval: 'warning',
+      waiting_user: 'warning',
+      error: 'error'
+    } as Record<string, 'success' | 'default' | 'warning' | 'error'>
+  )[status] || 'default'
 }
 
 /** Group sessions by agent_type; known agents first, then others. */

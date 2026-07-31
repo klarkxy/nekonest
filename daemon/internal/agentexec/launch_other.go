@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !unix
 
 package agentexec
 
@@ -7,6 +7,7 @@ import (
 	"os/exec"
 )
 
+// Fallback for exotic GOOS without unix process groups.
 func resolveLaunch(command string, args []string) (string, []string, error) {
 	return command, args, nil
 }

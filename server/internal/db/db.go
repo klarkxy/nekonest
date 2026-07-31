@@ -117,6 +117,52 @@ func (db *DB) migrate() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_prompt_commands_status
 			ON prompt_commands(status, updated_at);
+
+		-- Schema version tracking (v1+)
+		CREATE TABLE IF NOT EXISTS schema_meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+
+		-- Independent phone identities (v1)
+		CREATE TABLE IF NOT EXISTS phone_identities (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			ed25519_public TEXT NOT NULL DEFAULT '',
+			x25519_public TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			last_seen INTEGER NOT NULL,
+			revoked_at INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE INDEX IF NOT EXISTS idx_phone_token ON phone_identities(token_hash);
+
+		-- Phone → host device grants (pairing result)
+		CREATE TABLE IF NOT EXISTS phone_device_grants (
+			phone_id TEXT NOT NULL,
+			device_id TEXT NOT NULL,
+			paired_at INTEGER NOT NULL,
+			revoked_at INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (phone_id, device_id),
+			FOREIGN KEY (phone_id) REFERENCES phone_identities(id),
+			FOREIGN KEY (device_id) REFERENCES devices(id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_grants_device ON phone_device_grants(device_id);
+
+		-- E2E wrapped key packages (ciphertext only on server)
+		CREATE TABLE IF NOT EXISTS key_packages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			phone_id TEXT NOT NULL,
+			device_id TEXT NOT NULL,
+			scope TEXT NOT NULL,
+			session_id TEXT NOT NULL DEFAULT '',
+			epoch INTEGER NOT NULL,
+			wrapped_key TEXT NOT NULL,
+			nonce TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE(phone_id, device_id, scope, session_id, epoch)
+		);
+		CREATE INDEX IF NOT EXISTS idx_key_packages_phone ON key_packages(phone_id, device_id);
 	`)
 	if err != nil {
 		return err
@@ -124,7 +170,166 @@ func (db *DB) migrate() error {
 	if err := db.migratePushSubscriptions(); err != nil {
 		return err
 	}
-	return db.migratePromptCommands()
+	if err := db.migratePromptCommands(); err != nil {
+		return err
+	}
+	if err := db.migratePushPhoneID(); err != nil {
+		return err
+	}
+	if err := db.migrateDeviceIdentityColumns(); err != nil {
+		return err
+	}
+	return db.ensureSchemaVersion()
+}
+
+// SchemaVersion is the current server schema generation.
+const SchemaVersion = "1"
+
+func (db *DB) ensureSchemaVersion() error {
+	var v string
+	err := db.conn.QueryRow(`SELECT value FROM schema_meta WHERE key = 'version'`).Scan(&v)
+	if err == nil && v != "" {
+		return nil
+	}
+	_, err = db.conn.Exec(
+		`INSERT INTO schema_meta (key, value) VALUES ('version', ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		SchemaVersion,
+	)
+	return err
+}
+
+// SchemaVersion returns the stored schema version string.
+func (db *DB) GetSchemaVersion() string {
+	var v string
+	if err := db.conn.QueryRow(`SELECT value FROM schema_meta WHERE key = 'version'`).Scan(&v); err != nil {
+		return ""
+	}
+	return v
+}
+
+// migratePushPhoneID adds optional phone_id to push_subscriptions for v1 scoping.
+func (db *DB) migratePushPhoneID() error {
+	var schema string
+	if err := db.conn.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'push_subscriptions'`,
+	).Scan(&schema); err != nil {
+		return err
+	}
+	if strings.Contains(strings.ToLower(schema), "phone_id") {
+		return nil
+	}
+	_, err := db.conn.Exec(`ALTER TABLE push_subscriptions ADD COLUMN phone_id TEXT NOT NULL DEFAULT ''`)
+	if err != nil {
+		return fmt.Errorf("migrate push phone_id: %w", err)
+	}
+	return nil
+}
+
+// migrateDeviceIdentityColumns adds E2E public key fields on devices.
+func (db *DB) migrateDeviceIdentityColumns() error {
+	cols := []struct {
+		name string
+		ddl  string
+	}{
+		{"ed25519_public", `ALTER TABLE devices ADD COLUMN ed25519_public TEXT NOT NULL DEFAULT ''`},
+		{"x25519_public", `ALTER TABLE devices ADD COLUMN x25519_public TEXT NOT NULL DEFAULT ''`},
+		{"identity_fingerprint", `ALTER TABLE devices ADD COLUMN identity_fingerprint TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, c := range cols {
+		var schema string
+		if err := db.conn.QueryRow(
+			`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'devices'`,
+		).Scan(&schema); err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(schema), strings.ToLower(c.name)) {
+			continue
+		}
+		if _, err := db.conn.Exec(c.ddl); err != nil {
+			return fmt.Errorf("migrate devices.%s: %w", c.name, err)
+		}
+	}
+	return nil
+}
+
+// SetDevicePublicKeys stores daemon E2E public keys (base64url) and fingerprint.
+func (db *DB) SetDevicePublicKeys(deviceID, ed25519Pub, x25519Pub, fingerprint string) error {
+	res, err := db.conn.Exec(
+		`UPDATE devices SET ed25519_public = ?, x25519_public = ?, identity_fingerprint = ? WHERE id = ?`,
+		ed25519Pub, x25519Pub, fingerprint, deviceID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("device not found")
+	}
+	return nil
+}
+
+// DevicePublicKeys is the public E2E material for a host daemon.
+type DevicePublicKeys struct {
+	Ed25519Public string
+	X25519Public  string
+	Fingerprint   string
+}
+
+// GetDevicePublicKeys returns stored daemon public keys (may be empty).
+func (db *DB) GetDevicePublicKeys(deviceID string) (*DevicePublicKeys, error) {
+	row := db.conn.QueryRow(
+		`SELECT ed25519_public, x25519_public, identity_fingerprint FROM devices WHERE id = ?`,
+		deviceID,
+	)
+	var k DevicePublicKeys
+	if err := row.Scan(&k.Ed25519Public, &k.X25519Public, &k.Fingerprint); err != nil {
+		return nil, err
+	}
+	return &k, nil
+}
+
+// ClearPlaintextContentForV1 wipes server-held plaintext application content
+// after a verified backup. Preserves devices (ids + token hashes) and schema.
+// Phones must re-login/re-pair; native agent stores on hosts are untouched.
+func (db *DB) ClearPlaintextContentForV1() error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM session_messages`,
+		`DELETE FROM prompt_commands`,
+		`DELETE FROM pair_codes`,
+		`DELETE FROM push_subscriptions`,
+		`DELETE FROM key_packages`,
+		`DELETE FROM phone_device_grants`,
+		`DELETE FROM phone_identities`,
+		`DELETE FROM user_tokens`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			// Table may not exist on very old DBs — ignore.
+			if !strings.Contains(err.Error(), "no such table") {
+				return fmt.Errorf("%s: %w", q, err)
+			}
+		}
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO schema_meta (key, value) VALUES ('version', ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		SchemaVersion,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO schema_meta (key, value) VALUES ('migrated_v1_at', ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		fmt.Sprintf("%d", time.Now().Unix()),
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // migratePushSubscriptions upgrades the original UNIQUE(endpoint) schema to a
@@ -237,14 +442,29 @@ func (db *DB) migratePromptCommands() error {
 }
 
 // RegisterDevice registers a new device and returns its token.
-func (db *DB) RegisterDevice(id, name string) (string, error) {
+// osName should be "windows" or "linux" (v1 formal hosts); empty defaults to windows.
+func (db *DB) RegisterDevice(id, name string, osName ...string) (string, error) {
 	token := generateToken()
 	tokenHash := hashToken(token)
 	now := time.Now().Unix()
+	osVal := "windows"
+	if len(osName) > 0 {
+		switch strings.ToLower(strings.TrimSpace(osName[0])) {
+		case "linux":
+			osVal = "linux"
+		case "windows", "":
+			osVal = "windows"
+		default:
+			// Keep unknown values for forward compatibility (e.g. future darwin).
+			if s := strings.TrimSpace(osName[0]); s != "" {
+				osVal = s
+			}
+		}
+	}
 
 	_, err := db.conn.Exec(
-		`INSERT INTO devices (id, name, os, token_hash, created_at, last_seen) VALUES (?, ?, 'windows', ?, ?, ?)`,
-		id, name, tokenHash, now, now,
+		`INSERT INTO devices (id, name, os, token_hash, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, name, osVal, tokenHash, now, now,
 	)
 	if err != nil {
 		return "", err

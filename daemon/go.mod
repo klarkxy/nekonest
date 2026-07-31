@@ -5,6 +5,7 @@ go 1.22
 require (
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/gorilla/websocket v1.5.3
+	golang.org/x/crypto v0.9.0
 	golang.org/x/sys v0.16.0
 	modernc.org/sqlite v1.29.0
 )

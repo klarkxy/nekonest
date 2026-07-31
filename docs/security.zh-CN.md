@@ -7,33 +7,44 @@ NekoNest 如何信任各组件、哪些密钥保护哪些接口，以及运维�
 ## 信任拓扑
 
 ```text
-手机 PWA  ──HTTPS/WSS──►  VPS Server  ◄──出站 WSS──  Windows Daemon  ──►  本机 agent CLI/存储
+手机 PWA  ──HTTPS/WSS──►  VPS Server  ◄──出站 WSS──  主机 Daemon（Win/Linux）  ──►  本机 agent CLI/存储
 ```
 
 | 组件 | 信任角色 |
 |---|---|
-| **手机** | 持有手机共享密钥；可见本窝已配对设备与会话流量 |
-| **VPS** | 认证手机与 daemon；中转 WebSocket；**持久化**设备、消息与附件 |
-| **家用 PC / Daemon** | 仅出站连接；读取原生 agent 存储；运行无头 CLI |
+| **手机** | 持有 admin 引导密钥和/或独立 phone token；E2E 私钥在 IndexedDB |
+| **VPS** | 认证手机与 daemon；中转 WebSocket；按模式持久化设备与消息/附件 |
+| **家用机 / Daemon** | 仅出站连接；持有 E2E 身份与内容密钥；读取原生 agent 存储；运行无头 CLI |
 | **Agent CLI** | 会话/历史权威存储；以用户本机权限执行工具 |
 
-**手机与家用 PC 之间没有端到端加密。** VPS 可读其存储的元数据、消息正文与附件字节。请把 VPS 主机、`data/`、备份与反代日志视为**敏感系统**。
+### 传输模式（v1）
+
+| 模式 | 默认 | VPS 可见 |
+|---|---|---|
+| **sealed** | 新窝默认 | 密文正文；路由元数据（设备 ID、session ID、时间戳、大小、连接状态）。全密封时**不含** prompt/回复/工具明文。 |
+| **open** | 仅管理员显式开启 | 与 v0.1 相同可读明文——视 VPS 为敏感 |
+
+一窝一种固定模式；客户端必须匹配；**禁止** sealed→open 自动降级。
+
+配对信任：QR 携带 daemon 公钥指纹；仅 6 位码为低保证 fallback（须对照 PC 屏幕指纹）。
 
 ## 影响安全的产品边界
 
-- 手机只**续写** PC 上已有线程，不远程新建 agent 会话。
-- Daemon **不需要**家用 PC 入站端口。
+- 手机主要**续接**原生线程；仅 Codex 的 `start_thread` 可在**当前已发现**项目目录经 app-server 开线程。
+- Daemon **不需要**家用机入站端口。
 - 各 agent **本机原生存储**是发现与历史的权威来源。
-- 工具审批依赖各 agent 的**非交互** CLI；受阻时可能需回 PC 终端。
+- Codex app-server 是唯一完整审批路径；其他 agent 诚实宣告能力。
 
 ## 密钥与凭据
 
 | 密钥 | 持有方 | 保护对象 |
 |---|---|---|
-| `NEKONEST_PHONE_SECRET` | 运维 + 手机客户端 | 手机 REST（`Authorization: Bearer` 或 `X-Neko-Secret`）与手机 WS |
+| `NEKONEST_ADMIN_SECRET`（别名 `NEKONEST_PHONE_SECRET`） | 运维 | 管理员引导 / 签发 phone token；遗留全量手机访问 |
+| Phone token | 每部手机 | 日常 REST/WS；按设备 grant 作用域；可撤销 |
 | `NEKONEST_BOOTSTRAP_TOKEN` | 运维 + 注册时的 daemon | `POST /api/devices/register`（`X-Neko-Bootstrap`） |
-| Daemon `config.json` 中的 `token` | 仅家用 PC | 注册后的 Daemon WebSocket 身份 |
-| 6 位配对码 | 短时、由 daemon 打印 | 将手机 UI 绑定到已注册设备 |
+| Daemon `config.json` 中的 `token` | 仅家用机 | 注册后的 Daemon WebSocket 身份 |
+| Daemon `identity.json` / sealed keys | 仅家用机 | E2E 长期密钥与内容密钥 |
+| 配对码 + QR 指纹 | 短时 | 将手机绑定到已注册设备 |
 | VAPID 密钥 | 运维 | 可选 Web Push |
 
 ### 规则

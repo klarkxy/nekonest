@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,13 +128,22 @@ func (c *Client) Connect() error {
 			return fmt.Errorf("dial: %w", err)
 		}
 
+		// Transport mode must match the nest. Default open until sealed crypto is
+		// fully wired; override with NEKONEST_TRANSPORT_MODE.
+		transportMode := "open"
+		if v := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE")); v != "" {
+			transportMode = v
+		}
 		authMsg := map[string]interface{}{
-			"type":      "register_device",
-			"device_id": deviceID,
-			"timestamp": time.Now().Unix(),
+			"protocol_version": "1.0",
+			"transport_mode":   transportMode,
+			"type":             "register_device",
+			"device_id":        deviceID,
+			"timestamp":        time.Now().Unix(),
 			"payload": map[string]interface{}{
 				"device_id": deviceID,
 				"token":     token,
+				"os":        runtime.GOOS,
 			},
 		}
 

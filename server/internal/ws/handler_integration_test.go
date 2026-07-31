@@ -25,11 +25,27 @@ func newWebSocketTestServer(t *testing.T, phoneSecret string) (*Server, *httptes
 		t.Fatal(err)
 	}
 	server := NewWithSecret(database, phoneSecret)
+	// Integration tests exercise plaintext application frames under open mode.
+	if err := server.SetTransportMode(protocol.TransportOpen); err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
 	httpServer := httptest.NewServer(CORSMiddleware(mux))
 	t.Cleanup(httpServer.Close)
 	return server, httpServer, token
+}
+
+// v1Envelope stamps protocol negotiation fields for open-mode test clients.
+func v1Envelope(msgType protocol.MessageType, deviceID string, payload map[string]any) *protocol.NekoMessage {
+	return &protocol.NekoMessage{
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            msgType,
+		DeviceID:        deviceID,
+		Timestamp:       time.Now().Unix(),
+		Payload:         payload,
+	}
 }
 
 func websocketURL(httpURL, path string) string {
@@ -43,13 +59,10 @@ func connectDaemon(t *testing.T, httpServer *httptest.Server, token string) *web
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	if err := conn.WriteJSON(&protocol.NekoMessage{
-		Type: protocol.MsgRegisterDevice,
-		Payload: map[string]any{
-			"device_id": "dev1",
-			"token":     token,
-		},
-	}); err != nil {
+	if err := conn.WriteJSON(v1Envelope(protocol.MsgRegisterDevice, "dev1", map[string]any{
+		"device_id": "dev1",
+		"token":     token,
+	})); err != nil {
 		t.Fatal(err)
 	}
 	var auth protocol.NekoMessage
@@ -100,11 +113,9 @@ func connectPhone(t *testing.T, httpServer *httptest.Server, secret string) *web
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	if err := conn.WriteJSON(&protocol.NekoMessage{
-		Type:     protocol.MsgSubscribe,
-		DeviceID: "dev1",
-		Payload:  map[string]any{"subscription_id": "subscription-test"},
-	}); err != nil {
+	if err := conn.WriteJSON(v1Envelope(protocol.MsgSubscribe, "dev1", map[string]any{
+		"subscription_id": "subscription-test",
+	})); err != nil {
 		t.Fatal(err)
 	}
 	// Explicit ACK followed by initial session and device snapshots.
@@ -388,6 +399,9 @@ func TestAcceptedPromptPersistenceFailureDefersCommitUntilReconnectHealing(t *te
 		t.Fatal(err)
 	}
 	server := NewWithSecret(database, "phone-secret")
+	if err := server.SetTransportMode(protocol.TransportOpen); err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
 	httpServer := httptest.NewServer(CORSMiddleware(mux))
@@ -569,10 +583,7 @@ func TestPhoneRESTAndWebSocketOriginAndAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := conn.WriteJSON(&protocol.NekoMessage{
-		Type:     protocol.MsgSubscribe,
-		DeviceID: "dev1",
-	}); err != nil {
+	if err := conn.WriteJSON(v1Envelope(protocol.MsgSubscribe, "dev1", nil)); err != nil {
 		t.Fatal(err)
 	}
 	var unauthorized protocol.NekoMessage

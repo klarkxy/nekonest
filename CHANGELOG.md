@@ -13,6 +13,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   locale persisted in `localStorage`
 - PWA light/dark/system theme preference with CSS tokens and Naive dark theme
 - Thread list local search (summary, folder, agent)
+- v1.0.0 target product contract (`docs/v1-product.md` + zh-CN): Codex-first
+  full control, sealed E2E default, Windows+Linux hosts, frozen decisions
+- Protocol v1 scaffolding: `protocol_version` / `transport_mode` handshake,
+  `sealed_payload` shape, expanded statuses (`waiting_user`, `error`),
+  session capabilities, control/lifecycle message types (`steer`,
+  `start_thread` / `thread_*`, pair/key/attention)
+- Server nest transport mode (`NEKONEST_TRANSPORT_MODE`, default sealed) with
+  version/mode negotiation on daemon and phone first frames
+- PWA full prompt lifecycle types (`prompt_accepted` / `prompt_committed` /
+  `prompt_not_seen`); durable outbox clears on committed
+- Daemon register reports host OS; device `os` accepts `windows` | `linux`
+- Independent phone identities: `/api/phones/bootstrap`, grants on pair consume,
+  revoke, grant-scoped device list/WS subscribe; `NEKONEST_ADMIN_SECRET`
+  (legacy `NEKONEST_PHONE_SECRET` alias)
+- Sealed crypto package (Go server+daemon, PWA Web Crypto): Ed25519/X25519/HKDF/
+  AES-256-GCM primitives and golden vector generation under `protocol/testdata/`
+- Daemon long-term E2E identity (`~/.nekonest/identity.json`); pair generate
+  prints QR JSON + fingerprint; register/upload device public keys
+- PWA pair screen accepts QR JSON paste, shows host fingerprint, rejects
+  fingerprint mismatch; phone identity in IndexedDB (`@noble/curves`)
+- Daemon advertises per-session `capabilities` (control/attachment modes);
+  statuses include `waiting_user` / `error`
+- Daemon `-doctor` diagnostics (config, identity, adapters, nest health)
+- Linux agent processes run in their own process group; interrupt uses
+  SIGINT then SIGKILL on the group
+- PWA gates interrupt/approve/deny by advertised capabilities; shows approve
+  buttons when `approve`+`deny` are true
+- Daemon sealed-keys manager + sealed `session_message` path (AES-GCM under
+  per-session content keys when `NEKONEST_TRANSPORT_MODE=sealed`)
+- Server persists sealed messages as opaque ciphertext; open-mode push heuristics
+  skipped for sealed frames
+- Codex `app-server` JSON-RPC client scaffold + doctor probe
+- Offline `nekonest-server -migrate-v1 -data … -backup …` destructive content
+  wipe preserving device tokens; docs `migration-v1.md` (+ zh-CN)
+- Pair key exchange: phone pubs on consume; daemon `pair_ready` wraps catalog
+  key; `/api/keys` + `/api/keys/upload` + grant listing; PWA unwrap store
+- PWA sealed send_prompt encrypt + session_message decrypt; key_package ingest
+- Daemon sealed send_prompt decrypt; Codex app-server approve/deny/interrupt/
+  steer/start_thread with capability raise when healthy
+- `attention_event` generic push (no plaintext details)
 
 ### Changed
 
@@ -23,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full Simplified Chinese mirrors (`README.zh-CN.md`, `docs/*.zh-CN.md`)
 - Expanded operator/contributor guides: configuration, security, architecture,
   protocol overview, development, troubleshooting, and a docs index
+- `AGENTS.md` v1 invariants: Codex-only `start_thread` exception; sealed default;
+  Windows+Linux formal hosts
+- Session activity UI keys for waiting_user / error
 
 ### Fixed
 

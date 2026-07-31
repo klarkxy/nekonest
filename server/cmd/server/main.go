@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nekonest/server/internal/db"
+	"github.com/nekonest/server/internal/protocol"
 	"github.com/nekonest/server/internal/ws"
 )
 
@@ -20,7 +21,16 @@ func main() {
 	port := flag.String("port", "8080", "server port")
 	dataDir := flag.String("data", "./data", "data directory for SQLite")
 	pwaDir := flag.String("pwa", "./pwa-dist", "PWA static files directory")
+	migrateV1 := flag.Bool("migrate-v1", false, "offline destructive v0.1→v1 content migration (requires -backup)")
+	backupDir := flag.String("backup", "", "backup directory for -migrate-v1")
 	flag.Parse()
+
+	if *migrateV1 {
+		if err := runMigrateV1(*dataDir, *backupDir); err != nil {
+			log.Fatalf("migrate-v1 failed: %v", err)
+		}
+		return
+	}
 
 	// Ensure data directory exists
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
@@ -34,18 +44,25 @@ func main() {
 	}
 	defer database.Close()
 
-	phoneSecret := strings.TrimSpace(os.Getenv("NEKONEST_PHONE_SECRET"))
+	// Admin nest secret: prefer NEKONEST_ADMIN_SECRET; one-release alias PHONE_SECRET.
+	phoneSecret := strings.TrimSpace(os.Getenv("NEKONEST_ADMIN_SECRET"))
 	if phoneSecret == "" {
-		log.Printf("⚠️  NEKONEST_PHONE_SECRET not set — local-only development mode")
+		phoneSecret = strings.TrimSpace(os.Getenv("NEKONEST_PHONE_SECRET"))
+		if phoneSecret != "" {
+			log.Printf("⚠️  NEKONEST_PHONE_SECRET is deprecated; use NEKONEST_ADMIN_SECRET")
+		}
+	}
+	if phoneSecret == "" {
+		log.Printf("⚠️  NEKONEST_ADMIN_SECRET not set — local-only development mode")
 		if strings.TrimSpace(os.Getenv("NEKONEST_ALLOWED_ORIGINS")) == "" {
 			_ = os.Setenv("NEKONEST_ALLOWED_ORIGINS", defaultLocalOrigins(*port))
 		}
 	} else {
-		log.Printf("🔒 phone secret auth enabled")
+		log.Printf("🔒 admin secret auth enabled (phone tokens via /api/phones/bootstrap)")
 	}
 	if strings.TrimSpace(os.Getenv("NEKONEST_BOOTSTRAP_TOKEN")) == "" {
 		if phoneSecret != "" {
-			log.Printf("⚠️  NEKONEST_BOOTSTRAP_TOKEN not set while PHONE_SECRET is set — device registration is disabled")
+			log.Printf("⚠️  NEKONEST_BOOTSTRAP_TOKEN not set while ADMIN_SECRET is set — device registration is disabled")
 		} else {
 			log.Printf("⚠️  NEKONEST_BOOTSTRAP_TOKEN not set — /api/devices/register is open (dev only)")
 		}
@@ -58,6 +75,16 @@ func main() {
 
 	server := ws.NewWithSecret(database, phoneSecret)
 	server.SetDataDir(*dataDir)
+	// Nest-wide transport mode (default sealed). Until sealed crypto is fully
+	// wired end-to-end, operators may set NEKONEST_TRANSPORT_MODE=open.
+	transportMode := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
+	if transportMode == "" {
+		transportMode = string(protocol.TransportSealed)
+	}
+	if err := server.SetTransportMode(protocol.TransportMode(transportMode)); err != nil {
+		log.Fatalf("invalid NEKONEST_TRANSPORT_MODE: %v", err)
+	}
+	log.Printf("🔐 transport mode: %s", server.TransportMode())
 
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
@@ -81,7 +108,7 @@ func main() {
 	// Apply middleware
 	handler := ws.LoggingMiddleware(ws.CORSMiddleware(mux))
 
-	addr := listenAddress(*port, phoneSecret)
+	addr := listenAddress(*port, phoneSecret) // empty admin secret → loopback only
 
 	// Create HTTP server with graceful shutdown support
 	httpServer := &http.Server{

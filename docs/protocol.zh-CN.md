@@ -11,19 +11,32 @@ NekoNest 手机 ↔ server ↔ daemon 通信的语言无关线协议。规范性
 
 JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致。
 
+## 版本与传输模式
+
+| 字段 | 规则 |
+|---|---|
+| `protocol_version` | `major.minor`（当前 **1.0**）。主版本不匹配则拒绝；次版本向后兼容（未知可选字段忽略）。 |
+| `transport_mode` | 全窝统一 `sealed` \| `open`。一窝一种模式；**禁止** sealed→open 自动降级。新窝默认 **sealed**。 |
+
+首帧（daemon 的 `register_device`、手机的 `subscribe`）**必须**带上述字段。Server 在 `auth_response` / `subscribe_ack` 返回协商结果。稳定错误码：`version_mismatch`、`transport_mode_mismatch`、`invalid_envelope`。
+
 ## 信封
 
 每条 WebSocket 应用消息为 `NekoMessage`：
 
 | 字段 | 必需 | 说明 |
 |---|---|---|
+| `protocol_version` | 首帧必需 | `major.minor` |
+| `transport_mode` | 首帧必需 | `sealed` \| `open` |
 | `type` | 是 | `MessageType` 枚举字符串之一 |
 | `device_id` | 是 | 设备标识（daemon 身份或路由上下文） |
 | `timestamp` | 是 | Unix 时间戳，**秒** |
 | `session_id` | 否 | 会话级消息时的 agent 线程 id |
-| `payload` | 否 | 按类型变化的对象 |
+| `client_msg_id` | 否 | prompt/start 幂等 id（中继可见） |
+| `payload` | 否 | 开放模式或明文控制载荷；有 `sealed_payload` 时**必须缺省** |
+| `sealed_payload` | 否 | 密文信封；开放模式下**必须缺省** |
 
-schema 上信封 `additionalProperties: false`——勿随意发明顶层键。
+`payload` 与 `sealed_payload` 互斥。schema 上信封 `additionalProperties: false`。
 
 ## 智能体类型标识
 
@@ -44,7 +57,7 @@ schema 上信封 `additionalProperties: false`——勿随意发明顶层键。
 | 字段 | 说明 |
 |---|---|
 | `id`, `name` | 身份与显示名 |
-| `os` | 当前为 `"windows"` |
+| `os` | v1 正式：`windows` \| `linux` |
 | `status` | `online` \| `offline` |
 | `last_seen` | Unix 秒 |
 | `active_agents` | 会话数量提示（不是猫娘种类数）；PWA 展示为线团数 |

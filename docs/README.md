@@ -10,9 +10,12 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 
 | Doc | Description |
 |---|---|
-| [../README.md](../README.md) | Product, quick start, boundaries |
+| [../README.md](../README.md) | Product, quick start, **v0.1 live boundaries** |
+| [v1-product.md](./v1-product.md) | **v1.0.0 frozen target contract** (Codex-first E2E; not the live v0.1 slice) |
 | [deploy-vps.md](./deploy-vps.md) | Build and run the VPS server |
 | [deploy-windows.md](./deploy-windows.md) | Register and run the Windows daemon |
+| [deploy-linux.md](./deploy-linux.md) | Register and run the Linux daemon (systemd user) |
+| [migration-v1.md](./migration-v1.md) | Breaking v0.1 → v1.0 offline migration |
 | [e2e-smoke.md](./e2e-smoke.md) | Post-deploy acceptance checklist |
 | [troubleshooting.md](./troubleshooting.md) | Symptom → fix guide |
 
@@ -20,6 +23,7 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 
 | Doc | Description |
 |---|---|
+| [v1-product.md](./v1-product.md) | Frozen v1.0.0 catalog: Windows+Linux, Codex full-control, sealed default |
 | [configuration.md](./configuration.md) | Env vars, flags, config files, limits |
 | [security.md](./security.md) | Trust model, secrets, hardening |
 | [architecture.md](./architecture.md) | Components, discovery, prompt path |
@@ -35,7 +39,10 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 | English | 简体中文 |
 |---|---|
 | [README.md](../README.md) | [README.zh-CN.md](../README.zh-CN.md) |
+| [v1-product.md](./v1-product.md) | [v1-product.zh-CN.md](./v1-product.zh-CN.md) |
 | [deploy-vps.md](./deploy-vps.md) | [deploy-vps.zh-CN.md](./deploy-vps.zh-CN.md) |
+| [deploy-linux.md](./deploy-linux.md) | [deploy-linux.zh-CN.md](./deploy-linux.zh-CN.md) |
+| [migration-v1.md](./migration-v1.md) | [migration-v1.zh-CN.md](./migration-v1.zh-CN.md) |
 | [deploy-windows.md](./deploy-windows.md) | [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md) |
 | [e2e-smoke.md](./e2e-smoke.md) | [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) |
 | [configuration.md](./configuration.md) | [configuration.zh-CN.md](./configuration.zh-CN.md) |
@@ -48,6 +55,8 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 | [brand-art.md](./brand-art.md) | [brand-art.zh-CN.md](./brand-art.zh-CN.md) |
 | [README.md](./README.md) (this index) | [README.zh-CN.md](./README.zh-CN.md) |
 
-## Archive
+## Archive and contracts
 
-[archive/](./archive/) holds frozen construction-era snapshots. **Not** the live product contract. Verify any claim there against current code, README, and AGENTS.md.
+- **Live v0.1 product boundaries:** [../README.md](../README.md) “Current boundaries (v0.1)” and today’s operator guides.
+- **Target v1.0.0 product contract:** [v1-product.md](./v1-product.md) — supersedes v0.1 compromises when building toward the complete release.
+- **Frozen construction snapshots:** [archive/](./archive/). **Not** a product contract. Verify any claim there against current code, README, AGENTS.md, and (for v1 work) `v1-product.md`.

@@ -87,18 +87,22 @@ export default {
   },
   pair: {
     title: '配对电脑',
-    desc: '在家里电脑上生成 6 位配对码，填到这里，手机就能看见那台电脑的线团。',
+    desc: '在家里电脑生成配对码（或粘贴 QR JSON），核对指纹后，手机就能看见那台电脑的线团。',
     codeLabel: '配对码',
     placeholder: '输入 6 位配对码…',
+    qrLabel: 'QR 载荷（可选，推荐）',
+    qrPlaceholder: '粘贴 nekonest-daemon -pair gen 打印的 JSON…',
+    fingerprint: '主机指纹',
     submit: '完成配对',
     helpTitle: '怎么拿到配对码',
     help1: '已注册的电脑运行',
     help2: '首次使用时，设置好服务器地址与注册令牌后运行',
-    help3: '把码填到上方，点完成配对',
-    help4: '让本机服务保持在线',
+    help3: '填入配对码（或粘贴 QR JSON），点完成配对',
+    help4: '让本机服务保持在线；请对照电脑屏幕核对指纹',
     copyCmd: '复制命令 {cmd}',
     errAuth: '手机钥匙不对，请先去钥匙设置。',
     errCode: '配对码无效或已过期，请在电脑上重新生成。',
+    errFingerprint: '主机指纹不一致，请勿配对——在电脑上重新生成。',
     errNetwork: '配对没成功，检查网络后再试。',
     success: '配对成功',
     copied: '命令已复制',
@@ -168,12 +172,17 @@ export default {
     send: '发送',
     sendBlocked: '当前任务结束后可发送',
     sendBusyHint: '猫娘还在处理上一条，可以先把下一句写好。',
-    approvalTitle: '等电脑点头',
+    approvalTitle: '需要审批',
     approvalNote:
-      '请到家里电脑上该猫娘的终端批准或拒绝。手机不能代点。批准后回复会继续同步到这里。',
+      '当前 agent 不支持手机审批。请到主机终端批准或拒绝；完成后回复会同步到这里。',
+    approve: '批准',
+    deny: '拒绝',
+    interruptUnavailable: '当前会话不支持中断',
     deliveryQueued: '排队中',
     deliverySending: '发送中',
+    deliveryAccepted: '已接受',
     deliveryFailed: '发送失败',
+    deliveryNotSeen: '未见',
     retry: '重试',
     wsConnected: '通道畅通',
     wsConnecting: '接通中…',
@@ -197,9 +206,21 @@ export default {
     },
     waiting_approval: {
       icon: '🔔',
-      label: '电脑待批',
-      headline: '等电脑点头',
-      detail: '请到家里电脑的终端批准或拒绝；手机不能代点。批准后回复会继续同步。'
+      label: '待审批',
+      headline: '等待审批',
+      detail: '若该 agent 支持，可在手机批准或拒绝；否则请到主机终端完成审批。'
+    },
+    waiting_user: {
+      icon: '🙋',
+      label: '等你',
+      headline: '等待你的输入',
+      detail: 'agent 卡在问题或选择上，打开线团继续。'
+    },
+    error: {
+      icon: '⚠️',
+      label: '出错',
+      headline: '线团出错',
+      detail: '上一轮运行失败，请查看线团详情。'
     },
     streaming: {
       icon: '🐾',
@@ -250,6 +271,7 @@ export default {
     attachMax: '一次最多 {n} 个附件'
   },
   outbox: {
-    attachmentsOnly: '（发送了 {n} 个附件）'
+    attachmentsOnly: '（发送了 {n} 个附件）',
+    notSeen: '主机还没见到这条指令，可以安全重试。'
   }
 } as const

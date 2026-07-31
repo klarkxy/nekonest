@@ -206,10 +206,18 @@ func (s *Server) handleAttachmentGet(w http.ResponseWriter, r *http.Request, id 
 	authed := false
 	if s.phoneSecret == "" {
 		authed = true
-	} else if phoneSecretFromRequest(r) == s.phoneSecret {
-		authed = true
 	} else if key != "" && subtleConstEq(key, meta.Key) {
-		authed = true
+		authed = true // capability URL for daemon download
+	} else {
+		cred := phoneSecretFromRequest(r)
+		if secureEqual(cred, s.phoneSecret) {
+			authed = true
+		} else if auth, err := s.db.ValidatePhoneToken(cred); err == nil {
+			// Phone token: require grant when attachment is device-scoped.
+			if meta.DeviceID == "" || s.phoneMayAccessDevice(auth, meta.DeviceID) {
+				authed = true
+			}
+		}
 	}
 	if !authed {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

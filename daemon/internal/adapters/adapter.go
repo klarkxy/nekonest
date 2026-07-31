@@ -23,19 +23,92 @@ type AgentStatus string
 const (
 	StatusRunning         AgentStatus = "running"
 	StatusIdle            AgentStatus = "idle"
+	StatusWaitingUser     AgentStatus = "waiting_user"
 	StatusWaitingApproval AgentStatus = "waiting_approval"
+	StatusError           AgentStatus = "error"
 )
+
+// AttachmentMode is the honest attachment capability for a session/agent.
+type AttachmentMode string
+
+const (
+	AttachNativeImageAndFile AttachmentMode = "native_image_and_file"
+	AttachNativeImage        AttachmentMode = "native_image"
+	AttachPathBestEffort     AttachmentMode = "path_best_effort"
+	AttachUnsupported        AttachmentMode = "unsupported"
+)
+
+// ControlMode describes how the daemon drives the agent.
+type ControlMode string
+
+const (
+	ControlAppServer     ControlMode = "app_server"
+	ControlExecResume    ControlMode = "exec_resume"
+	ControlCompatibility ControlMode = "compatibility"
+)
+
+// SessionCapabilities advertises phone-side controls (absent = unsupported).
+type SessionCapabilities struct {
+	ControlMode    ControlMode    `json:"control_mode,omitempty"`
+	Approve        bool           `json:"approve,omitempty"`
+	Deny           bool           `json:"deny,omitempty"`
+	Interrupt      bool           `json:"interrupt,omitempty"`
+	Steer          bool           `json:"steer,omitempty"`
+	Queue          bool           `json:"queue,omitempty"`
+	Spawn          bool           `json:"spawn,omitempty"`
+	AttachmentMode AttachmentMode `json:"attachment_mode,omitempty"`
+}
+
+// DefaultCapabilities returns honest v1 defaults for a wire agent type.
+// Codex full-control (app-server) is advertised only when that path is live;
+// until then Codex is exec_resume without approval/spawn/steer.
+func DefaultCapabilities(agentType AgentType) *SessionCapabilities {
+	switch agentType {
+	case AgentCodex:
+		// Full-control flags are raised at wire time when app-server is healthy.
+		return &SessionCapabilities{
+			ControlMode:    ControlExecResume,
+			Interrupt:      true,
+			AttachmentMode: AttachNativeImage,
+		}
+	case AgentClaudeCode:
+		return &SessionCapabilities{
+			ControlMode:    ControlCompatibility,
+			Interrupt:      true,
+			AttachmentMode: AttachPathBestEffort,
+		}
+	case AgentKilo:
+		return &SessionCapabilities{
+			ControlMode:    ControlCompatibility,
+			Interrupt:      true,
+			AttachmentMode: AttachPathBestEffort,
+		}
+	case AgentKimiCLI, AgentGrokBuild:
+		return &SessionCapabilities{
+			ControlMode:    ControlCompatibility,
+			Interrupt:      true,
+			AttachmentMode: AttachPathBestEffort,
+		}
+	default:
+		return &SessionCapabilities{
+			ControlMode:    ControlCompatibility,
+			Interrupt:      true,
+			AttachmentMode: AttachUnsupported,
+		}
+	}
+}
 
 // SessionInfo describes a discovered agent session.
 type SessionInfo struct {
-	ID              string        `json:"id"`
-	AgentType       AgentType     `json:"agent_type"`
-	Status          AgentStatus   `json:"status"`
-	Summary         string        `json:"summary,omitempty"`
-	LastActivity    time.Time     `json:"last_activity"`
-	SessionPath     string        `json:"-"`                     // local store path (jsonl/db), not sent
-	ProjectDir      string        `json:"project_dir,omitempty"` // workspace / project folder on PC
-	PendingApproval *ApprovalInfo `json:"pending_approval,omitempty"`
+	ID              string               `json:"id"`
+	AgentType       AgentType            `json:"agent_type"`
+	Status          AgentStatus          `json:"status"`
+	Summary         string               `json:"summary,omitempty"`
+	LastActivity    time.Time            `json:"last_activity"`
+	SessionPath     string               `json:"-"`                     // local store path (jsonl/db), not sent
+	ProjectDir      string               `json:"project_dir,omitempty"` // workspace / project folder on PC
+	Capabilities    *SessionCapabilities `json:"capabilities,omitempty"`
+	PendingApproval *ApprovalInfo        `json:"pending_approval,omitempty"`
 }
 
 // ApprovalInfo describes a pending tool-call approval.

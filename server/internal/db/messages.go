@@ -2,10 +2,38 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/nekonest/server/internal/protocol"
 )
+
+// SaveSealedMessage persists an opaque sealed session_message envelope.
+// No application plaintext is written; ciphertext lives in metadata_json.
+func (db *DB) SaveSealedMessage(deviceID, sessionID string, msg *protocol.NekoMessage) error {
+	if msg == nil || msg.SealedPayload == nil {
+		return nil
+	}
+	id := msg.ClientMsgID
+	if id == "" {
+		id = fmt.Sprintf("sealed_%d_%d", msg.Timestamp, msg.SealedPayload.Sequence)
+	}
+	meta, _ := marshalJSON(map[string]any{
+		"sealed":           true,
+		"sealed_payload":   msg.SealedPayload,
+		"protocol_version": msg.ProtocolVersion,
+		"transport_mode":   msg.TransportMode,
+	})
+	_, err := db.conn.Exec(`
+		INSERT INTO session_messages (id, device_id, session_id, role, content, type, timestamp, metadata_json)
+		VALUES (?, ?, ?, 'assistant', '', 'sealed', ?, ?)
+		ON CONFLICT(id, device_id, session_id) DO UPDATE SET
+			timestamp = excluded.timestamp,
+			metadata_json = excluded.metadata_json`,
+		id, deviceID, sessionID, msg.Timestamp, string(meta),
+	)
+	return err
+}
 
 // SaveMessage stores a session message in the database.
 // Same id is upserted so streaming patches update content in place.
