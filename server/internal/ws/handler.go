@@ -441,6 +441,15 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		// do not establish durable acceptance. Forward for compatibility only.
 		s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
 
+	case protocol.MsgThreadStarting,
+		protocol.MsgThreadOwned,
+		protocol.MsgThreadFailed,
+		protocol.MsgThreadIndeterminate,
+		protocol.MsgKeyPackage,
+		protocol.MsgPairReady:
+		// Lifecycle / crypto control frames — fan out to phones as-is.
+		s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
+
 	case protocol.MsgHeartbeat:
 		// Just keep-alive, already updated LastPing
 
@@ -1003,6 +1012,41 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 			errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID)
 			errMsg.Payload = map[string]any{"message": "device offline"}
 			s.connMgr.BroadcastToPhones(deviceID, errMsg)
+		}
+
+	case protocol.MsgSteer:
+		msg.DeviceID = deviceID
+		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
+			errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID)
+			errMsg.Payload = map[string]any{"message": "device offline"}
+			s.connMgr.BroadcastToPhones(deviceID, errMsg)
+		}
+
+	case protocol.MsgStartThread:
+		// Codex-only spawn into discovered project dirs (daemon enforces policy).
+		msg.DeviceID = deviceID
+		if msg.Payload == nil {
+			msg.Payload = map[string]any{}
+		}
+		opID := stringPayload(msg.Payload, "operation_id")
+		if opID == "" {
+			opID = sanitizeClientMsgID(msg.ClientMsgID)
+		}
+		if opID == "" {
+			if id, err := randomHex(12); err == nil {
+				opID = "local_start_" + id
+			}
+		}
+		msg.Payload["operation_id"] = opID
+		msg.ClientMsgID = opID
+		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
+			fail := s.stampEnvelope(protocol.NewMessage(protocol.MsgThreadFailed, deviceID))
+			fail.Payload = map[string]any{
+				"operation_id": opID,
+				"error":        "device offline",
+				"message":      "device offline",
+			}
+			s.connMgr.BroadcastToPhones(deviceID, fail)
 		}
 
 	default:

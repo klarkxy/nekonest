@@ -129,7 +129,20 @@ export default {
     welcomeEmptyBody: '请先在电脑上打开或新建会话，这里只续写家里已有的线团。',
     welcomeBackBody: '从工作目录走进对应猫娘，继续家里已有的线团。',
     loadError: '线团清单没读到，稍后再试。',
-    loadNetwork: '网络不顺，线团清单没拿到。'
+    loadNetwork: '网络不顺，线团清单没拿到。',
+    startCodexTitle: '新建 Codex 线团',
+    startCodexHint: '仅限已发现的项目目录，经本机 codex app-server 创建。',
+    startCodexDir: '项目目录',
+    startCodexPickDir: '选择项目目录…',
+    startCodexPrompt: '首条消息（可选）',
+    startCodexPromptPh: '可选：第一句想说的话…',
+    startCodexSubmit: '创建线团',
+    startCodexStarting: '正在创建…',
+    startCodexOwned: '已创建，正在打开…',
+    startCodexFailed: '创建失败',
+    startCodexIndeterminate: '结果未确认，请稍后在列表中查看',
+    startCodexNeedProject: '还没有 Codex 项目目录。请先在电脑上用 Codex 打开过某个项目。',
+    startCodexNeedAppServer: '当前 Codex 未提供 app-server 开线程能力，请升级/启动 codex app-server。'
   },
   threadList: {
     showArchived: '显示已收起',

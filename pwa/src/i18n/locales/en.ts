@@ -130,7 +130,20 @@ export default {
     welcomeEmptyBody: 'Open or create sessions on the PC first. The phone only resumes existing threads.',
     welcomeBackBody: 'Pick a workspace and agent to continue a thread already on this PC.',
     loadError: 'Could not load the thread list. Try again shortly.',
-    loadNetwork: 'Network issue — thread list not loaded.'
+    loadNetwork: 'Network issue — thread list not loaded.',
+    startCodexTitle: 'New Codex thread',
+    startCodexHint: 'Only directories already discovered from native Codex sessions; created via host app-server.',
+    startCodexDir: 'Project directory',
+    startCodexPickDir: 'Choose a project directory…',
+    startCodexPrompt: 'First message (optional)',
+    startCodexPromptPh: 'Optional first prompt…',
+    startCodexSubmit: 'Create thread',
+    startCodexStarting: 'Creating…',
+    startCodexOwned: 'Created — opening…',
+    startCodexFailed: 'Create failed',
+    startCodexIndeterminate: 'Outcome unclear — check the list shortly',
+    startCodexNeedProject: 'No Codex project directories yet. Open a project with Codex on the PC first.',
+    startCodexNeedAppServer: 'Codex app-server spawn is unavailable. Upgrade/start codex app-server on the host.'
   },
   threadList: {
     showArchived: 'Show archived',

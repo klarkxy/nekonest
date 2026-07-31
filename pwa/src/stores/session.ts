@@ -456,6 +456,19 @@ export const useSessionStore = defineStore('sessions', () => {
         void ingestKeyPackageMessage(msg.device_id, (msg.payload || {}) as Record<string, unknown>)
         return
       }
+      if (
+        msg.type === 'thread_starting' ||
+        msg.type === 'thread_owned' ||
+        msg.type === 'thread_failed' ||
+        msg.type === 'thread_indeterminate'
+      ) {
+        applyStartThreadResult(
+          msg.type,
+          (msg.payload || {}) as Record<string, unknown>,
+          msg.device_id || deviceId
+        )
+        return
+      }
       if (msg.type === 'device_online') {
         // A pending status query can go unanswered while the daemon is offline
         // even though the phone socket stays connected. Query again on return.
@@ -978,6 +991,98 @@ export const useSessionStore = defineStore('sessions', () => {
     return ok
   }
 
+  /** Pending Codex start_thread operations keyed by operation_id. */
+  const startOps = ref<
+    Record<
+      string,
+      {
+        deviceId: string
+        cwd: string
+        status: 'starting' | 'owned' | 'failed' | 'indeterminate'
+        sessionId?: string
+        error?: string
+      }
+    >
+  >({})
+
+  function startThread(
+    deviceId: string,
+    cwd: string,
+    firstPrompt = ''
+  ): { ok: boolean; operationId: string } {
+    const operationId = `local_start_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    startOps.value = {
+      ...startOps.value,
+      [operationId]: { deviceId, cwd, status: 'starting' }
+    }
+    const ok = nekoWS().send({
+      type: 'start_thread',
+      device_id: deviceId,
+      client_msg_id: operationId,
+      timestamp: Math.floor(Date.now() / 1000),
+      payload: {
+        operation_id: operationId,
+        cwd,
+        project_dir: cwd,
+        agent_type: 'codex',
+        prompt: firstPrompt
+      }
+    })
+    if (!ok) {
+      startOps.value = {
+        ...startOps.value,
+        [operationId]: {
+          deviceId,
+          cwd,
+          status: 'failed',
+          error: tGlobal('errors.channelDropped')
+        }
+      }
+      lastError.value = tGlobal('errors.channelDropped')
+    }
+    return { ok, operationId }
+  }
+
+  function applyStartThreadResult(
+    type: string,
+    payload: Record<string, unknown> | undefined,
+    deviceId: string
+  ) {
+    const opId = String(payload?.operation_id || '').trim()
+    if (!opId) return
+    const prev = startOps.value[opId]
+    if (!prev || prev.deviceId !== deviceId) {
+      // Still record if we initiated from this phone earlier this session.
+      if (!prev) return
+    }
+    const sessionId = String(payload?.session_id || payload?.thread_id || '').trim()
+    const error = String(payload?.error || payload?.message || '').trim()
+    let status: 'starting' | 'owned' | 'failed' | 'indeterminate' = 'starting'
+    if (type === 'thread_owned') status = 'owned'
+    else if (type === 'thread_failed') status = 'failed'
+    else if (type === 'thread_indeterminate') status = 'indeterminate'
+    else if (type === 'thread_starting') status = 'starting'
+    startOps.value = {
+      ...startOps.value,
+      [opId]: {
+        deviceId,
+        cwd: prev?.cwd || String(payload?.cwd || ''),
+        status,
+        sessionId: sessionId || undefined,
+        error: error || undefined
+      }
+    }
+    if (status === 'failed' && error) {
+      lastError.value = error
+    }
+  }
+
+  function clearStartOp(operationId: string) {
+    const next = { ...startOps.value }
+    delete next[operationId]
+    startOps.value = next
+  }
+
   function cleanup() {
     stopStreamPoll()
     clearAllAckTimers()
@@ -990,7 +1095,9 @@ export const useSessionStore = defineStore('sessions', () => {
 
   return {
     sessions, currentSession, messages, loading, importing, streaming, lastError, wsStatus,
+    startOps,
     subscribeDevice, setCurrentSession, clearMessages, requestNativeHistory,
-    sendPrompt, retryPrompt, approve, deny, interrupt, isPending, cleanup
+    sendPrompt, retryPrompt, approve, deny, interrupt, startThread, clearStartOp,
+    isPending, cleanup
   }
 })
