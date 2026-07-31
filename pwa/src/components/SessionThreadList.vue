@@ -1,13 +1,13 @@
 <template>
   <div class="thread-list">
-    <div class="toolbar">
-      <label class="filter-field">
-        <span class="filter-label" id="agent-filter-label">{{ t('threadList.filterAgent') }}</span>
+    <div class="list-controls">
+      <label class="control-field">
+        <span class="sr-only">{{ t('threadList.filterAgent') }}</span>
         <select
           id="agent-filter"
-          class="filter-select"
+          class="control-select"
           v-model="agentFilter"
-          aria-labelledby="agent-filter-label"
+          :aria-label="t('threadList.filterAgent')"
         >
           <option value="">{{ t('threadList.filterAgentAll') }}</option>
           <option
@@ -17,22 +17,24 @@
           >{{ opt.label }} ({{ opt.count }})</option>
         </select>
       </label>
-      <label class="archive-toggle">
-        <input v-model="prefs.showArchived" type="checkbox" class="archive-checkbox" />
-        {{ t('threadList.showArchived') }}
+      <label class="control-field">
+        <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
+        <input
+          v-model="searchQuery"
+          type="search"
+          class="control-input"
+          :placeholder="t('threadList.searchPlaceholder')"
+          autocomplete="off"
+        />
       </label>
+      <div class="control-meta">
+        <label class="archive-toggle">
+          <input v-model="prefs.showArchived" type="checkbox" class="archive-checkbox" />
+          {{ t('threadList.showArchived') }}
+        </label>
+        <p class="hint">{{ t('threadList.hint') }}</p>
+      </div>
     </div>
-    <label class="search-field">
-      <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
-      <input
-        v-model="searchQuery"
-        type="search"
-        class="search-input"
-        :placeholder="t('threadList.searchPlaceholder')"
-        autocomplete="off"
-      />
-    </label>
-    <p class="hint">{{ t('threadList.hint') }}</p>
 
     <div v-if="visibleProjects.length === 0" class="empty-hint">
       <template v-if="agentFilter && sessions.length > 0">{{ t('threadList.emptyFilter') }}</template>
@@ -208,12 +210,11 @@ const visibleProjects = computed(() => {
     if (!prefs.showArchived && prefs.isArchived(session.id)) return false
     if (agent && String(session.agent_type || '').trim() !== agent) return false
     if (!q) return true
+    // Agent filtering is the top select; search is for thread/folder text only.
     const hay = [
       session.summary,
       session.project,
       session.project_dir,
-      agentLabel(session.agent_type),
-      session.agent_type,
       session.id
     ]
       .filter(Boolean)
@@ -278,53 +279,19 @@ function shortPath(path: string, max = 36): string {
 </script>
 
 <style scoped>
-.toolbar {
+.list-controls {
   display: grid;
-  gap: 10px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
-.filter-field {
-  display: grid;
-  gap: 6px;
-}
-
-.filter-label {
-  color: var(--neko-ink-soft);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.filter-select {
-  width: 100%;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--neko-line);
-  border-radius: 12px;
-  color: var(--neko-ink);
-  background: var(--neko-surface-solid);
-  font: inherit;
-}
-
-.archive-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.archive-checkbox {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
-  accent-color: var(--neko-primary);
-}
-
-.search-field {
+.control-field {
   display: block;
-  margin-bottom: 8px;
+  min-width: 0;
 }
 
-.search-input {
+.control-select,
+.control-input {
   width: 100%;
   min-height: 44px;
   padding: 0 12px;
@@ -335,18 +302,47 @@ function shortPath(path: string, max = 36): string {
   font: inherit;
 }
 
+.control-select:focus-visible,
+.control-input:focus-visible {
+  outline: 2px solid var(--neko-primary);
+  outline-offset: 2px;
+}
+
+.control-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-height: 36px;
+  padding-inline: 2px;
+}
+
 .archive-toggle {
-  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
   color: var(--neko-ink-soft);
   font-size: 12px;
+  font-weight: 600;
   user-select: none;
 }
 
+.archive-checkbox {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  accent-color: var(--neko-primary);
+}
+
 .hint {
-  margin: 0 0 14px;
+  margin: 0;
+  flex: 1 1 10rem;
   color: var(--neko-ink-faint);
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.45;
+  text-align: end;
 }
 
 .empty-hint {
@@ -391,8 +387,7 @@ function shortPath(path: string, max = 36): string {
 .project-header:focus-visible,
 .agent-header:focus-visible,
 .session-main:focus-visible,
-.archive-btn:focus-visible,
-.filter-select:focus-visible {
+.archive-btn:focus-visible {
   outline: 2px solid var(--neko-primary);
   outline-offset: -2px;
 }
