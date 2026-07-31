@@ -75,12 +75,14 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     proxy: {
+      // NEKONEST_DEV_API (e.g. http://172.x.x.x:18080) points at a remote nest
+      // such as WSL2-simulated cloud; default remains local loopback :8080.
       '/ws': {
-        target: 'ws://127.0.0.1:8080',
+        target: (process.env.NEKONEST_DEV_API || 'http://127.0.0.1:8080').replace(/^http/, 'ws'),
         ws: true
       },
       '/api': {
-        target: 'http://127.0.0.1:8080'
+        target: process.env.NEKONEST_DEV_API || 'http://127.0.0.1:8080'
       }
     }
   },
