@@ -156,10 +156,8 @@ export const useSessionPrefsStore = defineStore('sessionPrefs', () => {
   }
 
   function sortSessions(list: AgentSession[]): AgentSession[] {
-    if (sortMode.value === 'manual') {
-      ensureOrder(list.map(s => s.id))
-    }
-    return sortSessionsByMode(list, sortMode.value, manualOrder.value)
+    // Locked product rule: newest activity first (manual/name modes retired).
+    return sortSessionsByMode(list, 'recent')
   }
 
   return {

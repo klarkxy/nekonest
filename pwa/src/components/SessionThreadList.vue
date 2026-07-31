@@ -1,23 +1,26 @@
 <template>
   <div class="thread-list">
     <div class="toolbar">
+      <label class="filter-field">
+        <span class="filter-label" id="agent-filter-label">{{ t('threadList.filterAgent') }}</span>
+        <select
+          id="agent-filter"
+          class="filter-select"
+          v-model="agentFilter"
+          aria-labelledby="agent-filter-label"
+        >
+          <option value="">{{ t('threadList.filterAgentAll') }}</option>
+          <option
+            v-for="opt in agentOptions"
+            :key="opt.type"
+            :value="opt.type"
+          >{{ opt.label }} ({{ opt.count }})</option>
+        </select>
+      </label>
       <label class="archive-toggle">
         <input v-model="prefs.showArchived" type="checkbox" class="archive-checkbox" />
         {{ t('threadList.showArchived') }}
       </label>
-      <div class="sort-row">
-        <label class="sort-label" for="session-sort">{{ t('threadList.sort') }}</label>
-        <select
-          id="session-sort"
-          class="sort-select"
-          :value="prefs.sortMode"
-          @change="onSortChange"
-        >
-          <option value="recent">{{ t('threadList.sortRecent') }}</option>
-          <option value="name">{{ t('threadList.sortName') }}</option>
-          <option value="manual">{{ t('threadList.sortManual') }}</option>
-        </select>
-      </div>
     </div>
     <label class="search-field">
       <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
@@ -32,7 +35,8 @@
     <p class="hint">{{ t('threadList.hint') }}</p>
 
     <div v-if="visibleProjects.length === 0" class="empty-hint">
-      <template v-if="prefs.showArchived">{{ t('threadList.emptyNone') }}</template>
+      <template v-if="agentFilter && sessions.length > 0">{{ t('threadList.emptyFilter') }}</template>
+      <template v-else-if="prefs.showArchived">{{ t('threadList.emptyNone') }}</template>
       <template v-else-if="sessions.length === 0">
         {{ t('threadList.emptyCreateOnPc') }}
       </template>
@@ -113,13 +117,10 @@
             class="agent-body"
           >
             <div
-              v-for="(session, index) in agent.sessions"
+              v-for="session in agent.sessions"
               :key="session.id"
               class="session-item"
-              :class="{
-                archived: prefs.isArchived(session.id),
-                manual: prefs.sortMode === 'manual'
-              }"
+              :class="{ archived: prefs.isArchived(session.id) }"
             >
               <RouterLink
                 class="session-main"
@@ -143,28 +144,6 @@
               </RouterLink>
 
               <div class="session-actions">
-                <template v-if="prefs.sortMode === 'manual'">
-                  <button
-                    type="button"
-                    class="icon-btn"
-                    :title="t('threadList.moveUp')"
-                    :aria-label="t('threadList.moveUpAria')"
-                    :disabled="index === 0"
-                    @click.stop="
-                      prefs.moveSession(session.id, -1, agent.sessions.map(item => item.id))
-                    "
-                  >▲</button>
-                  <button
-                    type="button"
-                    class="icon-btn"
-                    :title="t('threadList.moveDown')"
-                    :aria-label="t('threadList.moveDownAria')"
-                    :disabled="index === agent.sessions.length - 1"
-                    @click.stop="
-                      prefs.moveSession(session.id, 1, agent.sessions.map(item => item.id))
-                    "
-                  >▼</button>
-                </template>
                 <button
                   type="button"
                   class="archive-btn"
@@ -190,10 +169,11 @@ import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
 import { UNKNOWN_AGENT_META } from '@/config/agents'
 import { sessionDetailLocation } from '@/router/navigation'
-import { useSessionPrefsStore, type SessionSortMode } from '@/stores/sessionPrefs'
+import { useSessionPrefsStore } from '@/stores/sessionPrefs'
 import type { AgentSession, AgentType } from '@/types/protocol'
 import { agentLabel, sessionActivityPresentation, shortSummary } from '@/utils/agent'
 import { buildSessionTree, type SessionTreeAgent } from '@/utils/sessionTree'
+import { sortSessionsByMode } from '@/utils/sessionSort'
 
 const props = defineProps<{
   sessions: AgentSession[]
@@ -203,11 +183,30 @@ const props = defineProps<{
 const { t } = useI18n()
 const prefs = useSessionPrefsStore()
 const searchQuery = ref('')
+/** Empty string = all agents. */
+const agentFilter = ref('')
+
+const agentOptions = computed(() => {
+  const counts = new Map<string, number>()
+  for (const s of props.sessions) {
+    const key = String(s.agent_type || '').trim() || 'unknown'
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([type, count]) => ({
+      type,
+      count,
+      label: agentLabel(type as AgentType)
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
+})
 
 const visibleProjects = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
+  const agent = agentFilter.value
   const filtered = props.sessions.filter(session => {
     if (!prefs.showArchived && prefs.isArchived(session.id)) return false
+    if (agent && String(session.agent_type || '').trim() !== agent) return false
     if (!q) return true
     const hay = [
       session.summary,
@@ -222,13 +221,9 @@ const visibleProjects = computed(() => {
       .toLowerCase()
     return hay.includes(q)
   })
-  return buildSessionTree(filtered, list => prefs.sortSessions(list))
+  // Product rule: always recent activity first (no manual reorder).
+  return buildSessionTree(filtered, list => sortSessionsByMode(list, 'recent'))
 })
-
-function onSortChange(event: Event) {
-  const value = (event.target as HTMLSelectElement).value as SessionSortMode
-  prefs.setSortMode(value)
-}
 
 function projectNodeKey(projectKey: string): string {
   return `project:${projectKey}`
@@ -284,16 +279,34 @@ function shortPath(path: string, max = 36): string {
 
 <style scoped>
 .toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
   gap: 10px;
   margin-bottom: 8px;
 }
 
-.archive-toggle,
-.sort-row {
+.filter-field {
+  display: grid;
+  gap: 6px;
+}
+
+.filter-label {
+  color: var(--neko-ink-soft);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.filter-select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--neko-line);
+  border-radius: 12px;
+  color: var(--neko-ink);
+  background: var(--neko-surface-solid);
+  font: inherit;
+}
+
+.archive-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -318,7 +331,7 @@ function shortPath(path: string, max = 36): string {
   border: 1px solid var(--neko-line);
   border-radius: 12px;
   color: var(--neko-ink);
-  background: var(--neko-surface);
+  background: var(--neko-surface-solid);
   font: inherit;
 }
 
@@ -327,21 +340,6 @@ function shortPath(path: string, max = 36): string {
   color: var(--neko-ink-soft);
   font-size: 12px;
   user-select: none;
-}
-
-.sort-label {
-  color: var(--neko-ink-faint);
-  font-size: 12px;
-}
-
-.sort-select {
-  min-height: 44px;
-  padding: 5px 9px;
-  border: 1px solid var(--neko-line);
-  border-radius: 9px;
-  background: var(--neko-surface-solid);
-  color: var(--neko-ink);
-  font-size: 13px;
 }
 
 .hint {
@@ -393,8 +391,8 @@ function shortPath(path: string, max = 36): string {
 .project-header:focus-visible,
 .agent-header:focus-visible,
 .session-main:focus-visible,
-.icon-btn:focus-visible,
-.archive-btn:focus-visible {
+.archive-btn:focus-visible,
+.filter-select:focus-visible {
   outline: 2px solid var(--neko-primary);
   outline-offset: -2px;
 }
@@ -607,60 +605,25 @@ function shortPath(path: string, max = 36): string {
   }
 }
 
-.icon-btn,
-.archive-btn {
-  border: 1px solid var(--neko-line);
-  color: var(--neko-ink-soft);
-  cursor: pointer;
-  font-weight: 600;
-  transition: transform 160ms ease, background-color 160ms ease;
-}
-
-.icon-btn {
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border-radius: 10px;
-  background: var(--neko-surface-muted);
-  font-size: 11px;
-}
-
-.icon-btn:disabled {
-  cursor: default;
-  opacity: 0.32;
-}
-
 .archive-btn {
   min-width: 52px;
   min-height: 44px;
   padding: 0 10px;
-  border-color: var(--neko-line);
+  border: 1px solid var(--neko-line);
   border-radius: 8px;
   background: var(--neko-primary-soft);
   color: var(--neko-primary-deep);
   font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
+  cursor: pointer;
+  transition: transform 160ms ease, background-color 160ms ease;
 }
 
 .archive-btn.on {
   border-color: var(--neko-neutral-line);
   background: var(--neko-neutral-soft);
   color: var(--neko-neutral-ink);
-}
-
-@media (max-width: 430px) {
-  .session-item.manual {
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .session-item.manual .session-main {
-    min-height: 44px;
-  }
-
-  .session-item.manual .session-actions {
-    align-self: flex-end;
-  }
 }
 
 @media (hover: hover) {
@@ -677,14 +640,12 @@ function shortPath(path: string, max = 36): string {
 .project-header:active,
 .agent-header:active,
 .session-main:active,
-.icon-btn:active:not(:disabled),
 .archive-btn:active {
   transform: scale(0.985);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .project-header,
-  .icon-btn,
   .archive-btn {
     transition: none;
   }
@@ -692,7 +653,6 @@ function shortPath(path: string, max = 36): string {
   .project-header:active,
   .agent-header:active,
   .session-main:active,
-  .icon-btn:active,
   .archive-btn:active {
     transform: none;
   }
