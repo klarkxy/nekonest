@@ -18,7 +18,10 @@
           @error="onAgentAvatarError"
         />
         <div class="header-mid">
-          <h1>{{ agentLabelText }}</h1>
+          <h1>
+            {{ agentLabelText }}
+            <span v-if="isLocalDraft" class="header-draft-tag">{{ t('session.draftTag') }}</span>
+          </h1>
           <div v-if="projectLine" class="header-project" :title="projectLine.path || projectLine.name">
             {{ projectBaseName(projectLine.name || projectLine.path) }}
           </div>
@@ -172,11 +175,20 @@
         </div>
       </div>
 
-      <div v-if="sessionStore.importing" class="import-banner" role="status" aria-live="polite">
+      <div
+        v-if="sessionStore.importing && !isLocalDraft"
+        class="import-banner"
+        role="status"
+        aria-live="polite"
+      >
         {{ t('session.importing') }}
       </div>
 
-      <div v-if="sessionStore.messages.length === 0 && !sessionStore.importing" class="empty-messages">
+      <div
+        v-if="sessionStore.messages.length === 0 && !(sessionStore.importing && !isLocalDraft)"
+        class="empty-messages"
+        :class="{ 'empty-messages--draft': isLocalDraft }"
+      >
         <div class="neko-mascot" aria-hidden="true">
           <img
             :src="agentMeta.avatar"
@@ -187,11 +199,17 @@
             @error="onAgentAvatarError"
           />
         </div>
-        <p class="empty-title">{{ t('session.emptyTitle') }}</p>
-        <p class="empty-hint">
-          {{ t('session.emptyHint') }}
+        <p class="empty-title">
+          {{ isLocalDraft ? t('session.draftEmptyTitle') : t('session.emptyTitle') }}
         </p>
-        <n-button size="small" @click="reloadHistory">{{ t('session.reloadHistory') }}</n-button>
+        <p class="empty-hint">
+          {{ isLocalDraft ? t('session.draftEmptyHint') : t('session.emptyHint') }}
+        </p>
+        <n-button
+          v-if="!isLocalDraft"
+          size="small"
+          @click="reloadHistory"
+        >{{ t('session.reloadHistory') }}</n-button>
       </div>
     </div>
 
@@ -378,7 +396,7 @@ const showActivityBanner = computed(() => {
   return sessionStore.streaming || status === 'running'
 })
 
-const canInterrupt = sessionBusy
+const canInterrupt = computed(() => sessionBusy.value && !isLocalDraft.value)
 
 const wsLabel = computed(() => {
   switch (sessionStore.wsStatus) {
@@ -391,10 +409,12 @@ const wsLabel = computed(() => {
 
 const liveStatusText = computed(() => {
   const parts = [wsLabel.value]
-  if (showHeaderActivity.value) {
+  if (isLocalDraft.value) {
+    parts.push(t('session.draftTag'), t('session.draftEmptyTitle'))
+  } else if (showHeaderActivity.value) {
     parts.push(threadActivity.value.headline, threadActivity.value.detail)
   }
-  if (sessionStore.importing) parts.push(t('session.syncingHistory'))
+  if (sessionStore.importing && !isLocalDraft.value) parts.push(t('session.syncingHistory'))
   if (sessionStore.lastError) parts.push(sessionStore.lastError)
   if (uploadError.value) parts.push(uploadError.value)
   return parts.join(', ')
@@ -1251,6 +1271,21 @@ function handleInterrupt() {
   margin: 0 0 14px;
   color: var(--neko-ink-faint);
   text-wrap: pretty;
+}
+.empty-messages--draft .empty-title {
+  color: var(--neko-primary-deep);
+}
+.header-draft-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  vertical-align: middle;
+  color: var(--neko-primary-deep);
+  background: var(--neko-primary-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 @keyframes neko-float {

@@ -165,8 +165,11 @@ export default {
     messagesAria: 'Thread messages',
     importing: 'Syncing history from the PC…',
     emptyTitle: 'This thread is empty',
-    emptyHint:
-      'We try to sync PC history on open. You can also send a message to continue. New threads must start on the PC.',
+    emptyHint: 'We try to sync PC history on open. You can also send a message to continue.',
+    draftTag: 'New',
+    draftEmptyTitle: 'Phone-created thread',
+    draftEmptyHint:
+      'No PC history sync for this draft. Write the first message (attachments OK) and send — then Codex creates it on the host.',
     reloadHistory: 'Sync again',
     removeAtt: 'Remove attachment {name}',
     attachAria: 'Add attachment',

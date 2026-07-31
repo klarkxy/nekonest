@@ -164,7 +164,11 @@ export default {
     messagesAria: '线团消息',
     importing: '正在同步家里的记录…',
     emptyTitle: '线团还是空的',
-    emptyHint: '打开时会试着同步家里的记录。也可以直接说一句继续；新线团请先在电脑上开。',
+    emptyHint: '打开时会试着同步家里的记录。也可以直接说一句继续。',
+    draftTag: '新线团',
+    draftEmptyTitle: '这是手机新建的线团',
+    draftEmptyHint:
+      '还不会去同步电脑历史。写好第一句（可带附件）再发送，才会在本机 Codex 里真正创建。',
     reloadHistory: '重新同步',
     removeAtt: '移除附件 {name}',
     attachAria: '添加附件',
