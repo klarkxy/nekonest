@@ -693,46 +693,21 @@ func (a *CodexAdapter) Steer(sessionID, text string) error {
 }
 
 // StartThread starts a native Codex thread in cwd via app-server.
+// Protocol (codex-cli 0.144.x): initialize → thread/start{cwd} → optional turn/start{threadId,input}.
 func (a *CodexAdapter) StartThread(cwd, firstPrompt string) (threadID string, err error) {
 	if a.appServer == nil || !a.appServer.Available() {
 		return "", fmt.Errorf("codex app-server unavailable for start_thread")
 	}
-	if err := a.appServer.Ensure(); err != nil {
-		return "", err
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	id, err := a.appServer.StartThread(ctx, cwd, firstPrompt)
+	if err != nil {
+		return id, err
 	}
-	// codex-cli 0.144.1 ClientRequest: thread/start
-	for _, method := range []string{"thread/start"} {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		raw, callErr := a.appServer.Call(ctx, method, map[string]any{
-			"cwd":    cwd,
-			"prompt": firstPrompt,
-			"input":  firstPrompt,
-			"text":   firstPrompt,
-		})
-		cancel()
-		if callErr != nil {
-			continue
-		}
-		var resp map[string]any
-		if json.Unmarshal(raw, &resp) == nil {
-			for _, k := range []string{"threadId", "thread_id", "id", "session_id"} {
-				if v, ok := resp[k].(string); ok && v != "" {
-					return v, nil
-				}
-				// nested thread object
-				if m, ok := resp["thread"].(map[string]any); ok {
-					if v, ok := m["id"].(string); ok && v != "" {
-						return v, nil
-					}
-				}
-			}
-		}
-		var s string
-		if json.Unmarshal(raw, &s) == nil && s != "" {
-			return s, nil
-		}
+	if id == "" {
+		return "", fmt.Errorf("thread/start returned empty id")
 	}
-	return "", fmt.Errorf("start_thread not supported by this codex app-server version")
+	return id, nil
 }
 
 // --- Codex-specific helpers ---

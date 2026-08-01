@@ -16,18 +16,19 @@ import (
 )
 
 // CodexAppServer is a long-lived stdio JSON-RPC client for `codex app-server`.
-// It is the v1 normative control path for approve/deny/interrupt/steer/start.
+// Protocol baseline: codex-cli 0.144.x (initialize → thread/start → turn/start).
 type CodexAppServer struct {
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	stdout   *bufio.Reader
-	cancel   context.CancelFunc
-	nextID   atomic.Int64
-	pending  map[string]chan rpcResult
-	running  bool
-	binPath  string
-	onNotify func(method string, params json.RawMessage)
+	mu          sync.Mutex
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	stdout      *bufio.Reader
+	cancel      context.CancelFunc
+	nextID      atomic.Int64
+	pending     map[string]chan rpcResult
+	running     bool
+	initialized bool
+	binPath     string
+	onNotify    func(method string, params json.RawMessage)
 }
 
 type rpcResult struct {
@@ -57,17 +58,26 @@ func (c *CodexAppServer) Available() bool {
 	cmd := exec.CommandContext(ctx, c.binPath, "app-server", "--help")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return false
+		// Help may exit non-zero on some builds; still accept recognizable text.
+		s := strings.ToLower(string(out))
+		return strings.Contains(s, "app-server") || strings.Contains(s, "generate-json-schema")
 	}
 	s := strings.ToLower(string(out))
-	return strings.Contains(s, "app-server") || strings.Contains(s, "json") || cmd.ProcessState != nil
+	return strings.Contains(s, "app-server") || strings.Contains(s, "json")
 }
 
-// Ensure starts the app-server process if not already running.
+// Ensure starts the app-server process and completes initialize handshake.
 func (c *CodexAppServer) Ensure() error {
+	if err := c.ensureProcess(); err != nil {
+		return err
+	}
+	return c.ensureInitialized()
+}
+
+func (c *CodexAppServer) ensureProcess() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.running {
+		c.mu.Unlock()
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,16 +85,19 @@ func (c *CodexAppServer) Ensure() error {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
+		c.mu.Unlock()
 		return err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
+		c.mu.Unlock()
 		return err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		cancel()
+		c.mu.Unlock()
 		return fmt.Errorf("start codex app-server: %w", err)
 	}
 	c.cmd = cmd
@@ -92,12 +105,14 @@ func (c *CodexAppServer) Ensure() error {
 	c.stdout = bufio.NewReader(stdout)
 	c.cancel = cancel
 	c.running = true
+	c.initialized = false
 	c.pending = make(map[string]chan rpcResult)
 	go c.readLoop()
 	go func() {
 		_ = cmd.Wait()
 		c.mu.Lock()
 		c.running = false
+		c.initialized = false
 		for id, ch := range c.pending {
 			ch <- rpcResult{Error: fmt.Errorf("app-server exited")}
 			close(ch)
@@ -106,6 +121,34 @@ func (c *CodexAppServer) Ensure() error {
 		c.mu.Unlock()
 	}()
 	log.Printf("[codex-app-server] started pid=%d", cmd.Process.Pid)
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *CodexAppServer) ensureInitialized() error {
+	c.mu.Lock()
+	if c.initialized {
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err := c.callLocked(ctx, "initialize", map[string]any{
+		"clientInfo": map[string]any{
+			"name":    "nekonest-daemon",
+			"title":   "NekoNest",
+			"version": "0.1.0",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("codex app-server initialize: %w", err)
+	}
+	c.mu.Lock()
+	c.initialized = true
+	c.mu.Unlock()
+	log.Printf("[codex-app-server] initialized")
 	return nil
 }
 
@@ -126,6 +169,7 @@ func (c *CodexAppServer) Close() error {
 		_ = c.cmd.Process.Kill()
 	}
 	c.running = false
+	c.initialized = false
 	return nil
 }
 
@@ -134,12 +178,21 @@ func (c *CodexAppServer) Call(ctx context.Context, method string, params any) (j
 	if err := c.Ensure(); err != nil {
 		return nil, err
 	}
-	id := fmt.Sprintf("%d", c.nextID.Add(1))
+	return c.callLocked(ctx, method, params)
+}
+
+// callLocked sends one RPC without re-entering Ensure (used by initialize).
+func (c *CodexAppServer) callLocked(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	idNum := c.nextID.Add(1)
+	id := fmt.Sprintf("%d", idNum)
 	req := map[string]any{
 		"jsonrpc": "2.0",
-		"id":      id,
+		"id":      idNum, // numeric id preferred by many JSON-RPC servers
 		"method":  method,
 		"params":  params,
+	}
+	if params == nil {
+		req["params"] = map[string]any{}
 	}
 	ch := make(chan rpcResult, 1)
 	c.mu.Lock()
@@ -173,12 +226,81 @@ func (c *CodexAppServer) Call(ctx context.Context, method string, params any) (j
 	}
 }
 
-// TryCall probes a method; returns false if method missing or transport fails.
-func (c *CodexAppServer) TryCall(method string, params any) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err := c.Call(ctx, method, params)
-	return err == nil
+// StartThread creates a native Codex thread in cwd (thread/start).
+// If firstPrompt is non-empty, also issues turn/start with that text.
+// Returns the wire session/thread id preferred for discovery ownership.
+func (c *CodexAppServer) StartThread(ctx context.Context, cwd, firstPrompt string) (threadID string, err error) {
+	if err := c.Ensure(); err != nil {
+		return "", err
+	}
+	params := map[string]any{}
+	if strings.TrimSpace(cwd) != "" {
+		params["cwd"] = cwd
+	}
+	raw, err := c.Call(ctx, "thread/start", params)
+	if err != nil {
+		return "", fmt.Errorf("thread/start: %w", err)
+	}
+	id, sessionID := parseThreadStartResponse(raw)
+	if id == "" && sessionID == "" {
+		return "", fmt.Errorf("thread/start: empty thread id in response: %s", truncateRPC(raw, 240))
+	}
+	// Prefer sessionId for native store ownership when present.
+	out := sessionID
+	if out == "" {
+		out = id
+	}
+
+	prompt := strings.TrimSpace(firstPrompt)
+	if prompt != "" {
+		turnParams := map[string]any{
+			"threadId": id,
+			"input": []map[string]any{
+				{"type": "text", "text": prompt},
+			},
+		}
+		// Use thread id from response (not sessionId) for turn/start.
+		if id == "" {
+			turnParams["threadId"] = out
+		}
+		if _, turnErr := c.Call(ctx, "turn/start", turnParams); turnErr != nil {
+			// Thread exists; surface turn error but still return the id so the
+			// phone can open the empty native thread.
+			log.Printf("[codex-app-server] turn/start after thread/start: %v", turnErr)
+			return out, fmt.Errorf("thread created (%s) but turn/start failed: %w", out, turnErr)
+		}
+	}
+	return out, nil
+}
+
+func parseThreadStartResponse(raw json.RawMessage) (threadID, sessionID string) {
+	var resp struct {
+		Thread *struct {
+			ID        string `json:"id"`
+			SessionID string `json:"sessionId"`
+		} `json:"thread"`
+		ID        string `json:"id"`
+		ThreadID  string `json:"threadId"`
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", ""
+	}
+	if resp.Thread != nil {
+		return resp.Thread.ID, resp.Thread.SessionID
+	}
+	if resp.ThreadID != "" {
+		return resp.ThreadID, resp.SessionID
+	}
+	return resp.ID, resp.SessionID
+}
+
+func truncateRPC(raw json.RawMessage, n int) string {
+	s := string(raw)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 func (c *CodexAppServer) readLoop() {
@@ -204,11 +326,13 @@ func (c *CodexAppServer) readLoop() {
 			Params json.RawMessage `json:"params"`
 			Result json.RawMessage `json:"result"`
 			Error  *struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
+				Code    int             `json:"code"`
+				Message string          `json:"message"`
+				Data    json.RawMessage `json:"data"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(line, &msg); err != nil {
+			log.Printf("[codex-app-server] skip non-json line: %s", truncateRPC(line, 120))
 			continue
 		}
 		// Notification (no id)
@@ -239,7 +363,11 @@ func (c *CodexAppServer) readLoop() {
 			continue
 		}
 		if msg.Error != nil {
-			ch <- rpcResult{Error: fmt.Errorf("rpc %d: %s", msg.Error.Code, msg.Error.Message)}
+			detail := msg.Error.Message
+			if len(msg.Error.Data) > 0 {
+				detail = detail + " " + truncateRPC(msg.Error.Data, 200)
+			}
+			ch <- rpcResult{Error: fmt.Errorf("rpc %d: %s", msg.Error.Code, detail)}
 		} else {
 			ch <- rpcResult{Result: msg.Result}
 		}
@@ -251,9 +379,7 @@ func bytesTrimSpace(b []byte) []byte {
 	return []byte(strings.TrimSpace(string(b)))
 }
 
-// ProbeMethods returns which control methods appear to exist.
-// Method names follow codex app-server JSON schema generations; unknown
-// methods simply report false without failing the process.
+// ProbeMethods reports app-server readiness after initialize.
 func (c *CodexAppServer) ProbeMethods() map[string]bool {
 	out := map[string]bool{
 		"available": c.Available(),
@@ -261,12 +387,16 @@ func (c *CodexAppServer) ProbeMethods() map[string]bool {
 	if !out["available"] {
 		return out
 	}
-	// Soft probe: ensure process starts. Specific method names are version-dependent;
-	// doctor/startup logs capabilities after experimental schema generation when present.
 	if err := c.Ensure(); err != nil {
 		out["ensure"] = false
+		out["initialize"] = false
+		log.Printf("[codex-app-server] probe ensure: %v", err)
 		return out
 	}
 	out["ensure"] = true
+	out["initialize"] = true
+	// Soft probe thread/start with ephemeral empty cwd is too heavy; mark method known.
+	out["thread/start"] = true
+	out["turn/start"] = true
 	return out
 }
