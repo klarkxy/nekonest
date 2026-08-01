@@ -226,12 +226,27 @@ func (c *CodexAppServer) callLocked(ctx context.Context, method string, params a
 	}
 }
 
+// StartThreadResult is the dual-id outcome of thread/start.
+type StartThreadResult struct {
+	ThreadID  string // app-server thread id (turn/start)
+	SessionID string // native store / session_meta id when distinct
+	Raw       json.RawMessage
+}
+
+// WireID prefers the id used in Codex rollout ownership (sessionId, else threadId).
+func (r StartThreadResult) WireID() string {
+	if strings.TrimSpace(r.SessionID) != "" {
+		return r.SessionID
+	}
+	return r.ThreadID
+}
+
 // StartThread creates a native Codex thread in cwd (thread/start).
 // If firstPrompt is non-empty, also issues turn/start with that text.
-// Returns the wire session/thread id preferred for discovery ownership.
-func (c *CodexAppServer) StartThread(ctx context.Context, cwd, firstPrompt string) (threadID string, err error) {
+func (c *CodexAppServer) StartThread(ctx context.Context, cwd, firstPrompt string) (StartThreadResult, error) {
+	var out StartThreadResult
 	if err := c.Ensure(); err != nil {
-		return "", err
+		return out, err
 	}
 	params := map[string]any{}
 	if strings.TrimSpace(cwd) != "" {
@@ -239,35 +254,31 @@ func (c *CodexAppServer) StartThread(ctx context.Context, cwd, firstPrompt strin
 	}
 	raw, err := c.Call(ctx, "thread/start", params)
 	if err != nil {
-		return "", fmt.Errorf("thread/start: %w", err)
+		return out, fmt.Errorf("thread/start: %w", err)
 	}
-	id, sessionID := parseThreadStartResponse(raw)
-	if id == "" && sessionID == "" {
-		return "", fmt.Errorf("thread/start: empty thread id in response: %s", truncateRPC(raw, 240))
+	out.Raw = raw
+	out.ThreadID, out.SessionID = parseThreadStartResponse(raw)
+	if out.ThreadID == "" && out.SessionID == "" {
+		return out, fmt.Errorf("thread/start: empty thread id in response: %s", truncateRPC(raw, 240))
 	}
-	// Prefer sessionId for native store ownership when present.
-	out := sessionID
-	if out == "" {
-		out = id
-	}
+	log.Printf("[codex-app-server] thread/start threadId=%s sessionId=%s cwd=%s", out.ThreadID, out.SessionID, cwd)
 
 	prompt := strings.TrimSpace(firstPrompt)
 	if prompt != "" {
+		turnThread := out.ThreadID
+		if turnThread == "" {
+			turnThread = out.SessionID
+		}
 		turnParams := map[string]any{
-			"threadId": id,
+			"threadId": turnThread,
 			"input": []map[string]any{
 				{"type": "text", "text": prompt},
 			},
 		}
-		// Use thread id from response (not sessionId) for turn/start.
-		if id == "" {
-			turnParams["threadId"] = out
-		}
 		if _, turnErr := c.Call(ctx, "turn/start", turnParams); turnErr != nil {
-			// Thread exists; surface turn error but still return the id so the
-			// phone can open the empty native thread.
+			// Thread exists; still return ids so ownership can settle.
 			log.Printf("[codex-app-server] turn/start after thread/start: %v", turnErr)
-			return out, fmt.Errorf("thread created (%s) but turn/start failed: %w", out, turnErr)
+			return out, fmt.Errorf("thread created (%s) but turn/start failed: %w", out.WireID(), turnErr)
 		}
 	}
 	return out, nil

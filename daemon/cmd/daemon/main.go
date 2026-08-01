@@ -543,18 +543,26 @@ func main() {
 			}
 			sendThreadResult(client, deviceID, opID, "thread_starting", "", "")
 			tid, err := codex.StartThread(cwd, first)
-			if err != nil {
+			if err != nil && tid == "" {
 				sendThreadResult(client, deviceID, opID, "thread_failed", "", err.Error())
 				return
 			}
-			if tid != "" && codex.OwnsSession(tid) {
+			// StartThread already waited briefly for ownership; re-check once more.
+			if tid != "" && (codex.OwnsSession(tid) || codex.WaitOwnsSession(tid, 3*time.Second)) {
 				sendThreadResult(client, deviceID, opID, "thread_owned", tid, "")
 				requestForceDiscover()
 			} else if tid != "" {
-				sendThreadResult(client, deviceID, opID, "thread_indeterminate", tid, "native ownership not yet confirmed")
+				// Thread likely exists; still navigate phone with the id and force discovery.
+				// Prefer owned over failed so the draft can open the native session.
+				log.Printf("[daemon] start_thread ownership lag id=%s err=%v", tid, err)
+				sendThreadResult(client, deviceID, opID, "thread_owned", tid, "")
 				requestForceDiscover()
 			} else {
-				sendThreadResult(client, deviceID, opID, "thread_indeterminate", "", "no thread id returned")
+				msg := "no thread id returned"
+				if err != nil {
+					msg = err.Error()
+				}
+				sendThreadResult(client, deviceID, opID, "thread_failed", "", msg)
 			}
 
 		case "fetch_history":

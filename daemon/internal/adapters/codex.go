@@ -140,6 +140,58 @@ func (a *CodexAdapter) OwnsSession(sessionID string) bool {
 	return a.resolveSessionPath(sessionID) != ""
 }
 
+// WaitOwnsSession polls the rollout store until sessionID is visible or timeout.
+// Fresh thread/start results often need a brief flush delay before jsonl appears.
+func (a *CodexAdapter) WaitOwnsSession(sessionID string, timeout time.Duration) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	if timeout <= 0 {
+		timeout = 8 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if a.OwnsSession(sessionID) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// PreferOwnedID returns the first candidate that OwnsSession reports true for,
+// waiting briefly so newly created rollouts can flush to disk.
+func (a *CodexAdapter) PreferOwnedID(candidates ...string) (string, bool) {
+	var cleaned []string
+	seen := map[string]bool{}
+	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		cleaned = append(cleaned, c)
+	}
+	if len(cleaned) == 0 {
+		return "", false
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		for _, c := range cleaned {
+			if a.OwnsSession(c) {
+				return c, true
+			}
+		}
+		if time.Now().After(deadline) {
+			return cleaned[0], false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 // FetchHistory imports last N chat turns from the rollout file.
 func (a *CodexAdapter) FetchHistory(sessionID string, limit int) ([]*HistoryMessage, error) {
 	limit = clampHistoryLimit(limit)
@@ -233,9 +285,21 @@ func (a *CodexAdapter) resolveSessionPath(sessionID string) string {
 		if !strings.HasPrefix(info.Name(), "rollout-") || !strings.HasSuffix(info.Name(), ".jsonl") {
 			return nil
 		}
-		id := codexSessionIDFromFilename(info.Name())
-		// Exact id match only — path substring matches empty/short IDs incorrectly.
-		if id == "" || id != sessionID {
+		fileID := codexSessionIDFromFilename(info.Name())
+		// Fast path: filename suffix matches (common rollout naming).
+		if fileID == sessionID {
+			session, parseErr := a.parseRolloutFile(path, info)
+			if parseErr == nil && session != nil && session.ID == sessionID {
+				if found == "" || info.ModTime().After(foundTime) {
+					found = path
+					foundTime = info.ModTime()
+				}
+				return nil
+			}
+		}
+		// Slow path: payload id/session_id may differ from filename suffix
+		// (app-server thread id vs session id). Only open recent candidates.
+		if info.ModTime().Before(time.Now().Add(-2 * time.Minute)) {
 			return nil
 		}
 		session, parseErr := a.parseRolloutFile(path, info)
@@ -694,20 +758,32 @@ func (a *CodexAdapter) Steer(sessionID, text string) error {
 
 // StartThread starts a native Codex thread in cwd via app-server.
 // Protocol (codex-cli 0.144.x): initialize → thread/start{cwd} → optional turn/start{threadId,input}.
+// Returns the best wire id for phone navigation after waiting for native store ownership.
 func (a *CodexAdapter) StartThread(cwd, firstPrompt string) (threadID string, err error) {
 	if a.appServer == nil || !a.appServer.Available() {
 		return "", fmt.Errorf("codex app-server unavailable for start_thread")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	id, err := a.appServer.StartThread(ctx, cwd, firstPrompt)
+	res, err := a.appServer.StartThread(ctx, cwd, firstPrompt)
+	// Even when turn/start fails, a thread id may already exist.
+	wire := res.WireID()
+	if wire == "" && err != nil {
+		return "", err
+	}
+	if owned, ok := a.PreferOwnedID(res.SessionID, res.ThreadID, wire); ok {
+		if err != nil {
+			// Owned but turn failed — still succeed create; surface turn error as non-fatal log.
+			log.Printf("[codex] start owned=%s turn warning: %v", owned, err)
+			return owned, nil
+		}
+		return owned, nil
+	}
 	if err != nil {
-		return id, err
+		return wire, err
 	}
-	if id == "" {
-		return "", fmt.Errorf("thread/start returned empty id")
-	}
-	return id, nil
+	// Not yet visible in rollout store; return best candidate for indeterminate handling.
+	return wire, nil
 }
 
 // --- Codex-specific helpers ---

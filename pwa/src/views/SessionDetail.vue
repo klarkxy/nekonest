@@ -778,12 +778,13 @@ async function handleSend() {
         }, 200)
       })
     const result = await waitOwned()
-    if (result.status !== 'owned' || !result.sessionId) {
+    // Accept owned, or indeterminate-with-id (daemon may still hand a usable native id).
+    const realId = (result.sessionId || '').trim()
+    if ((result.status !== 'owned' && result.status !== 'indeterminate') || !realId) {
       sessionStore.lastError = result.error || t('deviceDetail.startCodexFailed')
       sending.value = false
       return
     }
-    const realId = result.sessionId
     // Move input draft key to real session id.
     draftStore.set(did, realId, prompt, pendingAtts.value)
     draftStore.clear(did, draftSid)
