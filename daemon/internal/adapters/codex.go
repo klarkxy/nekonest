@@ -19,6 +19,8 @@ import (
 
 var errCodexSubagentRollout = errors.New("codex subagent rollout")
 
+const codexOrphanTaskTimeout = 2 * time.Minute
+
 // CodexAdapter discovers and monitors Codex sessions.
 type CodexAdapter struct {
 	sessionsDir string
@@ -27,26 +29,75 @@ type CodexAdapter struct {
 	lastPaths   map[string]string
 	commander   *agentexec.CodexCommander
 	appServer   *agentexec.CodexAppServer
+	outputMu    sync.Mutex
+	outputSink  OutputSink
+	appOutput   map[string]string
 }
 
 // NewCodexAdapter creates a new Codex adapter.
 func NewCodexAdapter() *CodexAdapter {
 	home, _ := os.UserHomeDir()
-	return &CodexAdapter{
+	adapter := &CodexAdapter{
 		sessionsDir: filepath.Join(home, ".codex", "sessions"),
 		watchers:    make(map[string]*fsnotify.Watcher),
 		lastPaths:   make(map[string]string),
 		commander:   agentexec.NewCodexCommander(),
 		appServer:   agentexec.NewCodexAppServer(),
+		appOutput:   make(map[string]string),
 	}
+	adapter.appServer.SetNotifyHandler(adapter.handleAppServerNotification)
+	return adapter
 }
 
-// AppServerHealthy reports whether codex app-server is usable for full control.
+// AppServerHealthy reports whether codex app-server completed initialize and is usable.
 func (a *CodexAdapter) AppServerHealthy() bool {
 	if a.appServer == nil {
 		return false
 	}
-	return a.appServer.Available()
+	if a.appServer.Initialized() {
+		return true
+	}
+	// Best-effort warm-up; failure keeps capabilities on exec-resume defaults.
+	if err := a.appServer.Ensure(); err != nil {
+		return false
+	}
+	return a.appServer.Initialized()
+}
+
+// ApplyAppServerOverlay merges live app-server turn/approval state onto a discovered session.
+func (a *CodexAdapter) ApplyAppServerOverlay(s *SessionInfo) {
+	if s == nil || a.appServer == nil || !a.appServer.Initialized() {
+		return
+	}
+	if snap := a.appServer.PendingApprovalFor(s.ID); snap != nil {
+		s.Status = StatusWaitingApproval
+		if snap.ToolName == "user_input" {
+			s.Status = StatusWaitingUser
+		}
+		s.PendingApproval = &ApprovalInfo{
+			ID:          snap.ID,
+			ToolName:    snap.ToolName,
+			Description: snap.Description,
+		}
+		return
+	}
+	if a.appServer.IsTurnActive(s.ID) && s.Status != StatusWaitingApproval && s.Status != StatusWaitingUser {
+		s.Status = StatusRunning
+		return
+	}
+	applyAppServerTerminalStatus(s, a.appServer.LastTurnStatus(s.ID))
+}
+
+func applyAppServerTerminalStatus(s *SessionInfo, status string) {
+	if s == nil {
+		return
+	}
+	switch strings.ToLower(status) {
+	case "completed", "interrupted", "cancelled", "canceled":
+		s.Status = StatusIdle
+	case "failed":
+		s.Status = StatusError
+	}
 }
 
 func (a *CodexAdapter) Name() string { return "codex" }
@@ -335,6 +386,7 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 	var msgCount int
 	var isWaiting bool
 	var taskInFlight bool
+	var taskStartedAt time.Time
 	var pendingApproval *ApprovalInfo
 	var projectDir string
 	sessionID := codexSessionIDFromFilename(filepath.Base(path))
@@ -351,8 +403,9 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 		}
 
 		msgCount++
-		if t := parseCodexTimestamp(msg["timestamp"]); !t.IsZero() {
-			lastTime = t
+		eventTime := parseCodexTimestamp(msg["timestamp"])
+		if !eventTime.IsZero() {
+			lastTime = eventTime
 		}
 
 		eventType, _ := msg["type"].(string)
@@ -397,11 +450,18 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 			case pType == "task_started":
 				// Positive running signal from Codex event stream.
 				taskInFlight = true
+				taskStartedAt = eventTime
 			case pType == "task_complete":
 				taskInFlight = false
+				taskStartedAt = time.Time{}
 				if m, _ := payload["last_agent_message"].(string); m != "" {
 					lastMessage = truncate(m, 120)
 				}
+			case pType == "turn_aborted":
+				taskInFlight = false
+				taskStartedAt = time.Time{}
+				isWaiting = false
+				pendingApproval = nil
 			case pType == "message":
 				role, _ := payload["role"].(string)
 				if role == "assistant" {
@@ -477,12 +537,19 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 
 	// Status must not be inferred from "recent file mtime alone" — completed
 	// turns leave a fresh task_complete and would otherwise stay running forever.
+	commanderRunning := a.commander != nil && a.commander.IsSessionRunning(sessionID)
+	if taskInFlight && !taskStartedAt.IsZero() && time.Since(taskStartedAt) > codexOrphanTaskTimeout && !commanderRunning {
+		// A killed app-server can leave task_started as the last native event.
+		// Current app-server activity is overlaid after discovery; do not keep a
+		// stale orphan record running forever after daemon/app-server restart.
+		taskInFlight = false
+	}
 	status := StatusIdle
 	if isWaiting {
 		status = StatusWaitingApproval
 	} else if taskInFlight {
 		status = StatusRunning
-	} else if a.commander != nil && a.commander.IsSessionRunning(sessionID) {
+	} else if commanderRunning {
 		status = StatusRunning
 	}
 
@@ -647,6 +714,34 @@ func (a *CodexAdapter) Watch(sessionID string) (<-chan *SessionInfo, error) {
 }
 
 func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error {
+	if a.appServer != nil && a.AppServerHealthy() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		// Prefer app-server turns when healthy so approvals/steer/interrupt share one control plane.
+		if _, _, err := a.appServer.ResumeThread(ctx, sessionID); err != nil {
+			log.Printf("[codex] thread/resume before turn/start: %v", err)
+		}
+		a.appServer.RegisterThreadIDs(sessionID, sessionID, sessionID)
+		if _, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments); err != nil {
+			// Fall back to exec resume rather than dropping the user prompt.
+			log.Printf("[codex] app-server turn/start failed, falling back to exec resume: %v", err)
+		} else {
+			// app-server has no process-exit hook; release temp attachments after a short grace
+			// so localImage paths remain readable while the turn begins.
+			if request.OnComplete != nil {
+				done := request.OnComplete
+				if len(request.Attachments) == 0 {
+					done()
+				} else {
+					go func() {
+						time.Sleep(30 * time.Second)
+						done()
+					}()
+				}
+			}
+			return nil
+		}
+	}
 	if !a.commander.IsAvailable() {
 		return fmt.Errorf("codex CLI not found in PATH")
 	}
@@ -659,27 +754,16 @@ func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error
 }
 
 func (a *CodexAdapter) Approve(sessionID string, approvalID string) error {
-	// Prefer app-server when available (v1 full-control path).
-	if a.appServer != nil && a.appServer.Available() {
-		if err := a.appServer.Ensure(); err == nil {
-			// Approvals are typically server→client requests; responses use decision
-			// payloads. Try documented client methods then fall back to exec path.
-			for _, method := range []string{
-				"thread/approveGuardianDeniedAction",
-				"approval/respond",
-				"respondToApproval",
-			} {
-				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-				_, err := a.appServer.Call(ctx, method, map[string]any{
-					"threadId":    sessionID,
-					"thread_id":   sessionID,
-					"approvalId":  approvalID,
-					"approval_id": approvalID,
-					"decision":    "accept",
-					"approved":    true,
-				})
-				cancel()
-				if err == nil {
+	if a.appServer != nil && a.appServer.Initialized() {
+		if a.appServer.HasPendingApproval(approvalID) || a.appServer.PendingApprovalFor(sessionID) != nil {
+			if err := a.appServer.ApprovePending(approvalID); err == nil {
+				return nil
+			} else if a.appServer.HasPendingApproval(approvalID) {
+				return err
+			}
+			// Try session's current pending id when phone still has a stale id.
+			if snap := a.appServer.PendingApprovalFor(sessionID); snap != nil {
+				if err := a.appServer.ApprovePending(snap.ID); err == nil {
 					return nil
 				}
 			}
@@ -689,23 +773,15 @@ func (a *CodexAdapter) Approve(sessionID string, approvalID string) error {
 }
 
 func (a *CodexAdapter) Deny(sessionID string, approvalID string) error {
-	if a.appServer != nil && a.appServer.Available() {
-		if err := a.appServer.Ensure(); err == nil {
-			for _, method := range []string{
-				"approval/respond",
-				"respondToApproval",
-			} {
-				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-				_, err := a.appServer.Call(ctx, method, map[string]any{
-					"threadId":    sessionID,
-					"thread_id":   sessionID,
-					"approvalId":  approvalID,
-					"approval_id": approvalID,
-					"decision":    "decline",
-					"approved":    false,
-				})
-				cancel()
-				if err == nil {
+	if a.appServer != nil && a.appServer.Initialized() {
+		if a.appServer.HasPendingApproval(approvalID) || a.appServer.PendingApprovalFor(sessionID) != nil {
+			if err := a.appServer.DenyPending(approvalID); err == nil {
+				return nil
+			} else if a.appServer.HasPendingApproval(approvalID) {
+				return err
+			}
+			if snap := a.appServer.PendingApprovalFor(sessionID); snap != nil {
+				if err := a.appServer.DenyPending(snap.ID); err == nil {
 					return nil
 				}
 			}
@@ -715,54 +791,26 @@ func (a *CodexAdapter) Deny(sessionID string, approvalID string) error {
 }
 
 func (a *CodexAdapter) Interrupt(sessionID string) error {
-	if a.appServer != nil && a.appServer.Available() {
-		if err := a.appServer.Ensure(); err == nil {
-			// codex-cli 0.144.1 ClientRequest: turn/interrupt
-			for _, method := range []string{
-				"turn/interrupt",
-				"thread/interrupt",
-			} {
-				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-				_, err := a.appServer.Call(ctx, method, map[string]any{
-					"threadId":   sessionID,
-					"thread_id":  sessionID,
-					"session_id": sessionID,
-				})
-				cancel()
-				if err == nil {
-					return nil
-				}
-			}
+	if a.appServer != nil && a.AppServerHealthy() {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		err := a.appServer.InterruptTurn(ctx, sessionID)
+		cancel()
+		if err == nil {
+			return nil
 		}
+		log.Printf("[codex] app-server interrupt: %v", err)
 	}
 	return a.commander.Interrupt(sessionID)
 }
 
 // Steer sends a mid-turn correction via app-server when available.
 func (a *CodexAdapter) Steer(sessionID, text string) error {
-	if a.appServer == nil || !a.appServer.Available() {
+	if a.appServer == nil || !a.AppServerHealthy() {
 		return fmt.Errorf("codex app-server unavailable for steer")
 	}
-	if err := a.appServer.Ensure(); err != nil {
-		return err
-	}
-	// codex-cli 0.144.1 ClientRequest: turn/steer
-	for _, method := range []string{"turn/steer", "thread/steer"} {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		_, err := a.appServer.Call(ctx, method, map[string]any{
-			"threadId":   sessionID,
-			"thread_id":  sessionID,
-			"session_id": sessionID,
-			"text":       text,
-			"input":      text,
-			"prompt":     text,
-		})
-		cancel()
-		if err == nil {
-			return nil
-		}
-	}
-	return fmt.Errorf("steer not supported by this codex app-server version")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return a.appServer.SteerTurn(ctx, sessionID, text)
 }
 
 // StartThread starts a native Codex thread in cwd via app-server.
@@ -836,21 +884,74 @@ func (a *CodexAdapter) GetCommander() *agentexec.CodexCommander {
 	return a.commander
 }
 
-// SetOutputSink normalizes Codex commander output for the daemon registry.
+// SetOutputSink normalizes Codex commander and app-server output for the daemon registry.
 func (a *CodexAdapter) SetOutputSink(sink OutputSink) {
+	a.outputMu.Lock()
+	a.outputSink = sink
+	if sink == nil {
+		a.appOutput = make(map[string]string)
+	}
+	a.outputMu.Unlock()
+
 	if a.commander == nil {
 		return
 	}
 	if sink == nil {
 		a.commander.OnAgentOutput = nil
+	} else {
+		a.commander.OnAgentOutput = func(sessionID, msgType, content string) {
+			a.emitOutput(OutputEvent{
+				SessionID: sessionID,
+				AgentType: AgentCodex,
+				Type:      msgType,
+				Content:   content,
+			})
+		}
+	}
+}
+
+func (a *CodexAdapter) handleAppServerNotification(method string, params json.RawMessage) {
+	event, ok := agentexec.ParseAppServerOutputNotification(method, params)
+	if !ok || a.appServer == nil {
 		return
 	}
-	a.commander.OnAgentOutput = func(sessionID, msgType, content string) {
-		sink(OutputEvent{
-			SessionID: sessionID,
-			AgentType: AgentCodex,
-			Type:      msgType,
-			Content:   content,
-		})
+	sessionID := a.appServer.WireIDForThread(event.ThreadID)
+	if sessionID == "" {
+		return
+	}
+	key := event.ThreadID + "\x00" + event.MessageID
+
+	a.outputMu.Lock()
+	content := event.Content
+	if event.Delta {
+		content = a.appOutput[key] + event.Content
+		a.appOutput[key] = content
+	} else if event.Final {
+		if content == "" {
+			content = a.appOutput[key]
+		}
+		delete(a.appOutput, key)
+	}
+	sink := a.outputSink
+	a.outputMu.Unlock()
+
+	if sink == nil || content == "" {
+		return
+	}
+	sink(OutputEvent{
+		SessionID: sessionID,
+		AgentType: AgentCodex,
+		Type:      event.Type,
+		Content:   content,
+		MessageID: event.MessageID,
+	})
+}
+
+func (a *CodexAdapter) emitOutput(event OutputEvent) {
+	a.outputMu.Lock()
+	sink := a.outputSink
+	a.outputMu.Unlock()
+	if sink != nil {
+		sink(event)
 	}
 }

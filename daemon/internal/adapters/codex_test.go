@@ -8,6 +8,139 @@ import (
 	"time"
 )
 
+func TestCodexAppServerOutputSinkAccumulatesStableMessage(t *testing.T) {
+	adapter := NewCodexAdapter()
+	adapter.appServer.RegisterThreadIDs("thread-1", "session-1", "wire-1")
+	var events []OutputEvent
+	adapter.SetOutputSink(func(event OutputEvent) {
+		events = append(events, event)
+	})
+
+	adapter.handleAppServerNotification(
+		"item/agentMessage/delta",
+		json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"hel"}`),
+	)
+	adapter.handleAppServerNotification(
+		"item/agentMessage/delta",
+		json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"lo"}`),
+	)
+	adapter.handleAppServerNotification(
+		"item/completed",
+		json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"hello"}}`),
+	)
+
+	if len(events) != 3 {
+		t.Fatalf("events=%#v", events)
+	}
+	for _, event := range events {
+		if event.SessionID != "wire-1" || event.AgentType != AgentCodex || event.Type != "assistant" || event.MessageID != "item-1" {
+			t.Fatalf("event=%#v", event)
+		}
+	}
+	if events[0].Content != "hel" || events[1].Content != "hello" || events[2].Content != "hello" {
+		t.Fatalf("events=%#v", events)
+	}
+}
+
+func TestApplyAppServerTerminalStatus(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		want   AgentStatus
+	}{
+		{status: "completed", want: StatusIdle},
+		{status: "interrupted", want: StatusIdle},
+		{status: "failed", want: StatusError},
+		{status: "inProgress", want: StatusRunning},
+	} {
+		session := &SessionInfo{Status: StatusRunning}
+		applyAppServerTerminalStatus(session, test.status)
+		if session.Status != test.want {
+			t.Fatalf("status %q produced %q, want %q", test.status, session.Status, test.want)
+		}
+	}
+}
+
+func TestCodexTurnAbortedClearsRunningStatus(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "019fbd16-6879-7c31-9051-888f4751859a"
+	path := writeCodexRollout(t, dir, sessionID, map[string]interface{}{
+		"thread_source": "user",
+		"source":        "appServer",
+		"cwd":           `D:\nekonest`,
+	})
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder := json.NewEncoder(file)
+	for _, payload := range []map[string]interface{}{
+		{"type": "task_started"},
+		{"type": "approval_request", "tool_name": "command", "description": "sleep"},
+		{"type": "turn_aborted", "turn_id": "turn-1", "reason": "interrupted"},
+	} {
+		if err := encoder.Encode(map[string]interface{}{
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"type":      "event_msg",
+			"payload":   payload,
+		}); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewCodexAdapter()
+	session, err := adapter.parseRolloutFile(path, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != StatusIdle || session.PendingApproval != nil {
+		t.Fatalf("aborted session status=%q pending=%#v", session.Status, session.PendingApproval)
+	}
+}
+
+func TestCodexStaleTaskStartedReturnsIdle(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "019fbd3e-41a9-7771-86f7-be462ff76824"
+	path := writeCodexRollout(t, dir, sessionID, map[string]interface{}{
+		"thread_source": "user",
+		"source":        "appServer",
+		"cwd":           `D:\nekonest`,
+	})
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(file).Encode(map[string]interface{}{
+		"timestamp": time.Now().UTC().Add(-3 * time.Minute).Format(time.RFC3339Nano),
+		"type":      "event_msg",
+		"payload":   map[string]interface{}{"type": "task_started", "turn_id": "turn-stale"},
+	}); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewCodexAdapter()
+	session, err := adapter.parseRolloutFile(path, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != StatusIdle {
+		t.Fatalf("stale task status=%q", session.Status)
+	}
+}
+
 func writeCodexRollout(t *testing.T, dir, id string, meta map[string]interface{}) string {
 	t.Helper()
 	return writeCodexRolloutAt(t, dir, id, meta, time.Now().UTC())

@@ -885,7 +885,12 @@ export const useSessionStore = defineStore('sessions', () => {
     }
     const isCurrentSessionBusy =
       currentSession.value?.id === sessionId &&
-      (currentSession.value.status === 'running' || streaming.value)
+      (
+        currentSession.value.status === 'running' ||
+        currentSession.value.status === 'waiting_approval' ||
+        currentSession.value.status === 'waiting_user' ||
+        streaming.value
+      )
     if (isCurrentSessionBusy && nekoWS().isConnected()) {
       lastError.value = tGlobal('errors.busySend')
       return false
@@ -1004,6 +1009,24 @@ export const useSessionStore = defineStore('sessions', () => {
     return ok
   }
 
+  function steer(deviceId: string, sessionId: string, text: string): boolean {
+    lastError.value = null
+    const trimmed = text.trim()
+    if (!trimmed) {
+      lastError.value = tGlobal('errors.emptySteer')
+      return false
+    }
+    const ok = nekoWS().send({
+      type: 'steer',
+      device_id: deviceId,
+      session_id: sessionId,
+      timestamp: Math.floor(Date.now() / 1000),
+      payload: { text: trimmed }
+    })
+    if (!ok) lastError.value = tGlobal('errors.channelSteer')
+    return ok
+  }
+
   /** Pending Codex start_thread operations keyed by operation_id. */
   const startOps = ref<
     Record<
@@ -1110,7 +1133,7 @@ export const useSessionStore = defineStore('sessions', () => {
     sessions, currentSession, messages, loading, importing, streaming, lastError, wsStatus,
     startOps,
     subscribeDevice, setCurrentSession, clearMessages, requestNativeHistory,
-    sendPrompt, retryPrompt, approve, deny, interrupt, startThread, clearStartOp,
+    sendPrompt, retryPrompt, approve, deny, interrupt, steer, startThread, clearStartOp,
     isPending, cleanup
   }
 })

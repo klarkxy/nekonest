@@ -694,9 +694,11 @@ func main() {
 			}
 
 			// Stamp capabilities (Codex full-control when app-server healthy).
+			var codexApp *adapters.CodexAdapter
 			var codexAppHealthy bool
 			if a, ok := adapterRegistry.Get("codex"); ok {
 				if ca, ok := a.(*adapters.CodexAdapter); ok {
+					codexApp = ca
 					codexAppHealthy = ca.AppServerHealthy()
 				}
 			}
@@ -707,19 +709,23 @@ func main() {
 				if s.Capabilities == nil {
 					s.Capabilities = adapters.DefaultCapabilities(s.AgentType)
 				}
-				if s.AgentType == adapters.AgentCodex && codexAppHealthy {
-					s.Capabilities = &adapters.SessionCapabilities{
-						ControlMode:    adapters.ControlAppServer,
-						Approve:        true,
-						Deny:           true,
-						Interrupt:      true,
-						Steer:          true,
-						Spawn:          true,
-						AttachmentMode: adapters.AttachNativeImageAndFile,
+				if s.AgentType == adapters.AgentCodex {
+					if codexApp != nil {
+						codexApp.ApplyAppServerOverlay(s)
+					}
+					if codexAppHealthy {
+						s.Capabilities = &adapters.SessionCapabilities{
+							ControlMode:    adapters.ControlAppServer,
+							Approve:        true,
+							Deny:           true,
+							Interrupt:      true,
+							Steer:          true,
+							Spawn:          true,
+							AttachmentMode: adapters.AttachNativeImageAndFile,
+						}
 					}
 				}
 			}
-
 			// Check for changes
 			changed := force
 			sessionMu.Lock()
@@ -737,7 +743,7 @@ func main() {
 				} else {
 					for id, newS := range newSessions {
 						oldS, ok := lastSessions[id]
-						if !ok || oldS.Status != newS.Status || oldS.Summary != newS.Summary || oldS.ProjectDir != newS.ProjectDir {
+						if !ok || oldS.Status != newS.Status || oldS.Summary != newS.Summary || oldS.ProjectDir != newS.ProjectDir || pendingApprovalChanged(oldS, newS) || sessionCapabilitiesChanged(oldS, newS) {
 							changed = true
 							break
 						}
@@ -864,6 +870,38 @@ func projectLabel(dir string) string {
 		return dir[i+1:]
 	}
 	return dir
+}
+
+func pendingApprovalChanged(oldS, newS *adapters.SessionInfo) bool {
+	if oldS == nil || newS == nil {
+		return oldS != newS
+	}
+	o, n := oldS.PendingApproval, newS.PendingApproval
+	if o == nil && n == nil {
+		return false
+	}
+	if o == nil || n == nil {
+		return true
+	}
+	return o.ID != n.ID || o.ToolName != n.ToolName || o.Description != n.Description
+}
+
+func sessionCapabilitiesChanged(oldS, newS *adapters.SessionInfo) bool {
+	if oldS == nil || newS == nil {
+		return oldS != newS
+	}
+	oldCaps, newCaps := oldS.Capabilities, newS.Capabilities
+	if oldCaps == nil || newCaps == nil {
+		return oldCaps != newCaps
+	}
+	return oldCaps.ControlMode != newCaps.ControlMode ||
+		oldCaps.Approve != newCaps.Approve ||
+		oldCaps.Deny != newCaps.Deny ||
+		oldCaps.Interrupt != newCaps.Interrupt ||
+		oldCaps.Steer != newCaps.Steer ||
+		oldCaps.Queue != newCaps.Queue ||
+		oldCaps.Spawn != newCaps.Spawn ||
+		oldCaps.AttachmentMode != newCaps.AttachmentMode
 }
 
 // sessionsToWire converts internal discovery models into the public protocol shape

@@ -144,6 +144,56 @@ describe('session prompt outbox', () => {
     store.cleanup()
   })
 
+  it.each(['waiting_approval', 'waiting_user'] as const)(
+    'prevents a new prompt while the session is %s',
+    status => {
+      setConnected(true)
+      const store = useSessionStore()
+      store.subscribeDevice('device-a')
+      store.currentSession = {
+        id: 'session-a',
+        device_id: 'device-a',
+        agent_type: 'codex',
+        status,
+        summary: '',
+        last_activity: 0
+      }
+
+      expect(store.sendPrompt('device-a', 'session-a', 'do not overlap')).toBe(false)
+      expect(store.lastError).toBe(tGlobal('errors.busySend'))
+      expect(harness.sent).toHaveLength(0)
+      store.cleanup()
+    }
+  )
+
+  it('sends a trimmed steer command without adding it to the prompt outbox', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+
+    expect(store.steer('device-a', 'session-a', '  change direction  ')).toBe(true)
+    expect(harness.sent).toHaveLength(1)
+    expect(harness.sent[0]).toMatchObject({
+      type: 'steer',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      payload: { text: 'change direction' }
+    })
+    expect(store.messages).toHaveLength(0)
+    expect(persistedOutboxItems()).toHaveLength(0)
+    store.cleanup()
+  })
+
+  it('rejects an empty steer command before touching the channel', () => {
+    setConnected(true)
+    const store = useSessionStore()
+
+    expect(store.steer('device-a', 'session-a', '   ')).toBe(false)
+    expect(store.lastError).toBe(tGlobal('errors.emptySteer'))
+    expect(harness.sent).toHaveLength(0)
+    store.cleanup()
+  })
+
   it('still queues a prompt offline when the last known session status is running', () => {
     const store = useSessionStore()
     store.subscribeDevice('device-a')

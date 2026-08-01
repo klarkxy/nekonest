@@ -238,14 +238,14 @@
       <button type="button" class="error-dismiss" :aria-label="t('common.close')" @click="dismissErrors">×</button>
     </div>
 
-    <p v-if="sendBlocked" class="compose-status" role="status">
-      {{ t('session.sendBusyHint') }}
+    <p v-if="sendBlocked || steerMode" class="compose-status" role="status">
+      {{ steerMode ? t('session.steerHint') : t('session.sendBusyHint') }}
     </p>
 
     <div class="input-bar">
       <div
         class="attachment-picker"
-        :class="{ disabled: sending || uploading }"
+        :class="{ disabled: sending || uploading || steerMode }"
       >
         <span class="attachment-picker-icon" aria-hidden="true">＋</span>
         <input
@@ -255,8 +255,8 @@
           multiple
           accept="image/*,.txt,.md,.markdown,.pdf,.json,text/plain,text/markdown,application/pdf,application/json"
           :aria-label="t('session.attachAria')"
-          :disabled="sending || uploading"
-          :title="t('session.attachAria')"
+          :disabled="sending || uploading || steerMode"
+          :title="steerMode ? t('session.attachSteerUnavailable') : t('session.attachAria')"
           @change="onFileChange"
         />
       </div>
@@ -276,7 +276,7 @@
         class="send-btn"
         :aria-label="sendButtonLabel"
         @click="handleSend"
-        :disabled="sendBlocked || (!inputText.trim() && !pendingAtts.length) || sending || uploading"
+        :disabled="sendBlocked || (steerMode ? !inputText.trim() : (!inputText.trim() && !pendingAtts.length)) || sending || uploading"
         :loading="sending || uploading"
       >
         <template #icon>↑</template>
@@ -346,25 +346,46 @@ const threadActivity = computed(() => sessionActivityPresentation(
   sessionStore.streaming
 ))
 
-const sessionBusy = computed(
+const sessionRunning = computed(
   () => sessionStore.currentSession?.status === 'running' || sessionStore.streaming
 )
 
+const sessionAwaitingControl = computed(() => {
+  const status = sessionStore.currentSession?.status
+  return status === 'waiting_approval' || status === 'waiting_user' || !!sessionStore.currentSession?.pending_approval
+})
+
+const sessionBusy = computed(() => sessionRunning.value || sessionAwaitingControl.value)
+
+const sessionCaps = computed(() => sessionStore.currentSession?.capabilities)
+
+const steerSupported = computed(() => !!sessionCaps.value?.steer)
+
+const steerMode = computed(
+  () => sessionRunning.value && !sessionAwaitingControl.value && sessionStore.wsStatus === 'connected' && steerSupported.value && !isLocalDraft.value
+)
+
 const sendBlocked = computed(
-  () => sessionBusy.value && sessionStore.wsStatus === 'connected'
+  () => sessionBusy.value && sessionStore.wsStatus === 'connected' && !steerMode.value
 )
 
 const composerPlaceholder = computed(() =>
-  sendBlocked.value ? t('session.placeholderBusy') : t('session.placeholder')
+  steerMode.value
+    ? t('session.placeholderSteer')
+    : sendBlocked.value
+      ? t('session.placeholderBusy')
+      : t('session.placeholder')
 )
 
 const sendButtonLabel = computed(() =>
-  sendBlocked.value ? t('session.sendBlocked') : t('session.send')
+  steerMode.value
+    ? t('session.steer')
+    : sendBlocked.value
+      ? t('session.sendBlocked')
+      : t('session.send')
 )
 
 const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
-
-const sessionCaps = computed(() => sessionStore.currentSession?.capabilities)
 
 const interruptSupported = computed(() => {
   const c = sessionCaps.value
@@ -728,6 +749,17 @@ async function handleSend() {
   const mi = prompt.indexOf(mark)
   if (mi >= 0) {
     prompt = prompt.slice(0, mi).trim()
+  }
+  if (steerMode.value) {
+    if (!prompt || sending.value || uploading.value) return
+    sending.value = true
+    const ok = sessionStore.steer(deviceId.value, sessionId.value, prompt)
+    if (ok) {
+      inputText.value = ''
+      scheduleSaveDraft()
+    }
+    sending.value = false
+    return
   }
   if ((!prompt && !pendingAtts.value.length) || sending.value || uploading.value) return
   sending.value = true
