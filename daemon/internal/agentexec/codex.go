@@ -436,6 +436,14 @@ func (c *CodexCommander) Deny(sessionID, approvalID string) error {
 }
 
 // Interrupt sends SIGINT to interrupt a running Codex session.
+// IsSessionRunning reports whether a headless resume process is still alive.
+func (c *CodexCommander) IsSessionRunning(sessionID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ex, ok := c.executors[sessionID]
+	return ok && ex != nil && ex.IsRunning()
+}
+
 func (c *CodexCommander) Interrupt(sessionID string) error {
 	c.mu.Lock()
 	executor, ok := c.executors[sessionID]

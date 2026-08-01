@@ -334,6 +334,7 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 	var lastTime time.Time
 	var msgCount int
 	var isWaiting bool
+	var taskInFlight bool
 	var pendingApproval *ApprovalInfo
 	var projectDir string
 	sessionID := codexSessionIDFromFilename(filepath.Base(path))
@@ -393,7 +394,11 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 				if m, _ := payload["message"].(string); m != "" {
 					lastMessage = truncate(m, 120)
 				}
+			case pType == "task_started":
+				// Positive running signal from Codex event stream.
+				taskInFlight = true
 			case pType == "task_complete":
+				taskInFlight = false
 				if m, _ := payload["last_agent_message"].(string); m != "" {
 					lastMessage = truncate(m, 120)
 				}
@@ -470,10 +475,14 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 		lastTime = modTime
 	}
 
+	// Status must not be inferred from "recent file mtime alone" — completed
+	// turns leave a fresh task_complete and would otherwise stay running forever.
 	status := StatusIdle
 	if isWaiting {
 		status = StatusWaitingApproval
-	} else if time.Since(lastTime) < 60*time.Second {
+	} else if taskInFlight {
+		status = StatusRunning
+	} else if a.commander != nil && a.commander.IsSessionRunning(sessionID) {
 		status = StatusRunning
 	}
 

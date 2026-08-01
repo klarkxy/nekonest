@@ -483,7 +483,14 @@ export const useSessionStore = defineStore('sessions', () => {
             messages.value = []
           } else {
             const updated = sessions.value.find(s => s.id === currentSession.value!.id)
-            if (updated) currentSession.value = updated
+            if (updated) {
+              currentSession.value = updated
+              // Discovery is authoritative for busy state: leave "replying" when idle.
+              if (updated.status === 'idle' || updated.status === 'error') {
+                streaming.value = false
+                stopStreamPoll()
+              }
+            }
           }
         }
       } else if (msg.type === 'session_update') {
@@ -794,10 +801,11 @@ export const useSessionStore = defineStore('sessions', () => {
   function markStreamActivity() {
     streaming.value = true
     if (streamIdleTimer) window.clearTimeout(streamIdleTimer)
+    // Shorter idle: once frames stop, leave "replying" quickly.
     streamIdleTimer = window.setTimeout(() => {
       streaming.value = false
       stopStreamPoll()
-    }, 25000)
+    }, 8000)
   }
 
   function startStreamPoll(deviceId: string, sessionId: string) {
