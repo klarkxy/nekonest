@@ -75,11 +75,11 @@ func main() {
 
 	server := ws.NewWithSecret(database, phoneSecret)
 	server.SetDataDir(*dataDir)
-	// Nest-wide transport mode (default sealed). Until sealed crypto is fully
-	// wired end-to-end, operators may set NEKONEST_TRANSPORT_MODE=open.
+	// v0.2 defaults to open across server, daemon, and PWA. Sealed transport is
+	// opt-in until the v1 default cutover.
 	transportMode := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
 	if transportMode == "" {
-		transportMode = string(protocol.TransportSealed)
+		transportMode = string(protocol.TransportOpen)
 	}
 	if err := server.SetTransportMode(protocol.TransportMode(transportMode)); err != nil {
 		log.Fatalf("invalid NEKONEST_TRANSPORT_MODE: %v", err)

@@ -38,7 +38,7 @@ func NewWithSecret(database *db.DB, phoneSecret string) *Server {
 		db:            database,
 		connMgr:       NewConnectionManager(database),
 		phoneSecret:   phoneSecret,
-		transportMode: protocol.TransportSealed,
+		transportMode: protocol.TransportOpen,
 	}
 
 	// Set up device online/offline callbacks
@@ -63,7 +63,7 @@ func (s *Server) SetDataDir(dir string) {
 }
 
 // SetTransportMode configures the nest-wide transport mode (sealed|open).
-// Default is sealed. One nest has one fixed mode; clients must match.
+// v0.2 defaults to open. One nest has one fixed mode; clients must match.
 func (s *Server) SetTransportMode(mode protocol.TransportMode) error {
 	parsed, err := protocol.ParseTransportMode(string(mode))
 	if err != nil {
@@ -76,7 +76,7 @@ func (s *Server) SetTransportMode(mode protocol.TransportMode) error {
 // TransportMode returns the configured nest transport mode.
 func (s *Server) TransportMode() protocol.TransportMode {
 	if s.transportMode == "" {
-		return protocol.TransportSealed
+		return protocol.TransportOpen
 	}
 	return s.transportMode
 }
