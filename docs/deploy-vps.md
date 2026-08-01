@@ -12,7 +12,7 @@ Full env/flag reference: [configuration.md](./configuration.md). Security: [secu
 - Go **1.22+** on the build machine
 - Node.js + **pnpm** to build the PWA
 - Reverse proxy with TLS (Caddy or Nginx recommended)
-- Two long random secrets: phone secret and bootstrap token (**different**)
+- Two long random secrets: admin secret and bootstrap token (**different**)
 
 ## 1. Build
 
@@ -42,8 +42,9 @@ Upload to the VPS, for example:
 ## 2. Environment
 
 ```bash
-export NEKONEST_PHONE_SECRET='long-random-string'
+export NEKONEST_ADMIN_SECRET='long-random-string'
 export NEKONEST_BOOTSTRAP_TOKEN='another-long-random-string'
+export NEKONEST_TRANSPORT_MODE='open' # v0.2 operational default
 export NEKONEST_ALLOWED_ORIGINS='https://nekonest.example.com'
 # Behind a header-overwriting reverse proxy on this host:
 export NEKONEST_TRUST_PROXY=1
@@ -56,7 +57,7 @@ export NEKONEST_TRUST_PROXY=1
 ```
 
 > [!WARNING]
-> Without `NEKONEST_PHONE_SECRET` the server binds **loopback only** (dev mode). Do not expose that mode publicly. With phone secret set but bootstrap empty, **device registration is disabled**.
+> Without `NEKONEST_ADMIN_SECRET` (or its deprecated `NEKONEST_PHONE_SECRET` alias) the server binds **loopback only** (dev mode). Do not expose that mode publicly. With an admin secret set but bootstrap empty, **device registration is disabled**.
 
 Manual register probe (normally the Windows daemon does this):
 
@@ -83,8 +84,9 @@ Group=nekonest
 WorkingDirectory=/opt/nekonest
 EnvironmentFile=-/opt/nekonest/.env
 # Prefer EnvironmentFile for secrets. If you must inline:
-# Environment=NEKONEST_PHONE_SECRET=…
+# Environment=NEKONEST_ADMIN_SECRET=…
 # Environment=NEKONEST_BOOTSTRAP_TOKEN=…
+# Environment=NEKONEST_TRANSPORT_MODE=open
 # Environment=NEKONEST_ALLOWED_ORIGINS=https://nekonest.example.com
 # Environment=NEKONEST_TRUST_PROXY=1
 ExecStart=/opt/nekonest/nekonest-server -port 8080 -data /opt/nekonest/data -pwa /opt/nekonest/pwa-dist
@@ -149,7 +151,7 @@ server {
 ## 5. Acceptance
 
 - [ ] `curl https://nekonest.example.com/health` → `nyan~`
-- [ ] Browser opens PWA; phone secret accepted
+- [ ] Browser opens PWA; admin bootstrap secret accepted and phone identity created
 - [ ] Daemon can register with bootstrap token
 - [ ] Phone pairs and sees device **online**
 - [ ] Full path: [e2e-smoke.md](./e2e-smoke.md)
@@ -167,6 +169,7 @@ Tags are not auto-deployed; production updates are operator-driven ([release.md]
 ## Related
 
 - [Windows daemon deploy](./deploy-windows.md)
+- [Linux daemon deploy](./deploy-linux.md)
 - [Configuration](./configuration.md)
 - [Security](./security.md)
 - [Troubleshooting](./troubleshooting.md)

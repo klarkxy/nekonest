@@ -57,10 +57,10 @@ journalctl --user -u nekonest-daemon -f
 
 ## 传输模式
 
-在密封应用载荷全路径接通前，server 与 daemon 均设置：
+v0.2 默认 open 传输，也可在 server 与 daemon 显式设置：
 
 ```bash
 export NEKONEST_TRANSPORT_MODE=open
 ```
 
-（PWA 默认 open）。窝默认 sealed；模式不匹配会拒绝握手。
+（PWA 默认 open）。sealed 为显式预览模式；模式不匹配会拒绝握手。

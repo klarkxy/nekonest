@@ -10,8 +10,8 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 
 | Doc | Description |
 |---|---|
-| [../README.md](../README.md) | Product, quick start, **v0.1 live boundaries** |
-| [v1-product.md](./v1-product.md) | **v1.0.0 frozen target contract** (Codex-first E2E; not the live v0.1 slice) |
+| [../README.md](../README.md) | Product, quick start, **v0.2 live boundaries** |
+| [v1-product.md](./v1-product.md) | **v1.0.0 frozen target contract** (Codex-first E2E; beyond the live v0.2 milestone) |
 | [deploy-vps.md](./deploy-vps.md) | Build and run the VPS server |
 | [deploy-windows.md](./deploy-windows.md) | Register and run the Windows daemon |
 | [deploy-linux.md](./deploy-linux.md) | Register and run the Linux daemon (systemd user) |
@@ -57,6 +57,6 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 
 ## Archive and contracts
 
-- **Live v0.1 product boundaries:** [../README.md](../README.md) “Current boundaries (v0.1)” and today’s operator guides.
-- **Target v1.0.0 product contract:** [v1-product.md](./v1-product.md) — supersedes v0.1 compromises when building toward the complete release.
+- **Live v0.2 product boundaries:** [../README.md](../README.md) “Current boundaries (v0.2)” and today’s operator guides.
+- **Target v1.0.0 product contract:** [v1-product.md](./v1-product.md) — supersedes v0.x compromises when building toward the complete release.
 - **Frozen construction snapshots:** [archive/](./archive/). **Not** a product contract. Verify any claim there against current code, README, AGENTS.md, and (for v1 work) `v1-product.md`.

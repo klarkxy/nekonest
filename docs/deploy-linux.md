@@ -58,10 +58,10 @@ journalctl --user -u nekonest-daemon -f
 
 ## Transport mode
 
-Until sealed application payloads are fully wired, set:
+v0.2 defaults to open transport. You may state it explicitly with:
 
 ```bash
 export NEKONEST_TRANSPORT_MODE=open
 ```
 
-on **both** nest server and daemon (and keep PWA default open). Nest default is sealed; mismatched mode rejects the handshake.
+on **both** nest server and daemon (and keep the PWA default open). Sealed is an explicit preview mode; mismatched modes reject the handshake.

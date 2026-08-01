@@ -56,7 +56,7 @@ git push origin vX.Y.Z
 gh release create vX.Y.Z --title "vX.Y.Z" --notes-file release-notes.md
 ```
 
-v0.1.x 默认只发布**源码与构建说明**；预编译二进制可选、不强制。Release 说明应链接 README 快速开始与部署文档（中英）。
+v0.x 默认只发布**源码与构建说明**；预编译二进制可选、不强制。Release 说明应链接 README 快速开始与部署文档（中英）。
 
 ## 4. 可选：生产更新
 

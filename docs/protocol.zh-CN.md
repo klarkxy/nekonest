@@ -16,7 +16,7 @@ JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致
 | 字段 | 规则 |
 |---|---|
 | `protocol_version` | `major.minor`（当前 **1.0**）。主版本不匹配则拒绝；次版本向后兼容（未知可选字段忽略）。 |
-| `transport_mode` | 全窝统一 `sealed` \| `open`。一窝一种模式；**禁止** sealed→open 自动降级。新窝默认 **sealed**。 |
+| `transport_mode` | 全窝统一 `sealed` \| `open`。一窝一种模式；**禁止** sealed→open 自动降级。v0.2 默认 **open**；v1 验收切换后新窝默认 sealed。 |
 
 首帧（daemon 的 `register_device`、手机的 `subscribe`）**必须**带上述字段。Server 在 `auth_response` / `subscribe_ack` 返回协商结果。稳定错误码：`version_mismatch`、`transport_mode_mismatch`、`invalid_envelope`。
 

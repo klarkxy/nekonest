@@ -2,7 +2,7 @@
 
 # 配置参考
 
-NekoNest v0.1.x 的环境变量、命令行 flags、配置文件与运行限额权威列表。产品边界见根目录 [README.zh-CN.md](../README.zh-CN.md)；工程不变量见 [AGENTS.md](../AGENTS.md)。
+NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额权威列表。产品边界见根目录 [README.zh-CN.md](../README.zh-CN.md)；工程不变量见 [AGENTS.md](../AGENTS.md)。
 
 ## Server
 
@@ -18,7 +18,7 @@ NekoNest v0.1.x 的环境变量、命令行 flags、配置文件与运行限额�
 
 ### 监听地址
 
-| `NEKONEST_PHONE_SECRET` | 绑定地址 |
+| 管理员密钥（`NEKONEST_ADMIN_SECRET` 或兼容别名） | 绑定地址 |
 |---|---|
 | **未设置 / 空** | 仅 `127.0.0.1:<port>`（本地开发） |
 | **已设置** | `0.0.0.0:<port>`（`:<port>`），供公网反代 |
@@ -29,8 +29,10 @@ NekoNest v0.1.x 的环境变量、命令行 flags、配置文件与运行限额�
 
 | 变量 | 公网是否必需 | 说明 |
 |---|---|---|
-| `NEKONEST_PHONE_SECRET` | **是** | 手机 REST/WS 共享密钥。接受 `Authorization: Bearer <secret>` 或 `X-Neko-Secret: <secret>`（WS 也可 `?secret=`）。 |
-| `NEKONEST_BOOTSTRAP_TOKEN` | **是** | 保护 `POST /api/devices/register`（头 `X-Neko-Bootstrap`）。必须与手机密钥不同。 |
+| `NEKONEST_ADMIN_SECRET` | **是** | 首选管理员引导密钥；可直接鉴权并签发独立手机身份/令牌。 |
+| `NEKONEST_PHONE_SECRET` | 兼容 | `NEKONEST_ADMIN_SECRET` 的单版本弃用别名。 |
+| `NEKONEST_BOOTSTRAP_TOKEN` | **是** | 保护 `POST /api/devices/register`（头 `X-Neko-Bootstrap`）。必须与管理员密钥不同。 |
+| `NEKONEST_TRANSPORT_MODE` | 否 | 全窝固定 `open` \| `sealed`；v0.2 默认 `open`。密封模式为显式预览，所有端必须一致。 |
 | `NEKONEST_ALLOWED_ORIGINS` | 建议 | 逗号分隔的浏览器来源白名单。 |
 | `NEKONEST_TRUST_PROXY` | 若在反代后 | 仅当反代**覆盖** `X-Forwarded-For` / `X-Real-IP` 时设为 `1` 或 `true`。用于限流客户端 IP。 |
 | `NEKONEST_TRUSTED_PROXY_CIDRS` | 反代非 loopback | 可信反代 CIDR/IP 列表。 |
@@ -40,7 +42,7 @@ NekoNest v0.1.x 的环境变量、命令行 flags、配置文件与运行限额�
 
 #### Bootstrap 行为
 
-| 手机密钥 | Bootstrap | 注册 |
+| 管理员密钥 | Bootstrap | 注册 |
 |---|---|---|
 | 已设 | 已设 | 需要 `X-Neko-Bootstrap` |
 | 已设 | 空 | 注册**禁用** |
@@ -80,7 +82,7 @@ NekoNest v0.1.x 的环境变量、命令行 flags、配置文件与运行限额�
 
 ---
 
-## Daemon（Windows）
+## Daemon（Windows/Linux）
 
 二进制：`nekonest-daemon.exe`（`daemon/cmd/daemon`）。
 
@@ -99,6 +101,7 @@ NekoNest v0.1.x 的环境变量、命令行 flags、配置文件与运行限额�
 |---|---|---|
 | `NEKONEST_SERVER` | `-register` | VPS 地址，如 `https://nekonest.example.com`（http(s) 会规范为 ws(s)） |
 | `NEKONEST_BOOTSTRAP_TOKEN` | 公网 `-register` | 与 Server 相同；以 `X-Neko-Bootstrap` 发送 |
+| `NEKONEST_TRANSPORT_MODE` | 所有运行 | `open`（v0.2 默认）或 `sealed`；必须与 Server 和 PWA 构建一致。 |
 
 常驻运行从配置文件读凭据，不依赖上述环境变量。
 
@@ -137,6 +140,14 @@ Daemon 监视配置路径，变更时替换内存中的 `*Config` 快照。
 | 裸 `host:port` | `ws://host:port` |
 
 REST 使用由 ws(s) 推导的 http(s)。部署见 [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md)。
+
+---
+
+## PWA
+
+| 构建变量 | 默认 | 说明 |
+|---|---|---|
+| `VITE_NEKONEST_TRANSPORT_MODE` | `open` | 必须与 Server、Daemon 一致；仅为显式配置的密封预览窝设为 `sealed`。 |
 
 ---
 

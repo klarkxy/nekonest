@@ -10,8 +10,8 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 
 | 文档 | 说明 |
 |---|---|
-| [../README.zh-CN.md](../README.zh-CN.md) | 产品介绍、快速开始、**现行 v0.1 边界** |
-| [v1-product.zh-CN.md](./v1-product.zh-CN.md) | **v1.0.0 冻结目标合同**（Codex 优先 E2E；不是现行 v0.1 切片） |
+| [../README.zh-CN.md](../README.zh-CN.md) | 产品介绍、快速开始、**现行 v0.2 边界** |
+| [v1-product.zh-CN.md](./v1-product.zh-CN.md) | **v1.0.0 冻结目标合同**（Codex 优先 E2E；超出现行 v0.2 里程碑） |
 | [deploy-vps.zh-CN.md](./deploy-vps.zh-CN.md) | 构建并运行 VPS Server |
 | [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md) | 注册并运行 Windows Daemon |
 | [deploy-linux.zh-CN.md](./deploy-linux.zh-CN.md) | 注册并运行 Linux Daemon（systemd 用户单元） |
@@ -55,6 +55,6 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 
 ## 归档与合同
 
-- **现行 v0.1 产品边界：** [../README.zh-CN.md](../README.zh-CN.md) 中的「当前边界（v0.1）」与今日运维指南。
-- **目标 v1.0.0 产品合同：** [v1-product.zh-CN.md](./v1-product.zh-CN.md) — 朝完整版推进时，以它为准，不再沿用 v0.1 妥协。
+- **现行 v0.2 产品边界：** [../README.zh-CN.md](../README.zh-CN.md) 中的「当前边界（v0.2）」与今日运维指南。
+- **目标 v1.0.0 产品合同：** [v1-product.zh-CN.md](./v1-product.zh-CN.md) — 朝完整版推进时，以它为准，不再沿用 v0.x 妥协。
 - **冻结施工快照：** [archive/](./archive/)。**不是**产品合同。引用前请对照当前代码、README、AGENTS.md，以及（v1 工作）`v1-product.zh-CN.md`。

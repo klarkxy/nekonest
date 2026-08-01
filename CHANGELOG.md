@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-01
+
 ### Added
 
 - PWA Chinese/English i18n (`vue-i18n`): language switch on Setup and device list;
@@ -19,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sealed_payload` shape, expanded statuses (`waiting_user`, `error`),
   session capabilities, control/lifecycle message types (`steer`,
   `start_thread` / `thread_*`, pair/key/attention)
-- Server nest transport mode (`NEKONEST_TRANSPORT_MODE`, default sealed) with
-  version/mode negotiation on daemon and phone first frames
+- Server nest transport mode (`NEKONEST_TRANSPORT_MODE`, v0.2 default open;
+  sealed opt-in preview) with version/mode negotiation on daemon and phone first frames
 - PWA full prompt lifecycle types (`prompt_accepted` / `prompt_committed` /
   `prompt_not_seen`); durable outbox clears on committed
 - Daemon register reports host OS; device `os` accepts `windows` | `linux`
@@ -44,7 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-session content keys when `NEKONEST_TRANSPORT_MODE=sealed`)
 - Server persists sealed messages as opaque ciphertext; open-mode push heuristics
   skipped for sealed frames
-- Codex `app-server` JSON-RPC client scaffold + doctor probe
+- Codex `app-server` JSON-RPC client with health/doctor probing, native thread
+  resume/start, live turn tracking, and server-request handling
 - Offline `nekonest-server -migrate-v1 -data … -backup …` destructive content
   wipe preserving device tokens; docs `migration-v1.md` (+ zh-CN)
 - Pair key exchange: phone pubs on consume; daemon `pair_ready` wraps catalog
@@ -72,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Naive UI label `for` targets real inputs (phone key, pair code)
 - UUID-like session summaries fall back to untitled-thread label
 - WebSocket reconnect copy no longer implies the home PC is offline
+- Codex app-server approval state, capability promotion, turn completion, and
+  PWA replying indicators stay synchronized across discovery refreshes
+- Server, daemon, and PWA now consistently default to `open` transport in
+  v0.2; sealed transport remains an explicit preview mode before the v1 cutover
 
 ## [0.1.0] - 2026-07-30
 
@@ -113,4 +120,6 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/klarkxy/nekonest/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/klarkxy/nekonest/releases/tag/v0.1.0

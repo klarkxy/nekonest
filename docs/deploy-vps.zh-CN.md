@@ -12,7 +12,7 @@
 - 构建机 Go **1.22+**
 - Node.js + **pnpm** 构建 PWA
 - 带 TLS 的反代（推荐 Caddy 或 Nginx）
-- 两段长随机密钥：手机密钥与 bootstrap 令牌（**必须不同**）
+- 两段长随机密钥：管理员密钥与 bootstrap 令牌（**必须不同**）
 
 ## 1. 编译
 
@@ -42,8 +42,9 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/serve
 ## 2. 环境变量
 
 ```bash
-export NEKONEST_PHONE_SECRET='换成足够长的随机串'
+export NEKONEST_ADMIN_SECRET='换成足够长的随机串'
 export NEKONEST_BOOTSTRAP_TOKEN='另一段足够长的随机串'
+export NEKONEST_TRANSPORT_MODE='open' # v0.2 运维默认
 export NEKONEST_ALLOWED_ORIGINS='https://nekonest.example.com'
 # 本机前有覆盖转发头的反代时：
 export NEKONEST_TRUST_PROXY=1
@@ -56,7 +57,7 @@ export NEKONEST_TRUST_PROXY=1
 ```
 
 > [!WARNING]
-> 未设置 `NEKONEST_PHONE_SECRET` 时 Server 只绑定 **loopback**（开发模式）。不要公网暴露。已设手机密钥但 bootstrap 为空时，**设备注册禁用**。
+> 未设置 `NEKONEST_ADMIN_SECRET`（或弃用别名 `NEKONEST_PHONE_SECRET`）时 Server 只绑定 **loopback**（开发模式）。不要公网暴露。已设管理员密钥但 bootstrap 为空时，**设备注册禁用**。
 
 手动注册探测（通常由 Windows daemon 完成）：
 
@@ -83,8 +84,9 @@ Group=nekonest
 WorkingDirectory=/opt/nekonest
 EnvironmentFile=-/opt/nekonest/.env
 # 密钥优先放 EnvironmentFile。若必须内联：
-# Environment=NEKONEST_PHONE_SECRET=…
+# Environment=NEKONEST_ADMIN_SECRET=…
 # Environment=NEKONEST_BOOTSTRAP_TOKEN=…
+# Environment=NEKONEST_TRANSPORT_MODE=open
 # Environment=NEKONEST_ALLOWED_ORIGINS=https://nekonest.example.com
 # Environment=NEKONEST_TRUST_PROXY=1
 ExecStart=/opt/nekonest/nekonest-server -port 8080 -data /opt/nekonest/data -pwa /opt/nekonest/pwa-dist
@@ -149,7 +151,7 @@ server {
 ## 5. 验收
 
 - [ ] `curl https://nekonest.example.com/health` → `nyan~`
-- [ ] 浏览器打开 PWA；手机密钥可用
+- [ ] 浏览器打开 PWA；管理员引导密钥可用并建立手机身份
 - [ ] Daemon 可用 bootstrap 注册
 - [ ] 手机配对后设备 **online**
 - [ ] 完整路径：[e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md)
@@ -167,6 +169,7 @@ server {
 ## 相关
 
 - [Windows Daemon 部署](./deploy-windows.zh-CN.md)
+- [Linux Daemon 部署](./deploy-linux.zh-CN.md)
 - [配置](./configuration.zh-CN.md)
 - [安全](./security.zh-CN.md)
 - [排障](./troubleshooting.zh-CN.md)

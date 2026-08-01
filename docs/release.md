@@ -56,7 +56,7 @@ git push origin vX.Y.Z
 gh release create vX.Y.Z --title "vX.Y.Z" --notes-file release-notes.md
 ```
 
-v0.1.x defaults to **source + build instructions**; prebuilt binaries are optional, not required. Release notes should link README quick start and deploy docs (EN + ZH).
+v0.x defaults to **source + build instructions**; prebuilt binaries are optional, not required. Release notes should link README quick start and deploy docs (EN + ZH).
 
 ## 4. Optional: production update
 

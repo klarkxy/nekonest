@@ -17,14 +17,14 @@ Phone PWA  ──HTTPS/WSS──►  VPS Server  ◄──outbound WSS──  Ho
 | **Home PC / Daemon** | Initiates outbound connection only; holds E2E identity + content keys; reads native agent stores; runs headless CLIs |
 | **Agent CLIs** | Authoritative session/history stores; execute tools with the user’s local privileges |
 
-### Transport modes (v1)
+### Transport modes (v0.2)
 
 | Mode | Default | VPS sees |
 |---|---|---|
-| **sealed** | Yes for new nests | Ciphertext bodies; routing metadata (device ID, session ID, timestamps, sizes, connection state). **Not** prompt/response/tool plaintext when fully sealed. |
-| **open** | Admin-only explicit config | Application plaintext as in v0.1 — treat VPS as sensitive |
+| **sealed** | Opt-in preview | Ciphertext bodies; routing metadata (device ID, session ID, timestamps, sizes, connection state). **Not** prompt/response/tool plaintext when fully sealed. |
+| **open** | Yes in v0.2 | Application plaintext — treat VPS as sensitive |
 
-One nest has one fixed mode; clients must match; **no** automatic sealed→open downgrade.
+One nest has one fixed mode; clients must match; **no** automatic sealed→open downgrade. The v1.0.0 contract changes new nests to sealed-by-default after the sealed acceptance gate is complete.
 
 Pairing trust: QR carries daemon public-key fingerprint; six-digit code alone is a lower-assurance fallback (compare fingerprint on PC screen).
 

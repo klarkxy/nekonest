@@ -16,7 +16,7 @@ Keep JSON field names, enums, optionality, timestamps, and meanings identical ac
 | Field | Rule |
 |---|---|
 | `protocol_version` | `major.minor` (current **1.0**). Major mismatch rejects; minor is backward compatible (unknown optional fields ignored). |
-| `transport_mode` | Nest-wide `sealed` \| `open`. One mode per nest; **no** sealed→open automatic downgrade. Default for new nests is **sealed**. |
+| `transport_mode` | Nest-wide `sealed` \| `open`. One mode per nest; **no** sealed→open automatic downgrade. v0.2 defaults to **open**; the v1 acceptance cutover changes new nests to sealed. |
 
 First frames (`register_device` for daemon, `subscribe` for phone) **must** include both fields. Server returns negotiated version/mode on `auth_response` / `subscribe_ack`. Stable error codes: `version_mismatch`, `transport_mode_mismatch`, `invalid_envelope`.
 

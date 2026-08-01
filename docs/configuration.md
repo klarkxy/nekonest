@@ -2,7 +2,7 @@
 
 # Configuration reference
 
-Canonical list of environment variables, CLI flags, config files, and operational limits for NekoNest v0.1.x. Product boundaries live in the root [README](../README.md); engineering invariants live in [AGENTS.md](../AGENTS.md).
+Canonical list of environment variables, CLI flags, config files, and operational limits for NekoNest v0.2.x. Product boundaries live in the root [README](../README.md); engineering invariants live in [AGENTS.md](../AGENTS.md).
 
 ## Server
 
@@ -18,7 +18,7 @@ Binary: `nekonest-server` (`server/cmd/server`).
 
 ### Listen address
 
-| `NEKONEST_PHONE_SECRET` | Bind address |
+| Admin secret (`NEKONEST_ADMIN_SECRET` or compatibility alias) | Bind address |
 |---|---|
 | **Unset / empty** | `127.0.0.1:<port>` only (local development) |
 | **Set** | `0.0.0.0:<port>` (`:<port>`) for public reverse-proxy deployment |
@@ -29,8 +29,10 @@ Do not put an unauthenticated server behind a LAN-facing proxy.
 
 | Variable | Required (public) | Description |
 |---|---|---|
-| `NEKONEST_PHONE_SECRET` | **Yes** | Shared secret for phone REST and WebSocket. Accepts `Authorization: Bearer <secret>` or `X-Neko-Secret: <secret>` (WS may also pass `?secret=`). |
-| `NEKONEST_BOOTSTRAP_TOKEN` | **Yes** | Protects `POST /api/devices/register` via `X-Neko-Bootstrap`. Must differ from the phone secret. |
+| `NEKONEST_ADMIN_SECRET` | **Yes** | Preferred admin bootstrap secret. It can authenticate directly and mint independent phone identities/tokens. |
+| `NEKONEST_PHONE_SECRET` | Compatibility | Deprecated one-release alias for `NEKONEST_ADMIN_SECRET`. |
+| `NEKONEST_BOOTSTRAP_TOKEN` | **Yes** | Protects `POST /api/devices/register` via `X-Neko-Bootstrap`. Must differ from the admin secret. |
+| `NEKONEST_TRANSPORT_MODE` | No | Nest-wide `open` \| `sealed`; v0.2 defaults to `open`. Sealed is an explicit preview mode and every peer must match. |
 | `NEKONEST_ALLOWED_ORIGINS` | Recommended | Comma-separated browser origin allowlist (e.g. `https://nekonest.example.com`). |
 | `NEKONEST_TRUST_PROXY` | If behind reverse proxy | Set to `1` or `true` only when the reverse proxy **overwrites** `X-Forwarded-For` / `X-Real-IP`. Used for rate-limit client IP. |
 | `NEKONEST_TRUSTED_PROXY_CIDRS` | If proxy not on loopback | Comma-separated CIDRs/IPs of trusted reverse proxies when they are not loopback. |
@@ -40,7 +42,7 @@ Do not put an unauthenticated server behind a LAN-facing proxy.
 
 #### Bootstrap token behavior
 
-| Phone secret | Bootstrap token | Registration |
+| Admin secret | Bootstrap token | Registration |
 |---|---|---|
 | Set | Set | Requires `X-Neko-Bootstrap` |
 | Set | Empty | Registration **disabled** (503-style misconfig) |
@@ -80,7 +82,7 @@ Full message types: [protocol.md](./protocol.md). Deploy guide: [deploy-vps.md](
 
 ---
 
-## Daemon (Windows)
+## Daemon (Windows/Linux)
 
 Binary: `nekonest-daemon.exe` (`daemon/cmd/daemon`).
 
@@ -99,6 +101,7 @@ Binary: `nekonest-daemon.exe` (`daemon/cmd/daemon`).
 |---|---|---|
 | `NEKONEST_SERVER` | `-register` | VPS base URL, e.g. `https://nekonest.example.com` (http(s) is normalized to ws(s) for the dial) |
 | `NEKONEST_BOOTSTRAP_TOKEN` | `-register` on public VPS | Same value as server `NEKONEST_BOOTSTRAP_TOKEN`; sent as `X-Neko-Bootstrap` |
+| `NEKONEST_TRANSPORT_MODE` | All runs | `open` (v0.2 default) or `sealed`; must match the server and PWA build. |
 
 Steady-state runs load credentials from the config file, not from these env vars.
 
@@ -150,6 +153,14 @@ The daemon watches the config path and replaces the in-memory `*Config` snapshot
 REST calls use the http(s) form derived from the ws(s) URL.
 
 Deploy guide: [deploy-windows.md](./deploy-windows.md).
+
+---
+
+## PWA
+
+| Build variable | Default | Description |
+|---|---|---|
+| `VITE_NEKONEST_TRANSPORT_MODE` | `open` | Must match the server and daemon. Set `sealed` only for an explicitly configured sealed preview nest. |
 
 ---
 
