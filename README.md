@@ -204,6 +204,8 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm type-check
 pnpm build
+# Optional Windows/Chromium screenshot regression
+pnpm test:visual
 ```
 
 Local run sketch:

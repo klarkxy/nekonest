@@ -722,6 +722,52 @@ describe('session prompt outbox', () => {
     reloaded.cleanup()
   })
 
+  it('shows the first start_thread prompt in the owned native thread without resending it', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+
+    const { ok, operationId } = store.startThread('device-a', 'D:\\repo', '  ping ×19  ')
+    expect(ok).toBe(true)
+    expect(harness.sent).toHaveLength(1)
+    expect(harness.sent[0]).toMatchObject({
+      type: 'start_thread',
+      device_id: 'device-a',
+      payload: { operation_id: operationId, prompt: '  ping ×19  ' }
+    })
+
+    emit({
+      type: 'thread_starting',
+      device_id: 'device-a',
+      timestamp: 1,
+      payload: { operation_id: operationId }
+    })
+    emit({
+      type: 'thread_owned',
+      device_id: 'device-a',
+      timestamp: 2,
+      payload: { operation_id: operationId, session_id: 'native-thread-a' }
+    })
+    store.setCurrentSession({
+      id: 'native-thread-a',
+      device_id: 'device-a',
+      agent_type: 'codex',
+      status: 'running',
+      summary: '',
+      last_activity: 1
+    })
+
+    expect(store.messages).toEqual([
+      expect.objectContaining({
+        id: `msg_${operationId}`,
+        role: 'user',
+        content: 'ping ×19'
+      })
+    ])
+    expect(sentPrompts()).toHaveLength(0)
+    store.cleanup()
+  })
+
   it('migrates the legacy outbox array into per-command records', () => {
     localStorage.setItem(LEGACY_OUTBOX_STORAGE_KEY, JSON.stringify([{
       clientMsgId: 'legacy-message',

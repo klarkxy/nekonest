@@ -1034,6 +1034,7 @@ export const useSessionStore = defineStore('sessions', () => {
       {
         deviceId: string
         cwd: string
+        firstPrompt?: string
         status: 'starting' | 'owned' | 'failed' | 'indeterminate'
         sessionId?: string
         error?: string
@@ -1047,9 +1048,10 @@ export const useSessionStore = defineStore('sessions', () => {
     firstPrompt = ''
   ): { ok: boolean; operationId: string } {
     const operationId = `local_start_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const firstPromptText = firstPrompt.trim()
     startOps.value = {
       ...startOps.value,
-      [operationId]: { deviceId, cwd, status: 'starting' }
+      [operationId]: { deviceId, cwd, firstPrompt: firstPromptText, status: 'starting' }
     }
     const ok = nekoWS().send({
       type: 'start_thread',
@@ -1070,6 +1072,7 @@ export const useSessionStore = defineStore('sessions', () => {
         [operationId]: {
           deviceId,
           cwd,
+          firstPrompt: firstPromptText,
           status: 'failed',
           error: tGlobal('errors.channelDropped')
         }
@@ -1103,9 +1106,37 @@ export const useSessionStore = defineStore('sessions', () => {
       [opId]: {
         deviceId,
         cwd: prev?.cwd || String(payload?.cwd || ''),
+        firstPrompt: prev?.firstPrompt,
         status,
         sessionId: sessionId || undefined,
         error: error || undefined
+      }
+    }
+    if (
+      (status === 'owned' || status === 'indeterminate') &&
+      sessionId &&
+      prev?.firstPrompt
+    ) {
+      const message: SessionMessage = {
+        id: `msg_${opId}`,
+        role: 'user',
+        content: prev.firstPrompt,
+        type: 'text',
+        timestamp: Math.floor(Date.now() / 1000),
+        ...(status === 'indeterminate'
+          ? {
+              metadata: {
+                delivery_status: 'failed' as const,
+                delivery_error: tGlobal('errors.ambiguousNoRetry'),
+                delivery_retry_allowed: false
+              }
+            }
+          : {})
+      }
+      if (currentSession.value?.id === sessionId) {
+        upsertMessage(message)
+      } else {
+        pushInbox(deviceId, sessionId, message)
       }
     }
     if (status === 'failed' && error) {

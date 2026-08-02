@@ -203,6 +203,8 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm type-check
 pnpm build
+# 可选：Windows/Chromium 截图回归
+pnpm test:visual
 ```
 
 本地运行示意：
