@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
 	"github.com/nekonest/server/internal/protocol"
 	pushsub "github.com/nekonest/server/internal/push"
@@ -149,6 +150,7 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 
 	deviceID, _ := authMsg.Payload["device_id"].(string)
 	token, _ := authMsg.Payload["token"].(string)
+	daemonVersion := reportedComponentVersion(authMsg.Payload, "daemon_version")
 
 	if !s.db.ValidateDeviceToken(deviceID, token) {
 		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
@@ -176,7 +178,9 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 			"status":           "authenticated",
 			"protocol_version": hs.NegotiatedVersion,
 			"transport_mode":   string(hs.TransportMode),
-			"server_version":   protocol.CurrentProtocolVersion,
+			"server_version":   buildinfo.Version,
+			"daemon_version":   daemonVersion,
+			"update_required":  daemonVersion != "" && daemonVersion != buildinfo.Version,
 		},
 	}))
 
@@ -187,7 +191,7 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	dc := s.connMgr.AddDaemon(deviceID, conn)
+	dc := s.connMgr.AddDaemonVersioned(deviceID, conn, daemonVersion)
 	s.replayPromptCommits(dc)
 
 	// Start heartbeat
@@ -625,7 +629,12 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		s.connMgr.RemovePhone(currentDevice, conn)
 	}()
 
-	s.writeSubscribeAck(conn, deviceID, subscriptionID)
+	s.writeSubscribeAck(
+		conn,
+		deviceID,
+		subscriptionID,
+		reportedComponentVersion(subscribeMsg.Payload, "pwa_version"),
+	)
 	s.pushPhoneSnapshot(conn, deviceID)
 
 	// Set read deadline + pong handler for phone connection
@@ -658,6 +667,7 @@ func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
 	for _, d := range devices {
 		if onlineSet[d.ID] {
 			d.Status = "online"
+			d.DaemonVersion = s.connMgr.GetDaemonVersion(d.ID)
 		}
 	}
 
@@ -698,6 +708,7 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID string) string {
 		}
 
 		if msg.Type == protocol.MsgSubscribe {
+			pwaVersion := reportedComponentVersion(msg.Payload, "pwa_version")
 			newID := msg.DeviceID
 			if newID == "" && msg.Payload != nil {
 				if id, ok := msg.Payload["device_id"].(string); ok {
@@ -719,7 +730,7 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID string) string {
 				continue
 			}
 			if newID == deviceID {
-				s.writeSubscribeAck(conn, deviceID, subscriptionID)
+				s.writeSubscribeAck(conn, deviceID, subscriptionID, pwaVersion)
 				continue
 			}
 			if !allowDeviceSwitch(&switches, time.Now()) {
@@ -732,7 +743,7 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID string) string {
 			}
 			s.connMgr.ResubscribePhone(newID, conn)
 			deviceID = newID
-			s.writeSubscribeAck(conn, newID, subscriptionID)
+			s.writeSubscribeAck(conn, newID, subscriptionID, pwaVersion)
 			s.pushPhoneSnapshot(conn, newID)
 			continue
 		}
@@ -810,7 +821,10 @@ func subscribeRequestID(payload map[string]any) (string, bool) {
 	return value, true
 }
 
-func (s *Server) writeSubscribeAck(conn *websocket.Conn, deviceID, subscriptionID string) {
+func (s *Server) writeSubscribeAck(
+	conn *websocket.Conn,
+	deviceID, subscriptionID, pwaVersion string,
+) {
 	ack := s.stampEnvelope(protocol.NewMessage(protocol.MsgSubscribeAck, deviceID))
 	ack.Payload = map[string]any{
 		"status":           "subscribed",
@@ -818,7 +832,10 @@ func (s *Server) writeSubscribeAck(conn *websocket.Conn, deviceID, subscriptionI
 		"subscription_id":  subscriptionID,
 		"protocol_version": protocol.CurrentProtocolVersion,
 		"transport_mode":   string(s.TransportMode()),
-		"server_version":   protocol.CurrentProtocolVersion,
+		"pwa_version":      pwaVersion,
+		"server_version":   buildinfo.Version,
+		"daemon_version":   s.connMgr.GetDaemonVersion(deviceID),
+		"refresh_required": pwaVersion != "" && pwaVersion != buildinfo.Version,
 	}
 	s.connMgr.SafeWritePhone(conn, ack)
 }

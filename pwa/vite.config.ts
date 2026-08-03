@@ -2,8 +2,12 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 import { resolve } from 'path'
+import packageJson from './package.json'
 
 export default defineConfig({
+  define: {
+    __NEKONEST_APP_VERSION__: JSON.stringify(packageJson.version)
+  },
   test: {
     environment: 'jsdom',
     include: ['src/**/*.{test,spec}.ts']

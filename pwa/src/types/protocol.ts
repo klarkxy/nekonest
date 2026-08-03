@@ -76,6 +76,8 @@ export interface Device {
   status: 'online' | 'offline'
   last_seen: number
   active_agents: number
+  /** Application release reported by the current live daemon connection. */
+  daemon_version?: string
 }
 
 export type KnownAgentType =

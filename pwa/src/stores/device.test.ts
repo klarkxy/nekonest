@@ -107,6 +107,7 @@ describe('device store loading states', () => {
 
   it('subscribes to the first returned device for live updates', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
+      server_version: '0.3.0',
       devices: [{
         id: 'device-a',
         name: '书房电脑',
@@ -122,5 +123,37 @@ describe('device store loading states', () => {
 
     expect(harness.subscribedDevice).toBe('device-a')
     expect(useBindingStore().lastDeviceId).toBe('device-a')
+    expect(store.serverVersion).toBe('0.3.0')
+    expect(store.versionStatus.refreshRequired).toBe(true)
+  })
+
+  it('tracks the selected daemon version from the subscribe acknowledgement', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      server_version: '0.2.0',
+      devices: [{
+        id: 'device-a',
+        name: '书房电脑',
+        os: 'windows',
+        status: 'online',
+        last_seen: 1,
+        active_agents: 2
+      }]
+    }))
+    const store = useDeviceStore()
+    store.initWebSocket()
+    await store.fetchDevices()
+
+    harness.handlers.get('device-store')?.({
+      type: 'subscribe_ack',
+      device_id: 'device-a',
+      timestamp: 1,
+      payload: {
+        server_version: '0.2.0',
+        daemon_version: '0.1.0'
+      }
+    })
+
+    expect(store.activeDaemonVersion).toBe('0.1.0')
+    expect(store.versionStatus.daemonUpdateRequired).toBe(true)
   })
 })

@@ -1,5 +1,6 @@
 import type { NekoMessage } from '@/types/protocol'
 import { nestTransportMode, PROTOCOL_VERSION } from '@/types/protocol'
+import { APP_VERSION } from '@/config/version'
 import { getAuthCredential, getPhoneSecret, getPhoneToken } from './http'
 
 type MessageHandler = (msg: NekoMessage) => void
@@ -198,7 +199,8 @@ export class NekoWebSocket {
             : cred
               ? { secret: cred }
               : {}),
-        subscription_id: subscriptionId
+        subscription_id: subscriptionId,
+        pwa_version: APP_VERSION
       }
     })
   }

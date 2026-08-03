@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
 	"github.com/nekonest/server/internal/protocol"
 	"github.com/nekonest/server/internal/push"
@@ -41,12 +42,19 @@ func NewWithSecret(database *db.DB, phoneSecret string) *Server {
 		transportMode: protocol.TransportOpen,
 	}
 
-	// Set up device online/offline callbacks
-	s.connMgr.OnDeviceUp(func(deviceID string) {
+	// Set up device online/offline callbacks. Replacements with a different
+	// daemon release reuse the online event so subscribed phones refresh the
+	// live version without treating the device as offline first.
+	broadcastDeviceOnline := func(deviceID, daemonVersion string) {
 		msg := s.stampEnvelope(protocol.NewMessage(protocol.MsgDeviceOnline, deviceID))
-		msg.Payload = map[string]any{"device_id": deviceID}
+		msg.Payload = map[string]any{
+			"device_id":      deviceID,
+			"daemon_version": daemonVersion,
+		}
 		s.connMgr.BroadcastToPhones(deviceID, msg)
-	})
+	}
+	s.connMgr.OnDeviceUp(broadcastDeviceOnline)
+	s.connMgr.OnDeviceVersionChange(broadcastDeviceOnline)
 
 	s.connMgr.OnDeviceDown(func(deviceID string) {
 		msg := s.stampEnvelope(protocol.NewMessage(protocol.MsgDeviceOffline, deviceID))
@@ -102,6 +110,7 @@ func (s *Server) writeHandshakeError(conn interface {
 }, result protocol.HandshakeResult) {
 	payload := protocol.HandshakeErrorPayload(result)
 	payload["transport_mode"] = string(s.TransportMode())
+	payload["server_version"] = buildinfo.Version
 	_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 		Type:      protocol.MsgError,
 		Timestamp: time.Now().Unix(),
@@ -162,7 +171,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"nyan~"}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":           "nyan~",
+			"server_version":   buildinfo.Version,
+			"protocol_version": protocol.CurrentProtocolVersion,
+		})
 	})
 }
 
@@ -211,11 +224,41 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 	for _, d := range devices {
 		if onlineSet[d.ID] {
 			d.Status = "online"
+			d.DaemonVersion = s.connMgr.GetDaemonVersion(d.ID)
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"devices": devices})
+	json.NewEncoder(w).Encode(map[string]any{
+		"devices":        devices,
+		"server_version": buildinfo.Version,
+	})
+}
+
+// reportedComponentVersion accepts bounded ASCII release tokens. NekoNest
+// release builds use SemVer; invalid/unreported values remain unknown.
+func reportedComponentVersion(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	raw, ok := payload[key].(string)
+	if !ok {
+		return ""
+	}
+	value := strings.TrimSpace(raw)
+	if value == "" || len(value) > 64 {
+		return ""
+	}
+	for _, r := range value {
+		if (r >= '0' && r <= '9') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z') ||
+			r == '.' || r == '-' || r == '+' {
+			continue
+		}
+		return ""
+	}
+	return value
 }
 
 func (s *Server) handleDeviceSessions(w http.ResponseWriter, r *http.Request) {

@@ -15,6 +15,7 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 | `-port` | `8080` | 监听端口 |
 | `-data` | `./data` | 数据目录（SQLite + 附件） |
 | `-pwa` | `./pwa-dist` | 已构建 PWA 静态目录 |
+| `-version` | — | 输出 Server 应用发行版本并退出 |
 
 ### 监听地址
 
@@ -63,7 +64,7 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 
 | 路径 | 作用 | 鉴权 |
 |---|---|---|
-| `GET /health` | 存活检查；`{"status":"nyan~"}` | 无 |
+| `GET /health` | 存活检查，并返回 `server_version` 与 `protocol_version` | 无 |
 | `GET /ws/phone` | 手机 WebSocket | 手机密钥 |
 | `GET /ws/daemon` | Daemon WebSocket | 注册后的设备令牌 |
 | `GET /api/devices` | 设备列表 | 手机密钥 |
@@ -94,6 +95,8 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 | `-name <string>` | 注册时的设备显示名 |
 | `-pair gen` | 为已注册设备生成新的 6 位手机配对码 |
 | `-config <path>` | 配置文件路径（默认 `%USERPROFILE%\.nekonest\config.json`） |
+| `-doctor` | 运行诊断，包括 Daemon / Server 应用版本是否一致 |
+| `-version` | 输出 Daemon 应用发行版本并退出 |
 
 ### 环境变量（注册时）
 

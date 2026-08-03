@@ -108,6 +108,40 @@ pnpm type-check
 pnpm build
 ```
 
+### PWA visual regression
+
+The repository includes a Windows/Chromium Playwright screenshot suite. It starts a deterministic HTTP/WebSocket mock on `127.0.0.1:18080` and Vite on `127.0.0.1:5173`; both ports must be free. The mock uses the real PWA REST and wire-message shapes but never reads native agent stores.
+
+```powershell
+Set-Location pwa
+pnpm exec playwright install chromium
+
+# Compare against committed golden screenshots.
+pnpm test:visual
+
+# Replace goldens only after reviewing an intentional UI change.
+pnpm test:visual:update
+
+# Open the HTML report produced by the latest run.
+pnpm test:visual:report
+```
+
+Golden screenshots live beside `e2e/visual/visual.spec.ts`; `test-results/` and `playwright-report/` are local artifacts and are ignored. The primary matrix is `390×844`, Simplified Chinese, and light theme. Narrow mobile, desktop, dark-theme, and English samples protect responsive and overflow behavior. A visual run also checks expected page state, console/page errors, horizontal overflow, primary touch targets, delivery states, and the first Codex `start_thread` prompt handoff.
+
+For a read-only screenshot smoke against an already running local PWA/server/daemon stack, provide the base URL and optional device/session identifiers. Supply either a phone token or admin secret without writing it to a file:
+
+```powershell
+$env:NEKONEST_VISUAL_BASE_URL = 'http://127.0.0.1:5173'
+$env:NEKONEST_VISUAL_PHONE_TOKEN = '<temporary phone token>'
+$env:NEKONEST_VISUAL_PHONE_ID = '<phone id>'
+# Or use NEKONEST_VISUAL_ADMIN_SECRET for legacy/admin local authentication.
+$env:NEKONEST_VISUAL_DEVICE_ID = '<device id>'
+$env:NEKONEST_VISUAL_SESSION_ID = '<session id>'
+pnpm test:visual:live
+```
+
+The live command only captures devices, device detail, and session detail by default. Setting `NEKONEST_VISUAL_SEND_PROMPT` explicitly sends that text to the selected session and therefore must only be used with a disposable test thread. Live screenshots are artifacts, not golden baselines.
+
 Unix convenience: root `Makefile` targets `test`, `server`, `daemon`, `pwa` (daemon default cross-builds Windows).
 
 Cross-layer protocol or catalog changes: run **all three** suites, then from repo root:

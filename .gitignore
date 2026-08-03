@@ -18,6 +18,8 @@ node_modules/
 __pycache__/
 *.py[cod]
 pwa/vite.config.ts.timestamp-*.mjs
+pwa/playwright-report/
+pwa/test-results/
 
 # Coverage / local test artifacts
 coverage

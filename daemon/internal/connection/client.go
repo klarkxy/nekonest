@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nekonest/daemon/internal/buildinfo"
 )
 
 const (
@@ -141,9 +142,10 @@ func (c *Client) Connect() error {
 			"device_id":        deviceID,
 			"timestamp":        time.Now().Unix(),
 			"payload": map[string]interface{}{
-				"device_id": deviceID,
-				"token":     token,
-				"os":        runtime.GOOS,
+				"device_id":      deviceID,
+				"token":          token,
+				"os":             runtime.GOOS,
+				"daemon_version": buildinfo.Version,
 			},
 		}
 
@@ -180,6 +182,17 @@ func (c *Client) Connect() error {
 		if resp["type"] == "error" {
 			_ = conn.Close()
 			return fmt.Errorf("auth failed: %v", resp["payload"])
+		}
+		if payload, ok := resp["payload"].(map[string]interface{}); ok {
+			serverVersion, _ := payload["server_version"].(string)
+			if serverVersion != "" {
+				log.Printf(
+					"[conn] component versions daemon=%s server=%s update_required=%v",
+					buildinfo.Version,
+					serverVersion,
+					serverVersion != buildinfo.Version,
+				)
+			}
 		}
 
 		c.dispatchMu.Lock()

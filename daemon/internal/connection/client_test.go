@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,10 +12,60 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nekonest/daemon/internal/buildinfo"
 )
 
 func websocketTestURL(httpURL string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http")
+}
+
+func TestConnectAdvertisesDaemonApplicationVersion(t *testing.T) {
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	authFrames := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var frame map[string]any
+		if err := json.Unmarshal(data, &frame); err != nil {
+			return
+		}
+		authFrames <- frame
+		_ = conn.WriteJSON(map[string]any{
+			"type": "auth_response",
+			"payload": map[string]any{
+				"server_version": buildinfo.Version,
+			},
+		})
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(context.Background(), websocketTestURL(server.URL), "device", "token")
+	if err := client.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	select {
+	case frame := <-authFrames:
+		payload, _ := frame["payload"].(map[string]any)
+		if payload["daemon_version"] != buildinfo.Version {
+			t.Fatalf("daemon version payload: %#v", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon auth frame not received")
+	}
 }
 
 func TestConnectDiscardsSocketWhenServerURLChangesDuringAuth(t *testing.T) {

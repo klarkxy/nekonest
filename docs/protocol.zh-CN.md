@@ -20,6 +20,20 @@ JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致
 
 首帧（daemon 的 `register_device`、手机的 `subscribe`）**必须**带上述字段。Server 在 `auth_response` / `subscribe_ack` 返回协商结果。稳定错误码：`version_mismatch`、`transport_mode_mismatch`、`invalid_envelope`。
 
+### 应用发行版本
+
+应用发行版本与 `protocol_version` 相互独立：只要线协议仍兼容，发行版本不一致只作为诊断信息，不会单独拒绝连接。
+
+| 字段 | 方向 / 语义 |
+|---|---|
+| `daemon_version` | Daemon 在 `register_device.payload` 上报；Server 在 `auth_response`、`subscribe_ack`、`device_online` 与在线 `Device` 快照返回当前值。缺省表示离线或旧版 Daemon 未上报。 |
+| `pwa_version` | PWA 在 `subscribe.payload` 上报构建版本；Server 在 `subscribe_ack` 回显接受的值。 |
+| `server_version` | Server 应用发行版本，出现在 `auth_response`、`subscribe_ack`、`/health` 与 `/api/devices`；它**不是**线协议版本。 |
+| `refresh_required` | `subscribe_ack` 布尔值；已上报 PWA 版本与 Server 不同时为 true。PWA 提供由用户触发的 Service Worker 更新/重载，不会因该信号自动循环刷新。 |
+| `update_required` | `auth_response` 布尔值；已上报 Daemon 版本与 Server 不同时为 true。 |
+
+当前构建使用 SemVer 发行版本。为兼容旧客户端，`pwa_version` 与 `daemon_version` 均为可选；缺失时显示“未知”，不得假定为当前版本。
+
 ## 信封
 
 每条 WebSocket 应用消息为 `NekoMessage`：
@@ -61,6 +75,7 @@ JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致
 | `status` | `online` \| `offline` |
 | `last_seen` | Unix 秒 |
 | `active_agents` | 会话数量提示（不是猫娘种类数）；PWA 展示为线团数 |
+| `daemon_version` | 当前在线 Daemon 上报的发行版本；离线/未上报时省略 |
 
 ### AgentSession
 

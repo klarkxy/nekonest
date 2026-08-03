@@ -127,13 +127,14 @@ type NekoMessage struct {
 
 // Device represents a registered host device.
 type Device struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	OS           string `json:"os"`
-	Status       string `json:"status"` // "online" | "offline"
-	LastSeen     int64  `json:"last_seen"`
-	ActiveAgents int    `json:"active_agents"`
-	Token        string `json:"-"` // device auth token, not sent to clients
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	OS            string `json:"os"`
+	Status        string `json:"status"` // "online" | "offline"
+	LastSeen      int64  `json:"last_seen"`
+	ActiveAgents  int    `json:"active_agents"`
+	DaemonVersion string `json:"daemon_version,omitempty"`
+	Token         string `json:"-"` // device auth token, not sent to clients
 }
 
 // AgentStatus represents the status of an AI coding agent.
@@ -391,6 +392,5 @@ func HandshakeErrorPayload(result HandshakeResult) map[string]any {
 		"message":          result.Message,
 		"protocol_version": CurrentProtocolVersion,
 		"transport_mode":   string(TransportSealed), // overwritten by caller when known
-		"server_version":   CurrentProtocolVersion,
 	}
 }

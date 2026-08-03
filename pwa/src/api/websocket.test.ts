@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { APP_VERSION } from '@/config/version'
 import { NekoWebSocket } from './websocket'
 
 type SocketHandler<T = Event> = ((event: T) => void) | null
@@ -52,7 +53,8 @@ function latestSubscription(socket: FakeWebSocket) {
   const frame = JSON.parse(socket.sent[socket.sent.length - 1])
   return {
     deviceId: frame.device_id as string,
-    subscriptionId: frame.payload.subscription_id as string
+    subscriptionId: frame.payload.subscription_id as string,
+    pwaVersion: frame.payload.pwa_version as string
   }
 }
 
@@ -84,6 +86,7 @@ describe('NekoWebSocket lifecycle', () => {
     const first = FakeWebSocket.instances[0]
     first.open()
     const subscription = latestSubscription(first)
+    expect(subscription.pwaVersion).toBe(APP_VERSION)
     first.message({ type: 'session_list', device_id: 'device-a', timestamp: 1, payload: {} })
     expect(client.isConnected()).toBe(false)
     acknowledge(first, subscription.deviceId, subscription.subscriptionId)

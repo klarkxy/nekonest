@@ -1,9 +1,11 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { Device } from '@/types/protocol'
 import { nekoWS } from '@/api/websocket'
 import { apiFetch } from '@/api/http'
+import { APP_VERSION } from '@/config/version'
 import { tGlobal } from '@/i18n'
+import { componentVersionStatus } from '@/utils/componentVersions'
 import { useBindingStore } from './binding'
 
 export const useDeviceStore = defineStore('devices', () => {
@@ -13,6 +15,17 @@ export const useDeviceStore = defineStore('devices', () => {
   const loadError = ref('')
   const connected = ref(false)
   const authError = ref(false)
+  const serverVersion = ref('')
+  const versionDeviceId = ref('')
+
+  const activeDaemonVersion = computed(() =>
+    devices.value.find(device => device.id === versionDeviceId.value)?.daemon_version || ''
+  )
+  const versionStatus = computed(() => componentVersionStatus({
+    frontend: APP_VERSION,
+    server: serverVersion.value,
+    daemon: activeDaemonVersion.value
+  }))
 
   const HANDLER_ID = 'device-store'
 
@@ -24,11 +37,26 @@ export const useDeviceStore = defineStore('devices', () => {
     ws.addHandler(HANDLER_ID, (msg) => {
       if (msg.type === 'device_list') {
         devices.value = (msg.payload?.devices as Device[]) || []
+      } else if (msg.type === 'subscribe_ack') {
+        const reportedServer = msg.payload?.server_version
+        if (typeof reportedServer === 'string') {
+          serverVersion.value = reportedServer
+        }
+        versionDeviceId.value = msg.device_id
+        const reportedDaemon = msg.payload?.daemon_version
+        const device = devices.value.find(d => d.id === msg.device_id)
+        if (device && typeof reportedDaemon === 'string') {
+          device.daemon_version = reportedDaemon || undefined
+        }
       } else if (msg.type === 'device_online' || msg.type === 'device_offline') {
         const deviceId = (msg.payload?.device_id as string) || msg.device_id
         const device = devices.value.find(d => d.id === deviceId)
         if (device) {
           device.status = msg.type === 'device_online' ? 'online' : 'offline'
+          const reportedDaemon = msg.payload?.daemon_version
+          device.daemon_version = msg.type === 'device_online' && typeof reportedDaemon === 'string'
+            ? reportedDaemon || undefined
+            : undefined
         }
       }
     })
@@ -67,6 +95,7 @@ export const useDeviceStore = defineStore('devices', () => {
       }
       const data = await res.json()
       devices.value = data.devices || []
+      serverVersion.value = typeof data.server_version === 'string' ? data.server_version : ''
       loaded.value = true
 
       // Auto-subscribe to last / first device for live updates
@@ -76,6 +105,7 @@ export const useDeviceStore = defineStore('devices', () => {
         binding.bound[0]?.id ||
         devices.value[0]?.id
       if (target) {
+        versionDeviceId.value = target
         nekoWS().subscribe(target)
         binding.setLastDevice(target)
       }
@@ -94,6 +124,10 @@ export const useDeviceStore = defineStore('devices', () => {
     loadError,
     connected,
     authError,
+    frontendVersion: APP_VERSION,
+    serverVersion,
+    activeDaemonVersion,
+    versionStatus,
     initWebSocket,
     fetchDevices
   }

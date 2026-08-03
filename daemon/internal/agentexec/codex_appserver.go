@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nekonest/daemon/internal/attach"
+	"github.com/nekonest/daemon/internal/buildinfo"
 )
 
 // CodexAppServer is a long-lived stdio JSON-RPC client for codex app-server.
@@ -212,7 +213,7 @@ func (c *CodexAppServer) ensureInitialized() error {
 		"clientInfo": map[string]any{
 			"name":    "nekonest-daemon",
 			"title":   "NekoNest",
-			"version": "0.2.0",
+			"version": buildinfo.Version,
 		},
 	})
 	if err != nil {

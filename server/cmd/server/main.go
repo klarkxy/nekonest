@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
 	"github.com/nekonest/server/internal/protocol"
 	"github.com/nekonest/server/internal/ws"
@@ -23,7 +25,12 @@ func main() {
 	pwaDir := flag.String("pwa", "./pwa-dist", "PWA static files directory")
 	migrateV1 := flag.Bool("migrate-v1", false, "offline destructive v0.1→v1 content migration (requires -backup)")
 	backupDir := flag.String("backup", "", "backup directory for -migrate-v1")
+	showVersion := flag.Bool("version", false, "print the NekoNest server version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(buildinfo.Version)
+		return
+	}
 
 	if *migrateV1 {
 		if err := runMigrateV1(*dataDir, *backupDir); err != nil {
@@ -125,7 +132,7 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("🐱 NekoNest Server starting on %s", addr)
+		log.Printf("🐱 NekoNest Server %s starting on %s", buildinfo.Version, addr)
 		log.Printf("   Data: %s", dbPath)
 		log.Printf("   PWA:  %s", *pwaDir)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {

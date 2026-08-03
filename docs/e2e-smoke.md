@@ -15,7 +15,7 @@ One nest = one mode. Mismatch rejects the handshake (no sealed→open downgrade)
 
 ## Preconditions (open mode)
 
-- [ ] VPS server running; `GET /health` → `{"status":"nyan~"}`
+- [ ] VPS server running; `GET /health` → `status=nyan~` plus expected `server_version` / `protocol_version`
 - [ ] `NEKONEST_ADMIN_SECRET` set (or legacy `NEKONEST_PHONE_SECRET`)
 - [ ] `NEKONEST_BOOTSTRAP_TOKEN` set and used at daemon register
 - [ ] `NEKONEST_TRANSPORT_MODE=open` on server **and** daemon
@@ -30,7 +30,7 @@ One nest = one mode. Mismatch rejects the handshake (no sealed→open downgrade)
 
 1. Open PWA; enter the nest admin secret (setup).  
 2. Pair: run `nekonest-daemon -pair gen` on the host; paste **QR JSON** (preferred) or 6-digit code; compare **fingerprint** with the PC screen.  
-3. Device list shows the host **online**.  
+3. Device list shows the host **online** and the PWA / server / daemon releases aligned. A deliberately stale PWA shows **Refresh now**; a stale daemon is reported separately.
 4. On the host, open/use a supported agent so a recent thread exists.  
 5. Phone: **directory → agent → thread** visible; session capabilities appear when advertised.  
 6. Open a thread; history loads; send a short prompt; stream appears.  

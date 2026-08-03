@@ -639,7 +639,10 @@ function deliveryLabel(msg: SessionMessage) {
   switch (deliveryStatus(msg)) {
     case 'queued': return t('session.deliveryQueued')
     case 'sending': return t('session.deliverySending')
+    case 'accepted': return t('session.deliveryAccepted')
+    case 'not_seen': return t('session.deliveryNotSeen')
     case 'failed': return msg.metadata?.delivery_error || t('session.deliveryFailed')
+    case 'indeterminate': return msg.metadata?.delivery_error || t('errors.ambiguousNoRetry')
     default: return ''
   }
 }
@@ -817,8 +820,9 @@ async function handleSend() {
       sending.value = false
       return
     }
-    // Move input draft key to real session id.
-    draftStore.set(did, realId, prompt, pendingAtts.value)
+    // The first prompt was already accepted by start_thread. Do not migrate it
+    // into the owned thread's composer as though it were still unsent.
+    draftStore.clear(did, realId)
     draftStore.clear(did, draftSid)
     localThreads.remove(draftSid)
     inputText.value = ''

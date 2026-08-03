@@ -108,6 +108,40 @@ pnpm type-check
 pnpm build
 ```
 
+### PWA 截图回归
+
+仓库内置 Windows/Chromium Playwright 截图套件。运行时会自动在 `127.0.0.1:18080` 启动确定性 HTTP/WebSocket Mock，并在 `127.0.0.1:5173` 启动 Vite；两个端口须空闲。Mock 使用 PWA 的真实 REST 与线消息形状，但绝不读取原生 agent 存储。
+
+```powershell
+Set-Location pwa
+pnpm exec playwright install chromium
+
+# 与已提交黄金截图比较。
+pnpm test:visual
+
+# 仅在确认 UI 变更符合预期后替换黄金截图。
+pnpm test:visual:update
+
+# 打开最近一次运行生成的 HTML 报告。
+pnpm test:visual:report
+```
+
+黄金截图与 `e2e/visual/visual.spec.ts` 放在一起；`test-results/` 与 `playwright-report/` 是已忽略的本地产物。主矩阵为 `390×844`、简体中文、浅色主题，并抽查窄屏、桌面、深色主题和英文布局。视觉运行还会检查预期页面状态、console/page error、横向溢出、主要触控尺寸、投递状态，以及 Codex `start_thread` 首条提示词的归属。
+
+如需对已经启动的本地 PWA/server/daemon 真栈做只读截图冒烟，设置 PWA 地址及可选设备/会话 ID。手机令牌或管理员密钥只通过当前 PowerShell 会话传入，不要写入文件：
+
+```powershell
+$env:NEKONEST_VISUAL_BASE_URL = 'http://127.0.0.1:5173'
+$env:NEKONEST_VISUAL_PHONE_TOKEN = '<临时手机令牌>'
+$env:NEKONEST_VISUAL_PHONE_ID = '<手机 ID>'
+# 旧版/管理员本地鉴权也可改用 NEKONEST_VISUAL_ADMIN_SECRET。
+$env:NEKONEST_VISUAL_DEVICE_ID = '<设备 ID>'
+$env:NEKONEST_VISUAL_SESSION_ID = '<会话 ID>'
+pnpm test:visual:live
+```
+
+真栈命令默认只截取设备列表、设备详情和会话详情。只有显式设置 `NEKONEST_VISUAL_SEND_PROMPT` 时才会向所选会话发送该文本，因此只能对一次性测试线程使用。真栈截图属于运行产物，不参与黄金基线比较。
+
 Unix 可用根目录 `Makefile` 的 `test`、`server`、`daemon`、`pwa`（daemon 默认交叉编译 Windows）。
 
 跨层协议或目录变更：跑**全部三个**套件，然后在仓库根：

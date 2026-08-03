@@ -83,7 +83,20 @@ export default {
     connChecking: '正在检查猫窝服务器…',
     connLive: '猫窝实时通道已接通',
     connServerOk: '猫窝服务器已接通',
-    connWsReconnect: '手机实时通道重连中…'
+    connWsReconnect: '手机实时通道重连中…',
+    versionTitle: '组件版本',
+    versionAligned: '前端、Server 与 Daemon 版本一致',
+    versionRefreshNeeded: '前端版本与 Server 不一致，需要刷新',
+    versionDaemonUpdate: 'Daemon 版本与 Server 不一致，需要更新并重启',
+    versionMixed: '前端和 Daemon 都与 Server 版本不一致',
+    versionChecking: '正在读取 Server 与 Daemon 版本…',
+    versionUnknown: 'Daemon 离线、未选择或版本过旧，暂时无法确认',
+    frontendVersion: '前端',
+    serverVersion: 'Server',
+    daemonVersion: 'Daemon',
+    daemonVersionShort: 'Daemon v{version}',
+    versionUnreported: '未知',
+    refreshNow: '立即刷新'
   },
   pair: {
     title: '配对电脑',
