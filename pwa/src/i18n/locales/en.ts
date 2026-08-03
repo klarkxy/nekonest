@@ -84,7 +84,20 @@ export default {
     connChecking: 'Checking nest server…',
     connLive: 'Live channel connected',
     connServerOk: 'Nest server reachable',
-    connWsReconnect: 'Phone live channel reconnecting…'
+    connWsReconnect: 'Phone live channel reconnecting…',
+    versionTitle: 'Component versions',
+    versionAligned: 'Frontend, server, and daemon releases match',
+    versionRefreshNeeded: 'Frontend and server releases differ; refresh required',
+    versionDaemonUpdate: 'Daemon and server releases differ; update and restart the daemon',
+    versionMixed: 'Frontend and daemon both differ from the server release',
+    versionChecking: 'Reading server and daemon versions…',
+    versionUnknown: 'Daemon is offline, unselected, or too old to report a version',
+    frontendVersion: 'Frontend',
+    serverVersion: 'Server',
+    daemonVersion: 'Daemon',
+    daemonVersionShort: 'Daemon v{version}',
+    versionUnreported: 'Unknown',
+    refreshNow: 'Refresh now'
   },
   pair: {
     title: 'Pair PC',

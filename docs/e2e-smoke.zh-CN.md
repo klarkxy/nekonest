@@ -15,7 +15,7 @@
 
 ## 前置条件（开放模式）
 
-- [ ] VPS 已运行；`GET /health` → `{"status":"nyan~"}`
+- [ ] VPS 已运行；`GET /health` 返回 `status=nyan~` 以及预期的 `server_version` / `protocol_version`
 - [ ] 已设 `NEKONEST_ADMIN_SECRET`（或旧名 `NEKONEST_PHONE_SECRET`）
 - [ ] 已设 `NEKONEST_BOOTSTRAP_TOKEN`，注册 daemon 时使用
 - [ ] server **与** daemon 均为 `NEKONEST_TRANSPORT_MODE=open`
@@ -30,7 +30,7 @@
 
 1. 打开 PWA，输入窝 admin 密钥。  
 2. 配对：主机 `nekonest-daemon -pair gen`；粘贴 **QR JSON**（推荐）或 6 位码；与 PC 屏幕核对 **指纹**。  
-3. 设备列表显示主机 **在线**。  
+3. 设备列表显示主机 **在线**，且 PWA / Server / Daemon 版本一致；故意使用旧 PWA 时显示“立即刷新”，旧 Daemon 则单独提示更新。
 4. 主机侧打开/使用 agent，确保有近期线程。  
 5. 手机：**目录 → agent → 线程** 可见；有能力宣告时可见 capabilities。  
 6. 打开线程；历史加载；发短 prompt；出现流式输出。  

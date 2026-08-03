@@ -146,7 +146,11 @@
         "os": { "type": "string", "enum": ["windows", "linux"] },
         "status": { "type": "string", "enum": ["online", "offline"] },
         "last_seen": { "type": "integer" },
-        "active_agents": { "type": "integer" }
+        "active_agents": { "type": "integer" },
+        "daemon_version": {
+          "type": "string",
+          "description": "NekoNest application release reported by the live daemon; absent when offline or unreported"
+        }
       }
     },
     "SessionCapabilities": {

@@ -3,6 +3,7 @@ export const FIXED_NOW = Math.floor(FIXED_NOW_MS / 1000)
 export const MAIN_DEVICE_ID = 'device-windows'
 export const MAIN_SESSION_ID = 'session-codex'
 export const NATIVE_THREAD_ID = 'native-thread-visual'
+export const APP_VERSION = '0.2.1'
 
 export const SCENARIO_NAMES = new Set([
   'setup-fresh',
@@ -71,7 +72,8 @@ export function devicesFor(name) {
       os: 'windows',
       status: offline ? 'offline' : 'online',
       last_seen: FIXED_NOW - (offline ? 3600 : 8),
-      active_agents: 5
+      active_agents: 5,
+      ...(offline ? {} : { daemon_version: APP_VERSION })
     },
     {
       id: 'device-linux',

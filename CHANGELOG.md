@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-03
+
+### Added
+
+- Cross-component application release reporting: PWA, server, and live daemons
+  expose independent app versions; the device screen shows alignment, requests
+  a frontend refresh when its served release differs, and flags daemon updates.
+- `-version` output for server and daemon plus version fields on `/health` and
+  `nekonest-daemon -doctor` diagnostics.
+- Deterministic Chromium visual-regression coverage for the primary PWA states,
+  responsive layouts, themes, locales, and prompt lifecycle.
+
+### Fixed
+
+- Preserve the first prompt bubble when a newly started Codex thread becomes
+  owned and native history is synchronized.
+- Refresh the reported daemon release when a new live connection replaces an
+  older connection for the same device.
+
 ## [0.2.0] - 2026-08-01
 
 ### Added
@@ -120,6 +139,7 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/klarkxy/nekonest/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/klarkxy/nekonest/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/klarkxy/nekonest/releases/tag/v0.1.0

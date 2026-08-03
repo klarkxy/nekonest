@@ -13,20 +13,23 @@ import (
 
 // ConnectionManager handles all WebSocket connections.
 type ConnectionManager struct {
-	mu                   sync.RWMutex
-	daemonConns          map[string]*DaemonConn // device_id -> daemon connection
-	nextDaemonGeneration uint64
-	phoneConns           map[string][]*websocket.Conn // device_id -> phone connections (subscribed to that device)
-	phoneOutbounds       map[*websocket.Conn]*phoneOutbound
-	database             *db.DB
-	onDeviceUp           func(deviceID string)
-	onDeviceDown         func(deviceID string)
+	mu                    sync.RWMutex
+	daemonConns           map[string]*DaemonConn // device_id -> daemon connection
+	nextDaemonGeneration  uint64
+	phoneConns            map[string][]*websocket.Conn // device_id -> phone connections (subscribed to that device)
+	phoneOutbounds        map[*websocket.Conn]*phoneOutbound
+	database              *db.DB
+	onDeviceUp            func(deviceID, appVersion string)
+	onDeviceDown          func(deviceID string)
+	onDeviceVersionChange func(deviceID, appVersion string)
+	afterDaemonPublished  func(*DaemonConn) // test synchronization hook; nil in production
 }
 
 // DaemonConn wraps a daemon's WebSocket connection with metadata.
 type DaemonConn struct {
 	Conn       *websocket.Conn
 	DeviceID   string
+	AppVersion string
 	LastPing   time.Time
 	Sessions   map[string]*protocol.AgentSession
 	generation uint64
@@ -130,7 +133,7 @@ func NewConnectionManager(database *db.DB) *ConnectionManager {
 }
 
 // OnDeviceUp sets the callback for when a device comes online.
-func (cm *ConnectionManager) OnDeviceUp(fn func(string)) {
+func (cm *ConnectionManager) OnDeviceUp(fn func(string, string)) {
 	cm.onDeviceUp = fn
 }
 
@@ -139,17 +142,37 @@ func (cm *ConnectionManager) OnDeviceDown(fn func(string)) {
 	cm.onDeviceDown = fn
 }
 
+// OnDeviceVersionChange sets the callback for when a live daemon connection
+// is replaced by one reporting a different application release.
+func (cm *ConnectionManager) OnDeviceVersionChange(fn func(string, string)) {
+	cm.onDeviceVersionChange = fn
+}
+
 // AddDaemon registers a daemon WebSocket connection.
 // If a previous connection exists for the same device, it is closed and replaced.
 // onDeviceUp only fires when the device was previously offline.
 func (cm *ConnectionManager) AddDaemon(deviceID string, conn *websocket.Conn) *DaemonConn {
+	return cm.AddDaemonVersioned(deviceID, conn, "")
+}
+
+// AddDaemonVersioned registers a daemon and keeps its reported application
+// release with the live connection. It is intentionally not persisted: an
+// offline daemon cannot prove which binary will start next.
+func (cm *ConnectionManager) AddDaemonVersioned(deviceID string, conn *websocket.Conn, appVersion string) *DaemonConn {
 	dc := &DaemonConn{
-		Conn:     conn,
-		DeviceID: deviceID,
-		LastPing: time.Now(),
-		Sessions: make(map[string]*protocol.AgentSession),
+		Conn:       conn,
+		DeviceID:   deviceID,
+		AppVersion: appVersion,
+		LastPing:   time.Now(),
+		Sessions:   make(map[string]*protocol.AgentSession),
 	}
+	// Establish the new generation's lifecycle lease before publishing it.
+	// Otherwise a same-version replacement could supersede this connection
+	// before its initial online notification, causing both paths to stay silent.
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
 	wasOnline := false
+	previousVersion := ""
 	for {
 		// Observe without holding the global map lock while waiting for a slow
 		// write on the old device connection.
@@ -169,6 +192,9 @@ func (cm *ConnectionManager) AddDaemon(deviceID string, conn *websocket.Conn) *D
 			continue
 		}
 		wasOnline = old != nil && !old.closed
+		if old != nil {
+			previousVersion = old.AppVersion
+		}
 		cm.nextDaemonGeneration++
 		dc.generation = cm.nextDaemonGeneration
 		cm.daemonConns[deviceID] = dc
@@ -186,13 +212,40 @@ func (cm *ConnectionManager) AddDaemon(deviceID string, conn *websocket.Conn) *D
 		}
 		break
 	}
+	if cm.afterDaemonPublished != nil {
+		cm.afterDaemonPublished(dc)
+	}
 
 	log.Printf("[ws] daemon connected: %s", deviceID)
 	cm.database.UpdateDeviceLastSeen(deviceID)
 	if !wasOnline && cm.onDeviceUp != nil {
-		cm.onDeviceUp(deviceID)
+		// Hold the initial generation's lifecycle lease through notification
+		// enqueue. A concurrent replacement must wait on dc.mu, so the first
+		// online event cannot be published after a newer version event.
+		if cm.isLiveDaemonLocked(dc) {
+			cm.onDeviceUp(deviceID, appVersion)
+		}
+	} else if wasOnline && previousVersion != appVersion && cm.onDeviceVersionChange != nil {
+		// Hold this generation's lifecycle lease through notification enqueue.
+		// A subsequent replacement must wait on dc.mu, so an older version event
+		// cannot be published after the newer generation's event.
+		if cm.isLiveDaemonLocked(dc) {
+			cm.onDeviceVersionChange(deviceID, appVersion)
+		}
 	}
 	return dc
+}
+
+// GetDaemonVersion returns the application release reported by the current
+// live daemon connection. Empty means offline or an older unreporting daemon.
+func (cm *ConnectionManager) GetDaemonVersion(deviceID string) string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	dc := cm.daemonConns[deviceID]
+	if dc == nil {
+		return ""
+	}
+	return dc.AppVersion
 }
 
 // RemoveDaemon removes a daemon connection only if conn is still the registered one.

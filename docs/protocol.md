@@ -20,6 +20,24 @@ Keep JSON field names, enums, optionality, timestamps, and meanings identical ac
 
 First frames (`register_device` for daemon, `subscribe` for phone) **must** include both fields. Server returns negotiated version/mode on `auth_response` / `subscribe_ack`. Stable error codes: `version_mismatch`, `transport_mode_mismatch`, `invalid_envelope`.
 
+### Application release versions
+
+Application release identity is separate from `protocol_version`: a release
+mismatch is diagnostic and does not by itself reject an otherwise compatible
+connection.
+
+| Field | Direction / meaning |
+|---|---|
+| `daemon_version` | Daemon sends its release in `register_device.payload`; server returns the live value in `auth_response`, `subscribe_ack`, `device_online`, and online `Device` snapshots. Absent means offline or an older unreporting daemon. |
+| `pwa_version` | PWA sends its build release in `subscribe.payload`; server echoes the accepted value in `subscribe_ack`. |
+| `server_version` | Server application release in `auth_response`, `subscribe_ack`, `/health`, and `/api/devices`. It is **not** the wire protocol version. |
+| `refresh_required` | `subscribe_ack` boolean; true when a reported PWA release differs from the server release. The PWA offers a user-triggered service-worker update/reload and never auto-loops on this signal. |
+| `update_required` | `auth_response` boolean; true when a reported daemon release differs from the server release. |
+
+Current builds use SemVer release strings. `pwa_version` and `daemon_version`
+remain optional for compatibility with older clients; missing values are shown
+as unknown rather than assumed current.
+
 ## Envelope
 
 Every WebSocket application message is a `NekoMessage`:
@@ -61,6 +79,7 @@ Adding an agent requires adapter + registry, server types, PWA catalog/assets, s
 | `status` | `online` \| `offline` |
 | `last_seen` | Unix seconds |
 | `active_agents` | Session-count hint (not distinct agent types); PWA labels it as threads |
+| `daemon_version` | Release reported by the current live daemon; omitted when offline/unreported |
 
 ### AgentSession
 

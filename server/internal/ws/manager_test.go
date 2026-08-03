@@ -27,7 +27,7 @@ func TestConnectionManagerDaemonIdentity(t *testing.T) {
 	cm := NewConnectionManager(d)
 
 	var up, down int
-	cm.OnDeviceUp(func(id string) {
+	cm.OnDeviceUp(func(id, _ string) {
 		if id == "dev1" {
 			up++
 		}
@@ -91,6 +91,198 @@ func TestConnectionManagerDaemonIdentity(t *testing.T) {
 		t.Fatalf("down=%d online=%v", down, cm.IsDaemonOnline("dev1"))
 	}
 	_ = c2
+}
+
+func TestInitialDaemonVersionNotificationPrecedesReplacement(t *testing.T) {
+	d := testDB(t)
+	_, _ = d.RegisterDevice("dev1", "PC")
+	cm := NewConnectionManager(d)
+
+	initialEntered := make(chan struct{})
+	releaseInitial := make(chan struct{})
+	var mu sync.Mutex
+	var versions []string
+	recordVersion := func(_ string, version string) {
+		if version == "0.2.0" {
+			close(initialEntered)
+			<-releaseInitial
+		}
+		mu.Lock()
+		versions = append(versions, version)
+		mu.Unlock()
+	}
+	cm.OnDeviceUp(recordVersion)
+	cm.OnDeviceVersionChange(recordVersion)
+
+	initialDone := make(chan struct{})
+	go func() {
+		cm.AddDaemonVersioned("dev1", nil, "0.2.0")
+		close(initialDone)
+	}()
+	select {
+	case <-initialEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial online callback did not start")
+	}
+
+	replacementDone := make(chan struct{})
+	go func() {
+		cm.AddDaemonVersioned("dev1", nil, "0.2.1")
+		close(replacementDone)
+	}()
+	select {
+	case <-replacementDone:
+		t.Fatal("replacement bypassed the initial generation notification")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseInitial)
+	select {
+	case <-initialDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial connection did not finish")
+	}
+	select {
+	case <-replacementDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(versions) != 2 || versions[0] != "0.2.0" || versions[1] != "0.2.1" {
+		t.Fatalf("version notification order = %v", versions)
+	}
+}
+
+func TestSameVersionReplacementCannotSkipInitialNotification(t *testing.T) {
+	d := testDB(t)
+	_, _ = d.RegisterDevice("dev1", "PC")
+	cm := NewConnectionManager(d)
+
+	initialPublished := make(chan struct{})
+	releaseInitial := make(chan struct{})
+	cm.afterDaemonPublished = func(dc *DaemonConn) {
+		if dc.AppVersion == "0.2.1" {
+			close(initialPublished)
+			<-releaseInitial
+		}
+	}
+
+	var mu sync.Mutex
+	var versions []string
+	cm.OnDeviceUp(func(_ string, version string) {
+		mu.Lock()
+		versions = append(versions, version)
+		mu.Unlock()
+	})
+	cm.OnDeviceVersionChange(func(_ string, version string) {
+		mu.Lock()
+		versions = append(versions, version)
+		mu.Unlock()
+	})
+
+	initialDone := make(chan struct{})
+	go func() {
+		cm.AddDaemonVersioned("dev1", nil, "0.2.1")
+		close(initialDone)
+	}()
+	select {
+	case <-initialPublished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial generation was not published")
+	}
+
+	replacementDone := make(chan struct{})
+	go func() {
+		cm.AddDaemonVersioned("dev1", nil, "0.2.1")
+		close(replacementDone)
+	}()
+	select {
+	case <-replacementDone:
+		t.Fatal("same-version replacement bypassed the unpublished online notification")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cm.afterDaemonPublished = nil
+	close(releaseInitial)
+	select {
+	case <-initialDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial connection did not finish")
+	}
+	select {
+	case <-replacementDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("same-version replacement did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(versions) != 1 || versions[0] != "0.2.1" {
+		t.Fatalf("version notifications = %v, want one initial online event", versions)
+	}
+}
+
+func TestDaemonVersionReplacementNotificationsStayGenerationOrdered(t *testing.T) {
+	d := testDB(t)
+	_, _ = d.RegisterDevice("dev1", "PC")
+	cm := NewConnectionManager(d)
+	cm.AddDaemonVersioned("dev1", nil, "0.2.0")
+
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var mu sync.Mutex
+	var versions []string
+	cm.OnDeviceVersionChange(func(_ string, version string) {
+		if version == "0.2.1-a" {
+			close(firstEntered)
+			<-releaseFirst
+		}
+		mu.Lock()
+		versions = append(versions, version)
+		mu.Unlock()
+	})
+
+	firstDone := make(chan struct{})
+	go func() {
+		cm.AddDaemonVersioned("dev1", nil, "0.2.1-a")
+		close(firstDone)
+	}()
+	select {
+	case <-firstEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first replacement callback did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		cm.AddDaemonVersioned("dev1", nil, "0.2.1-b")
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+		t.Fatal("newer replacement bypassed the current generation notification")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first replacement did not finish")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second replacement did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(versions) != 2 || versions[0] != "0.2.1-a" || versions[1] != "0.2.1-b" {
+		t.Fatalf("version notification order: %#v", versions)
+	}
 }
 
 func TestConnectionManagerPhoneSubscribe(t *testing.T) {

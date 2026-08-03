@@ -51,6 +51,44 @@
       <RouterLink v-else class="connection-action" :to="setupLocation()">{{ t('deviceList.keySettings') }}</RouterLink>
     </section>
 
+    <section
+      class="version-panel"
+      :class="{
+        'version-panel--ok': deviceStore.versionStatus.aligned,
+        'version-panel--warning': deviceStore.versionStatus.refreshRequired || deviceStore.versionStatus.daemonUpdateRequired
+      }"
+      :aria-label="t('deviceList.versionTitle')"
+      aria-live="polite"
+    >
+      <div class="version-panel__summary">
+        <div>
+          <span class="version-panel__title">{{ t('deviceList.versionTitle') }}</span>
+          <strong>{{ versionSummary }}</strong>
+        </div>
+        <button
+          v-if="deviceStore.versionStatus.refreshRequired"
+          type="button"
+          @click="refreshFrontend"
+        >
+          {{ t('deviceList.refreshNow') }}
+        </button>
+      </div>
+      <dl class="version-grid">
+        <div>
+          <dt>{{ t('deviceList.frontendVersion') }}</dt>
+          <dd>{{ displayVersion(deviceStore.frontendVersion) }}</dd>
+        </div>
+        <div>
+          <dt>{{ t('deviceList.serverVersion') }}</dt>
+          <dd>{{ displayVersion(deviceStore.serverVersion) }}</dd>
+        </div>
+        <div>
+          <dt>{{ t('deviceList.daemonVersion') }}</dt>
+          <dd>{{ displayVersion(deviceStore.activeDaemonVersion) }}</dd>
+        </div>
+      </dl>
+    </section>
+
     <div v-if="deviceStore.authError" class="auth-banner" role="alert">
       <strong>{{ t('deviceList.authTitle') }}</strong>
       <span>{{ t('deviceList.authBody') }}</span>
@@ -109,6 +147,10 @@
                 <span>{{ device.status === 'online' ? t('common.online') : t('common.offline') }}</span>
                 <span class="meta-divider" aria-hidden="true"></span>
                 <span class="agent-count">{{ t('deviceList.threadCount', { n: device.active_agents }) }}</span>
+                <template v-if="device.daemon_version">
+                  <span class="meta-divider" aria-hidden="true"></span>
+                  <span class="daemon-version">{{ t('deviceList.daemonVersionShort', { version: device.daemon_version }) }}</span>
+                </template>
               </span>
             </span>
             <span class="device-arrow" aria-hidden="true">›</span>
@@ -198,6 +240,18 @@ const connection = computed(() => {
   return { tone: 'waiting', dot: 'waiting', label: t('deviceList.connWsReconnect') } as const
 })
 
+const versionSummary = computed(() => {
+  const status = deviceStore.versionStatus
+  if (status.refreshRequired && status.daemonUpdateRequired) {
+    return t('deviceList.versionMixed')
+  }
+  if (status.refreshRequired) return t('deviceList.versionRefreshNeeded')
+  if (status.daemonUpdateRequired) return t('deviceList.versionDaemonUpdate')
+  if (status.aligned) return t('deviceList.versionAligned')
+  if (!deviceStore.serverVersion) return t('deviceList.versionChecking')
+  return t('deviceList.versionUnknown')
+})
+
 onMounted(() => {
   deviceStore.initWebSocket()
   void deviceStore.fetchDevices()
@@ -205,6 +259,22 @@ onMounted(() => {
 
 function retryDevices() {
   void deviceStore.fetchDevices()
+}
+
+async function refreshFrontend() {
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.getRegistration()
+      await registration?.update()
+    } catch {
+      // A normal reload remains useful when an update probe is unavailable.
+    }
+  }
+  window.location.reload()
+}
+
+function displayVersion(version: string): string {
+  return version ? `v${version}` : t('deviceList.versionUnreported')
 }
 
 function onOpenDevice(device: Device) {
@@ -418,6 +488,100 @@ function osLabel(os: string): string {
   opacity: 0.65;
 }
 
+.version-panel {
+  display: grid;
+  gap: 11px;
+  margin-bottom: 16px;
+  padding: 12px 13px;
+  border: 1px solid var(--neko-line);
+  border-radius: 14px;
+  color: var(--neko-ink-soft);
+  background: var(--neko-surface-muted);
+}
+
+.version-panel--ok {
+  border-color: var(--neko-success-line);
+}
+
+.version-panel--warning {
+  border-color: var(--neko-danger-line);
+  color: var(--neko-danger-ink);
+  background: var(--neko-danger-soft);
+}
+
+.version-panel__summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.version-panel__summary > div {
+  display: grid;
+  gap: 3px;
+}
+
+.version-panel__title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.version-panel__summary strong {
+  color: var(--neko-ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.version-panel__summary button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: var(--neko-danger);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.version-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.version-grid > div {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--neko-surface-solid) 72%, transparent);
+}
+
+.version-grid dt,
+.version-grid dd {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-grid dt {
+  font-size: 10px;
+}
+
+.version-grid dd {
+  margin-top: 3px;
+  color: var(--neko-ink);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 .auth-banner {
   display: grid;
   gap: 4px;
@@ -628,6 +792,14 @@ function osLabel(os: string): string {
 
 .agent-count {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.daemon-version {
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

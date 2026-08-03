@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
 	"github.com/nekonest/server/internal/protocol"
 )
@@ -52,6 +53,11 @@ func websocketURL(httpURL, path string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http") + path
 }
 
+func boolPayload(payload map[string]any, key string) bool {
+	value, _ := payload[key].(bool)
+	return value
+}
+
 func connectDaemon(t *testing.T, httpServer *httptest.Server, token string) *websocket.Conn {
 	t.Helper()
 	conn, _, err := websocket.DefaultDialer.Dial(websocketURL(httpServer.URL, "/ws/daemon"), nil)
@@ -60,8 +66,9 @@ func connectDaemon(t *testing.T, httpServer *httptest.Server, token string) *web
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	if err := conn.WriteJSON(v1Envelope(protocol.MsgRegisterDevice, "dev1", map[string]any{
-		"device_id": "dev1",
-		"token":     token,
+		"device_id":      "dev1",
+		"token":          token,
+		"daemon_version": buildinfo.Version,
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +78,9 @@ func connectDaemon(t *testing.T, httpServer *httptest.Server, token string) *web
 	}
 	if auth.Type != protocol.MsgAuthResponse {
 		t.Fatalf("auth response: %#v", auth)
+	}
+	if stringPayload(auth.Payload, "server_version") != buildinfo.Version {
+		t.Fatalf("server version: %#v", auth.Payload)
 	}
 	return conn
 }
@@ -84,9 +94,9 @@ func connectDaemonReady(
 	t.Helper()
 	online := make(chan string, 1)
 	previous := server.connMgr.onDeviceUp
-	server.connMgr.OnDeviceUp(func(deviceID string) {
+	server.connMgr.OnDeviceUp(func(deviceID, appVersion string) {
 		if previous != nil {
-			previous(deviceID)
+			previous(deviceID, appVersion)
 		}
 		online <- deviceID
 	})
@@ -115,6 +125,7 @@ func connectPhone(t *testing.T, httpServer *httptest.Server, secret string) *web
 	t.Cleanup(func() { _ = conn.Close() })
 	if err := conn.WriteJSON(v1Envelope(protocol.MsgSubscribe, "dev1", map[string]any{
 		"subscription_id": "subscription-test",
+		"pwa_version":     buildinfo.Version,
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -127,10 +138,156 @@ func connectPhone(t *testing.T, httpServer *httptest.Server, secret string) *web
 		if i == 0 {
 			if snapshot.Type != protocol.MsgSubscribeAck ||
 				snapshot.DeviceID != "dev1" ||
-				stringPayload(snapshot.Payload, "subscription_id") != "subscription-test" {
+				stringPayload(snapshot.Payload, "subscription_id") != "subscription-test" ||
+				stringPayload(snapshot.Payload, "server_version") != buildinfo.Version ||
+				boolPayload(snapshot.Payload, "refresh_required") {
 				t.Fatalf("subscribe ACK: %#v", snapshot)
 			}
 		}
+	}
+	return conn
+}
+
+func TestComponentVersionsReportRefreshAndDaemonUpdateState(t *testing.T) {
+	oldLimiter := wsRateLimiter
+	wsRateLimiter = newRateLimiter(100, time.Minute)
+	t.Cleanup(func() { wsRateLimiter = oldLimiter })
+
+	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	daemon := connectDaemonReadyWithVersion(t, server, httpServer, token, "0.1.0")
+	defer daemon.Close()
+
+	healthResp, err := http.Get(httpServer.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer healthResp.Body.Close()
+	var health map[string]any
+	if err := json.NewDecoder(healthResp.Body).Decode(&health); err != nil {
+		t.Fatal(err)
+	}
+	if health["server_version"] != buildinfo.Version || health["protocol_version"] != protocol.CurrentProtocolVersion {
+		t.Fatalf("health versions: %#v", health)
+	}
+
+	header := http.Header{"Origin": []string{httpServer.URL}}
+	phone, _, err := websocket.DefaultDialer.Dial(
+		websocketURL(httpServer.URL, "/ws/phone?secret=phone-secret"),
+		header,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer phone.Close()
+	if err := phone.WriteJSON(v1Envelope(protocol.MsgSubscribe, "dev1", map[string]any{
+		"subscription_id": "version-test",
+		"pwa_version":     "0.1.0",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	var ack protocol.NekoMessage
+	if err := phone.ReadJSON(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Type != protocol.MsgSubscribeAck ||
+		stringPayload(ack.Payload, "server_version") != buildinfo.Version ||
+		stringPayload(ack.Payload, "daemon_version") != "0.1.0" ||
+		!boolPayload(ack.Payload, "refresh_required") {
+		t.Fatalf("version ACK: %#v", ack)
+	}
+
+	// session_list then device_list
+	var snapshot protocol.NekoMessage
+	if err := phone.ReadJSON(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.ReadJSON(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Type != protocol.MsgDeviceList {
+		t.Fatalf("device snapshot: %#v", snapshot)
+	}
+	rawDevices, _ := json.Marshal(snapshot.Payload["devices"])
+	var devices []*protocol.Device
+	if err := json.Unmarshal(rawDevices, &devices); err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].DaemonVersion != "0.1.0" {
+		t.Fatalf("device versions: %#v", devices)
+	}
+
+	// A replacement can authenticate before the old daemon's read loop has
+	// observed its close. The phone must still receive the new live release.
+	replacement, _, err := websocket.DefaultDialer.Dial(websocketURL(httpServer.URL, "/ws/daemon"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacement.Close()
+	if err := replacement.WriteJSON(v1Envelope(protocol.MsgRegisterDevice, "dev1", map[string]any{
+		"device_id":      "dev1",
+		"token":          token,
+		"daemon_version": "0.1.1",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var replacementAuth protocol.NekoMessage
+	if err := replacement.ReadJSON(&replacementAuth); err != nil {
+		t.Fatal(err)
+	}
+	if replacementAuth.Type != protocol.MsgAuthResponse {
+		t.Fatalf("replacement auth: %#v", replacementAuth)
+	}
+
+	_ = phone.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var versionUpdate protocol.NekoMessage
+	if err := phone.ReadJSON(&versionUpdate); err != nil {
+		t.Fatal(err)
+	}
+	if versionUpdate.Type != protocol.MsgDeviceOnline ||
+		stringPayload(versionUpdate.Payload, "daemon_version") != "0.1.1" {
+		t.Fatalf("replacement version update: %#v", versionUpdate)
+	}
+	_ = phone.SetReadDeadline(time.Time{})
+}
+
+func connectDaemonReadyWithVersion(
+	t *testing.T,
+	server *Server,
+	httpServer *httptest.Server,
+	token, daemonVersion string,
+) *websocket.Conn {
+	t.Helper()
+	online := make(chan string, 1)
+	previous := server.connMgr.onDeviceUp
+	server.connMgr.OnDeviceUp(func(deviceID, appVersion string) {
+		if previous != nil {
+			previous(deviceID, appVersion)
+		}
+		online <- deviceID
+	})
+	conn, _, err := websocket.DefaultDialer.Dial(websocketURL(httpServer.URL, "/ws/daemon"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(v1Envelope(protocol.MsgRegisterDevice, "dev1", map[string]any{
+		"device_id":      "dev1",
+		"token":          token,
+		"daemon_version": daemonVersion,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var auth protocol.NekoMessage
+	if err := conn.ReadJSON(&auth); err != nil {
+		t.Fatal(err)
+	}
+	if !boolPayload(auth.Payload, "update_required") {
+		t.Fatalf("daemon update state: %#v", auth.Payload)
+	}
+	select {
+	case <-online:
+	case <-time.After(2 * time.Second):
+		t.Fatal("versioned daemon did not finish its online transition")
 	}
 	return conn
 }

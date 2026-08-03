@@ -54,6 +54,7 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 - **Codex full control** — native app-server send/start, approve/deny, steer, interrupt, and image/file attachments; honest `exec resume` fallback when unhealthy.
 - **Transport negotiation** — one fixed `open` or `sealed` mode per nest; v0.2 defaults to open while sealed remains an explicit v1 preview.
 - **Mobile UX** — installable PWA, drafts, sanitized Markdown, reconnect outbox, optional Web Push.
+- **Version diagnostics** — compare the loaded PWA, server, and selected live daemon release; refresh the frontend or update the daemon when they differ.
 - **Safe defaults** — admin bootstrap, revocable phone identities, daemon registration token, origin checks, attachment validation, size limits, controlled proxy trust.
 
 ## Supported agents

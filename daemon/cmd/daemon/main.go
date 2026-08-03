@@ -23,6 +23,7 @@ import (
 	"github.com/nekonest/daemon/internal/adapters"
 	"github.com/nekonest/daemon/internal/agentexec"
 	"github.com/nekonest/daemon/internal/attach"
+	"github.com/nekonest/daemon/internal/buildinfo"
 	"github.com/nekonest/daemon/internal/config"
 	"github.com/nekonest/daemon/internal/connection"
 	"github.com/nekonest/daemon/internal/identity"
@@ -50,7 +51,12 @@ func main() {
 	register := flag.Bool("register", false, "register this device with the server (needs NEKONEST_SERVER)")
 	deviceName := flag.String("name", "", "device name (for registration)")
 	doctor := flag.Bool("doctor", false, "run non-interactive diagnostics and exit")
+	showVersion := flag.Bool("version", false, "print the NekoNest daemon version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(buildinfo.Version)
+		return
+	}
 
 	// Handle registration flow
 	if *register {
@@ -89,7 +95,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Printf("🐱 NekoNest Daemon starting")
+	log.Printf("🐱 NekoNest Daemon %s starting", buildinfo.Version)
 	log.Printf("   Device: %s", cfg.DeviceID)
 	log.Printf("   Server: %s", cfg.ServerURL)
 	daemonTransport = strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
@@ -1631,6 +1637,7 @@ func runDoctor(configPath string) int {
 		fmt.Printf("[%s] %s: %s\n", mark, name, detail)
 	}
 
+	check("daemon_version", true, buildinfo.Version)
 	check("os", true, runtime.GOOS+"/"+runtime.GOARCH)
 	transport := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
 	if transport == "" {
@@ -1691,8 +1698,25 @@ func runDoctor(configPath string) int {
 		if err != nil {
 			check("server_health", false, err.Error())
 		} else {
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
 			check("server_health", resp.StatusCode == http.StatusOK, fmt.Sprintf("%s status=%d", httpBase, resp.StatusCode))
+			if resp.StatusCode == http.StatusOK {
+				var health struct {
+					ServerVersion string `json:"server_version"`
+				}
+				if readErr != nil {
+					check("component_versions", false, readErr.Error())
+				} else if err := json.Unmarshal(body, &health); err != nil || health.ServerVersion == "" {
+					check("component_versions", false, "server did not report its application version")
+				} else {
+					check(
+						"component_versions",
+						health.ServerVersion == buildinfo.Version,
+						fmt.Sprintf("daemon=%s server=%s", buildinfo.Version, health.ServerVersion),
+					)
+				}
+			}
 		}
 	}
 

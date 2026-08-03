@@ -15,6 +15,7 @@ Binary: `nekonest-server` (`server/cmd/server`).
 | `-port` | `8080` | Listen port |
 | `-data` | `./data` | Data directory (SQLite DB + attachments) |
 | `-pwa` | `./pwa-dist` | Built PWA static files directory |
+| `-version` | — | Print the server application release and exit |
 
 ### Listen address
 
@@ -63,7 +64,7 @@ Treat this directory as sensitive. Back it up with the same care as device token
 
 | Path | Role | Auth |
 |---|---|---|
-| `GET /health` | Liveness; body `{"status":"nyan~"}` | None |
+| `GET /health` | Liveness plus `server_version` and `protocol_version` | None |
 | `GET /ws/phone` | Phone WebSocket | Phone secret |
 | `GET /ws/daemon` | Daemon WebSocket | Device token after register |
 | `GET /api/devices` | List devices | Phone secret |
@@ -94,6 +95,8 @@ Binary: `nekonest-daemon.exe` (`daemon/cmd/daemon`).
 | `-name <string>` | Device display name used at registration |
 | `-pair gen` | Generate a new 6-digit phone pair code for an already-registered device |
 | `-config <path>` | Config file path (default: `%USERPROFILE%\.nekonest\config.json`) |
+| `-doctor` | Run diagnostics, including daemon/server application-version alignment |
+| `-version` | Print the daemon application release and exit |
 
 ### Environment variables (registration)
 

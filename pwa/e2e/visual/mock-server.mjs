@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
 import {
+  APP_VERSION,
   FIXED_NOW,
   MAIN_DEVICE_ID,
   MAIN_SESSION_ID,
@@ -83,7 +84,7 @@ const server = createServer(async (request, response) => {
     if (state.behavior.devicesLoading) {
       request.on('close', () => response.destroy())
       setTimeout(() => {
-        if (!response.destroyed) sendJSON(response, 200, { devices: state.devices })
+        if (!response.destroyed) sendJSON(response, 200, { devices: state.devices, server_version: APP_VERSION })
       }, 20_000)
       return
     }
@@ -91,7 +92,7 @@ const server = createServer(async (request, response) => {
       sendJSON(response, state.behavior.devicesStatus, { error: 'visual fixture error' })
       return
     }
-    sendJSON(response, 200, { devices: state.devices })
+    sendJSON(response, 200, { devices: state.devices, server_version: APP_VERSION })
     return
   }
 
@@ -227,7 +228,11 @@ webSockets.on('connection', socket => {
         type: 'subscribe_ack',
         device_id: deviceId,
         payload: {
-          subscription_id: message.payload?.subscription_id
+          subscription_id: message.payload?.subscription_id,
+          pwa_version: message.payload?.pwa_version,
+          server_version: APP_VERSION,
+          daemon_version: APP_VERSION,
+          refresh_required: false
         }
       })
       sendFrame(socket, {
