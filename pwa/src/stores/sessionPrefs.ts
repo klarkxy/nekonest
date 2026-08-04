@@ -84,6 +84,16 @@ export const useSessionPrefsStore = defineStore('sessionPrefs', () => {
     else archive(id)
   }
 
+  function setArchived(ids: string[], value: boolean) {
+    const next = new Set(archived.value)
+    for (const id of ids) {
+      if (value) next.add(id)
+      else next.delete(id)
+    }
+    archived.value = next
+    saveSet(ARCHIVED_KEY, next)
+  }
+
   function isCollapsed(nodeKey: string) {
     return collapsed.value.has(nodeKey)
   }
@@ -162,7 +172,7 @@ export const useSessionPrefsStore = defineStore('sessionPrefs', () => {
 
   return {
     archived, collapsed, showArchived, sortMode, manualOrder,
-    isArchived, archive, unarchive, toggleArchive,
+    isArchived, archive, unarchive, toggleArchive, setArchived,
     isCollapsed, toggleCollapse, setCollapsed,
     setSortMode, sortSessions, moveSession, ensureOrder, pruneOrder
   }

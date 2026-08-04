@@ -235,7 +235,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | P2 | 设置：窝 URL + 管理员/引导 → 独立手机身份；不可达时清晰错误 | MUST | |
 | P3 | 配对（QR 为主；验证码 + 指纹回退） | MUST | |
 | P4 | 设备列表（在线状态、线程数） | MUST | 密封模式下解密设备目录 |
-| P5 | 工作区：目录 → agent → 线程树 | MUST | 折叠、排序、归档、手动序 |
+| P5 | 工作区：目录 → agent → 线程树 | MUST | 折叠、排序、线程级或整项目归档、手动序 |
 | P6 | 本地线程搜索（摘要、路径、agent） | MUST | 本地解密后 |
 | P7 | 会话聊天：历史合并 + 直播 + 稳定 id | MUST | 重连不双份回合 |
 | P8 | 输入：发送、草稿、附件、忙碌锁定 | MUST | 附件 UI 按能力分档 |
@@ -250,7 +250,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | P17 | 消毒 Markdown + 代码块 | MUST | |
 | P18 | 触控约 44px；safe-area；尊重减少动效 | MUST | |
 | P19 | 引导文案与真实安装命令一致 | MUST | 分 OS（Windows + Linux） |
-| P20 | 会话偏好持久化 | SHOULD | |
+| P20 | 会话偏好持久化 | SHOULD | 线程/项目归档、折叠、排序 |
 | P21 | 相册/相机附件 | SHOULD | 在附件限制内；Codex 完整路径 |
 | P22 | 语音转文字（系统/浏览器 API） | SHOULD | 不强制云 STT |
 | P23 | 运行中排队下一条（有能力时） | SHOULD | 否则禁用并说明；仅 Codex 且已宣告 |

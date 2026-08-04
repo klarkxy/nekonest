@@ -73,6 +73,22 @@ describe('buildSessionTree', () => {
     expect(tree[0].agents.map(agent => agent.type)).toEqual(['codex'])
   })
 
+  it('sorts projects by their most recent session activity instead of project name', () => {
+    const tree = buildSessionTree([
+      session('alphabetically-first', 'codex', 'D:\\workspace\\alpha', { last_activity: 10 }),
+      session('most-recent', 'kilo', 'D:\\workspace\\zulu', { last_activity: 30 }),
+      session('middle', 'claude_code', 'D:\\workspace\\middle', { last_activity: 20 }),
+      session('newest-orphan', 'grok_build', undefined, { last_activity: 40 })
+    ])
+
+    expect(tree.map(project => project.key)).toEqual([
+      UNCATEGORIZED_PROJECT_KEY,
+      'path:d:/workspace/zulu',
+      'path:d:/workspace/middle',
+      'path:d:/workspace/alpha'
+    ])
+  })
+
   it('sorts within each project-agent leaf without mutating the input', () => {
     const input = [
       session('old', 'codex', 'D:\\repo', { last_activity: 1 }),

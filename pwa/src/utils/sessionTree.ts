@@ -140,6 +140,8 @@ export function buildSessionTree(
   })
 
   return tree.sort((a, b) => {
+    const activity = b.lastActivity - a.lastActivity
+    if (activity !== 0) return activity
     if (a.uncategorized !== b.uncategorized) return a.uncategorized ? 1 : -1
     const label = a.label.localeCompare(b.label, collatorLocale())
     return label || a.path.localeCompare(b.path, collatorLocale())

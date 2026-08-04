@@ -237,7 +237,7 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 | P2 | Setup: nest URL + admin/bootstrap then independent phone identity; clear error if nest unreachable | MUST | |
 | P3 | Pair device (QR scan primary; code + fingerprint fallback) | MUST | |
 | P4 | Device list with online/offline and thread counts | MUST | Decrypt device catalog in sealed mode |
-| P5 | Workspace: directory → agent → thread tree | MUST | Collapse, sort, archive, manual order |
+| P5 | Workspace: directory → agent → thread tree | MUST | Collapse, sort, per-thread or whole-project archive, manual order |
 | P6 | Local search across threads (summary, path, agent) | MUST | After local decrypt |
 | P7 | Session chat: history merge + live stream + stable ids | MUST | No duplicate turns on reconnect |
 | P8 | Composer: send, drafts, attachments, busy lock | MUST | Attachment UI tiered by capability |
@@ -252,7 +252,7 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 | P17 | Sanitized Markdown + code blocks | MUST | |
 | P18 | Touch targets ~44px; safe-area; reduced-motion respect | MUST | |
 | P19 | Onboarding that matches real install commands | MUST | OS-specific copy (Windows + Linux) |
-| P20 | Session prefs persist (archive/collapse/sort) | SHOULD | |
+| P20 | Session prefs persist (thread/project archive, collapse, sort) | SHOULD | |
 | P21 | Image capture from camera roll | SHOULD | Within attachment limits; Codex full path |
 | P22 | Voice input → text (OS speech or browser API) | SHOULD | No cloud STT required |
 | P23 | Prompt queue while running (when capability allows) | SHOULD | Else disable with reason; Codex only when advertised |

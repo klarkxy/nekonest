@@ -54,29 +54,43 @@
       :class="{ uncategorized: project.uncategorized }"
       :aria-labelledby="projectHeadingId(project.key)"
     >
-      <button
-        :id="projectHeadingId(project.key)"
-        type="button"
-        class="project-header"
-        :aria-expanded="!prefs.isCollapsed(projectNodeKey(project.key))"
-        :aria-controls="projectPanelId(project.key)"
-        @click="prefs.toggleCollapse(projectNodeKey(project.key))"
-      >
-        <span class="folder-icon" aria-hidden="true">
-          {{ project.uncategorized ? '🧺' : '📁' }}
-        </span>
-        <span class="project-copy">
-          <span class="project-title">{{ project.label }}</span>
-          <span v-if="project.path" class="project-path" :title="project.path">
-            {{ shortPath(project.path, 54) }}
+      <div class="project-header-row">
+        <button
+          :id="projectHeadingId(project.key)"
+          type="button"
+          class="project-header"
+          :aria-expanded="!prefs.isCollapsed(projectNodeKey(project.key))"
+          :aria-controls="projectPanelId(project.key)"
+          @click="prefs.toggleCollapse(projectNodeKey(project.key))"
+        >
+          <span class="folder-icon" aria-hidden="true">
+            {{ project.uncategorized ? '🧺' : '📁' }}
           </span>
-          <span v-else class="project-path">{{ t('threadList.noPath') }}</span>
-        </span>
-        <span class="project-count">{{ project.sessionCount }}</span>
-        <span class="chevron" aria-hidden="true">
-          {{ prefs.isCollapsed(projectNodeKey(project.key)) ? '▸' : '▾' }}
-        </span>
-      </button>
+          <span class="project-copy">
+            <span class="project-title">{{ project.label }}</span>
+            <span v-if="project.path" class="project-path" :title="project.path">
+              {{ shortPath(project.path, 54) }}
+            </span>
+            <span v-else class="project-path">{{ t('threadList.noPath') }}</span>
+          </span>
+          <span class="project-count">{{ project.sessionCount }}</span>
+          <span class="chevron" aria-hidden="true">
+            {{ prefs.isCollapsed(projectNodeKey(project.key)) ? '▸' : '▾' }}
+          </span>
+        </button>
+        <button
+          type="button"
+          class="archive-btn project-archive-btn"
+          :class="{ on: isProjectArchived(project) }"
+          :title="isProjectArchived(project) ? t('threadList.unarchiveProjectTitle') : t('threadList.archiveProjectTitle')"
+          :aria-label="isProjectArchived(project)
+            ? t('threadList.unarchiveProjectAria', { project: project.label })
+            : t('threadList.archiveProjectAria', { project: project.label })"
+          @click.stop="toggleProjectArchive(project)"
+        >
+          {{ isProjectArchived(project) ? t('threadList.unarchive') : t('threadList.archive') }}
+        </button>
+      </div>
 
       <div
         v-show="!prefs.isCollapsed(projectNodeKey(project.key))"
@@ -197,7 +211,12 @@ import { useSessionPrefsStore } from '@/stores/sessionPrefs'
 import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
 import type { AgentSession, AgentType } from '@/types/protocol'
 import { agentLabel, sessionActivityPresentation, shortSummary } from '@/utils/agent'
-import { buildSessionTree, type SessionTreeAgent, type SessionTreeProject } from '@/utils/sessionTree'
+import {
+  buildSessionTree,
+  projectKeyFromDir,
+  type SessionTreeAgent,
+  type SessionTreeProject
+} from '@/utils/sessionTree'
 import { sortSessionsByMode } from '@/utils/sessionSort'
 
 const props = defineProps<{
@@ -273,6 +292,22 @@ function onNewCodex(project: SessionTreeProject) {
   if (!path || !deviceOnline.value) return
   const draft = localThreads.createCodexDraft(props.deviceId, path, project.label)
   void router.push(sessionDetailLocation(props.deviceId, draft.id))
+}
+
+function projectSessionIds(project: SessionTreeProject): string[] {
+  return mergedSessions.value
+    .filter(session => projectKeyFromDir(session.project_dir) === project.key)
+    .map(session => session.id)
+}
+
+function isProjectArchived(project: SessionTreeProject): boolean {
+  const ids = projectSessionIds(project)
+  return ids.length > 0 && ids.every(id => prefs.isArchived(id))
+}
+
+function toggleProjectArchive(project: SessionTreeProject) {
+  const ids = projectSessionIds(project)
+  prefs.setArchived(ids, !ids.every(id => prefs.isArchived(id)))
 }
 
 function projectNodeKey(projectKey: string): string {
@@ -428,6 +463,15 @@ function shortPath(path: string, max = 36): string {
   background: var(--neko-surface-muted);
 }
 
+.project-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  background:
+    radial-gradient(circle at 4% 0%, var(--neko-rose-soft), transparent 42%),
+    var(--neko-surface);
+}
+
 .project-header {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
@@ -436,14 +480,16 @@ function shortPath(path: string, max = 36): string {
   gap: 10px;
   padding: 13px 14px;
   border: 0;
-  background:
-    radial-gradient(circle at 4% 0%, var(--neko-rose-soft), transparent 42%),
-    var(--neko-surface);
+  background: transparent;
   color: inherit;
   cursor: pointer;
   font: inherit;
   text-align: left;
   transition: background-color 180ms ease;
+}
+
+.project-archive-btn {
+  margin-right: 12px;
 }
 
 .project-header:focus-visible,

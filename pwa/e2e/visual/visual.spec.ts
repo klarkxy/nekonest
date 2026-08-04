@@ -129,9 +129,14 @@ test.describe('390px primary visual matrix', () => {
   test('device archived and collapsed states', async ({ page, request }) => {
     await openScenario(page, request, 'device-archived', devicePath)
     await expect(page.getByText('完善 NekoNest 本地截图回归')).toBeVisible()
-    await page.getByRole('button', { name: '收起线团' }).first().click()
+    const project = page.locator('.project-group').filter({ hasText: 'nekonest' }).first()
+    await project.getByRole('button', { name: '收起项目 nekonest 下的所有线团' }).click()
     await page.getByText('显示已收起').click()
-    await expect(page.locator('.session-item.archived')).toBeVisible()
+    const archivedProject = page.locator('.project-group').filter({ hasText: 'nekonest' }).first()
+    await expect(archivedProject.locator('.session-item.archived')).toHaveCount(3)
+    await expect(
+      archivedProject.getByRole('button', { name: '放回项目 nekonest 下的所有线团' })
+    ).toBeVisible()
     await capture(page, 'device-archived.png')
     await page.locator('.project-header').first().click()
     await expect(page.locator('.project-header').first()).toHaveAttribute('aria-expanded', 'false')
