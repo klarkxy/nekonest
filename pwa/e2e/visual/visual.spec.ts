@@ -245,13 +245,48 @@ test.describe('390px primary visual matrix', () => {
   test('session pending attachment', async ({ page, request }) => {
     await openScenario(page, request, 'session-attachment', sessionPath)
     await waitForConnected(page)
-    await page.locator('input[type="file"]').setInputFiles({
+    const chooserPromise = page.waitForEvent('filechooser')
+    await page.getByRole('button', { name: '添加附件' }).click()
+    const chooser = await chooserPromise
+    await chooser.setFiles({
       name: 'visual-check.txt',
       mimeType: 'text/plain',
       buffer: Buffer.from('deterministic visual attachment')
     })
     await expect(page.getByText('visual-check.txt')).toBeVisible()
     await capture(page, 'session-pending-attachment.png', false)
+  })
+
+  test('local draft attachment picker opens from the visible plus control', async ({ page, request }) => {
+    await openScenario(page, request, 'session-attachment', localThreadPath, { localThread: true })
+    await waitForConnected(page)
+    const chooserPromise = page.waitForEvent('filechooser')
+    await page.getByRole('button', { name: '添加附件' }).click()
+    const chooser = await chooserPromise
+    await chooser.setFiles({
+      name: 'draft-attachment.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('local draft attachment')
+    })
+    await expect(page.locator('.pending-chip')).toBeVisible()
+  })
+
+  test('composer follows an overlay-keyboard visual viewport', async ({ page, request }) => {
+    await openScenario(page, request, 'session-attachment', localThreadPath, { localThread: true })
+    const visibleHeight = 430
+    await page.evaluate((height) => {
+      if (!window.visualViewport) throw new Error('VisualViewport unavailable')
+      Object.defineProperty(window.visualViewport, 'height', {
+        configurable: true,
+        value: height
+      })
+      window.visualViewport.dispatchEvent(new Event('resize'))
+    }, visibleHeight)
+
+    await expect.poll(() => page.locator('.input-bar').evaluate(
+      element => Math.round(element.getBoundingClientRect().bottom)
+    )).toBeLessThanOrEqual(visibleHeight)
+    await expect(page.locator('.input-bar textarea')).toBeVisible()
   })
 
   test('thread starting', async ({ page, request }) => {

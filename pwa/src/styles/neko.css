@@ -173,11 +173,11 @@ textarea:focus-visible {
 .nekonest-app {
   --neko-shell-offset: 0px;
   --neko-content-block-size: calc(
-    100dvh - var(--neko-shell-offset) - var(--neko-safe-top) - var(--neko-safe-bottom)
+    var(--neko-visual-viewport-height, 100dvh) - var(--neko-shell-offset) - var(--neko-safe-top) - var(--neko-safe-bottom)
   );
   position: relative;
   width: min(100%, 540px);
-  min-height: calc(100dvh - var(--neko-shell-offset));
+  min-height: calc(var(--neko-visual-viewport-height, 100dvh) - var(--neko-shell-offset));
   margin: 0 auto;
   padding-top: var(--neko-safe-top);
   padding-bottom: var(--neko-safe-bottom);

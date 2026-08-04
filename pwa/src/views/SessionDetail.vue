@@ -255,23 +255,32 @@
     </p>
 
     <div class="input-bar">
-      <div
+      <label
+        for="session-attachment-input"
         class="attachment-picker"
         :class="{ disabled: sending || uploading || steerMode }"
+        role="button"
+        :tabindex="sending || uploading || steerMode ? -1 : 0"
+        :aria-disabled="sending || uploading || steerMode"
+        :aria-label="t('session.attachAria')"
+        :title="steerMode ? t('session.attachSteerUnavailable') : t('session.attachAria')"
+        @keydown.enter.prevent="openAttachmentPicker"
+        @keydown.space.prevent="openAttachmentPicker"
       >
         <span class="attachment-picker-icon" aria-hidden="true">＋</span>
-        <input
-          id="session-attachment-input"
-          type="file"
-          class="attachment-file"
-          multiple
-          accept="image/*,.txt,.md,.markdown,.pdf,.json,text/plain,text/markdown,application/pdf,application/json"
-          :aria-label="t('session.attachAria')"
-          :disabled="sending || uploading || steerMode"
-          :title="steerMode ? t('session.attachSteerUnavailable') : t('session.attachAria')"
-          @change="onFileChange"
-        />
-      </div>
+      </label>
+      <input
+        id="session-attachment-input"
+        ref="attachmentInputRef"
+        type="file"
+        class="attachment-file"
+        multiple
+        accept="image/*,.txt,.md,.markdown,.pdf,.json,text/plain,text/markdown,application/pdf,application/json"
+        :disabled="sending || uploading || steerMode"
+        aria-hidden="true"
+        tabindex="-1"
+        @change="onFileChange"
+      />
       <n-input
         v-model:value="inputText"
         :placeholder="composerPlaceholder"
@@ -337,6 +346,7 @@ const uploading = ref(false)
 const uploadError = ref('')
 const approvalDecision = createApprovalDecisionGuard()
 const messagesRef = ref<HTMLElement>()
+const attachmentInputRef = ref<HTMLInputElement>()
 const pendingAtts = ref<AttachmentRef[]>([])
 /** avoid writing draft while restoring */
 let restoringDraft = false
@@ -682,6 +692,11 @@ function retryMessage(messageId: string) {
 function removeAtt(i: number) {
   const [a] = pendingAtts.value.splice(i, 1)
   if (a?.previewUrl) URL.revokeObjectURL(a.previewUrl)
+}
+
+function openAttachmentPicker() {
+  if (sending.value || uploading.value || steerMode.value) return
+  attachmentInputRef.value?.click()
 }
 
 async function onFileChange(ev: Event) {
@@ -1471,14 +1486,12 @@ function handleInterrupt() {
 }
 .input-bar :deep(.n-input) { flex: 1; min-width: 0; }
 .attachment-picker {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
   width: 44px;
   height: 44px;
-  overflow: hidden;
   border: 1px solid var(--neko-line);
   border-radius: 50%;
   color: var(--neko-ink);
@@ -1490,7 +1503,7 @@ function handleInterrupt() {
 .attachment-picker:hover:not(.disabled) {
   background: var(--neko-primary-soft);
 }
-.attachment-picker:focus-within {
+.attachment-picker:focus-visible {
   outline: 2px solid var(--neko-primary);
   outline-offset: 2px;
 }
@@ -1504,21 +1517,16 @@ function handleInterrupt() {
   font-weight: 500;
 }
 .attachment-file {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
   margin: 0;
   padding: 0;
   border: 0;
   opacity: 0;
-  cursor: pointer;
-  font-size: 20px;
-}
-.attachment-picker.disabled .attachment-file {
   pointer-events: none;
-  cursor: not-allowed;
 }
 
 @media (max-width: 430px) {

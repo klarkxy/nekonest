@@ -37,6 +37,7 @@ import {
   watchSystemTheme,
   type ResolvedTheme
 } from './i18n/theme'
+import { syncVisualViewportHeight } from './utils/visualViewport'
 
 const { t } = useI18n()
 const resolved = ref<ResolvedTheme>(resolveTheme(getThemePreference()))
@@ -47,9 +48,11 @@ const themeOverrides = computed(() =>
 )
 
 let stopWatch: (() => void) | undefined
+let stopViewportSync: (() => void) | undefined
 
 onMounted(() => {
   resolved.value = applyTheme()
+  stopViewportSync = syncVisualViewportHeight()
   stopWatch = watchSystemTheme((next) => {
     resolved.value = next
   })
@@ -58,6 +61,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopWatch?.()
+  stopViewportSync?.()
   window.removeEventListener('nekonest-theme', onThemeEvent as EventListener)
 })
 
