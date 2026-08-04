@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-04
+
+### Added
+
+- Whole-project phone-local archive controls alongside per-thread archive,
+  with persisted project preferences and updated device-tree visual coverage.
+- VisualViewport-driven mobile shell sizing so the prompt composer remains
+  above overlay software keyboards on affected Android browsers and WebViews.
+
+### Changed
+
+- The page-level version panel now compares only the loaded web app and the
+  live Server; every machine card reports its own Daemon version and update
+  state.
+- Dynamic version-bearing HTTP requests and responses bypass browser and
+  Service Worker caches, while the live WebSocket acknowledgement remains the
+  authoritative Server version after connection.
+
+### Fixed
+
+- Make Codex approval decisions idempotent so a delayed duplicate phone tap
+  cannot turn a successful approval into a misleading `approval_unavailable`
+  error.
+- Keep approval controls disabled until their pending request changes, and
+  make the visible attachment button reliably open the picker for local Codex
+  draft threads.
+
 ## [0.2.1] - 2026-08-03
 
 ### Added
@@ -139,7 +166,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/klarkxy/nekonest/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/klarkxy/nekonest/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/klarkxy/nekonest/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/klarkxy/nekonest/releases/tag/v0.1.0
