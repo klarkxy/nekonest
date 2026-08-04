@@ -90,10 +90,22 @@
       >{{ approvalParamsText }}</pre>
       <template v-if="approveSupported">
         <div class="approval-actions">
-          <button type="button" class="approval-btn approval-btn--ok" @click="handleApprove">
+          <button
+            type="button"
+            class="approval-btn approval-btn--ok"
+            :disabled="approvalDecisionPending"
+            :aria-busy="approvalDecisionPending"
+            @click="handleApprove"
+          >
             {{ t('session.approve') }}
           </button>
-          <button type="button" class="approval-btn approval-btn--no" @click="handleDeny">
+          <button
+            type="button"
+            class="approval-btn approval-btn--no"
+            :disabled="approvalDecisionPending"
+            :aria-busy="approvalDecisionPending"
+            @click="handleDeny"
+          >
             {{ t('session.deny') }}
           </button>
         </div>
@@ -298,6 +310,7 @@ import { useDraftStore } from '@/stores/drafts'
 import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
 import { projectBaseName, projectDisplay, sessionActivityPresentation, shortSummary } from '@/utils/agent'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
+import { createApprovalDecisionGuard } from '@/utils/approvalDecision'
 import {
   pickAndUpload,
   isImageMime,
@@ -322,6 +335,7 @@ const inputText = ref('')
 const sending = ref(false)
 const uploading = ref(false)
 const uploadError = ref('')
+const approvalDecision = createApprovalDecisionGuard()
 const messagesRef = ref<HTMLElement>()
 const pendingAtts = ref<AttachmentRef[]>([])
 /** avoid writing draft while restoring */
@@ -397,6 +411,10 @@ const approveSupported = computed(() => {
   const c = sessionCaps.value
   return !!(c?.approve && c?.deny)
 })
+
+const approvalDecisionPending = computed(() =>
+  approvalDecision.isPending(sessionStore.currentSession?.pending_approval?.id)
+)
 
 const showHeaderActivity = computed(() => {
   if (hasPendingApproval.value) return true
@@ -592,6 +610,7 @@ onUnmounted(() => {
     saveDraftFor(boundDraftKey.deviceId, boundDraftKey.sessionId)
   }
   if (draftSaveTimer) window.clearTimeout(draftSaveTimer)
+  approvalDecision.dispose()
   for (const a of pendingAtts.value) {
     if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(a.previewUrl)
@@ -606,6 +625,11 @@ watch(
   () => {
     bindSession()
   }
+)
+
+watch(
+  () => sessionStore.currentSession?.pending_approval?.id,
+  id => approvalDecision.sync(id)
 )
 
 watch([inputText, pendingAtts], () => {
@@ -882,14 +906,18 @@ function reloadHistory() {
 
 function handleApprove() {
   const id = sessionStore.currentSession?.pending_approval?.id
-  if (!id || !approveSupported.value) return
-  sessionStore.approve(deviceId.value, sessionId.value, id)
+  if (!id || !approveSupported.value || !approvalDecision.begin(id)) return
+  if (!sessionStore.approve(deviceId.value, sessionId.value, id)) {
+    approvalDecision.clear(id)
+  }
 }
 
 function handleDeny() {
   const id = sessionStore.currentSession?.pending_approval?.id
-  if (!id || !approveSupported.value) return
-  sessionStore.deny(deviceId.value, sessionId.value, id)
+  if (!id || !approveSupported.value || !approvalDecision.begin(id)) return
+  if (!sessionStore.deny(deviceId.value, sessionId.value, id)) {
+    approvalDecision.clear(id)
+  }
 }
 
 function handleInterrupt() {
@@ -1134,6 +1162,10 @@ function handleInterrupt() {
   background: var(--neko-surface-muted);
   color: var(--neko-ink);
   border-color: var(--neko-line);
+}
+.approval-btn:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .messages-area {

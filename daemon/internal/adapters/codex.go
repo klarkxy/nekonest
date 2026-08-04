@@ -755,18 +755,14 @@ func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error
 
 func (a *CodexAdapter) Approve(sessionID string, approvalID string) error {
 	if a.appServer != nil && a.appServer.Initialized() {
-		if a.appServer.HasPendingApproval(approvalID) || a.appServer.PendingApprovalFor(sessionID) != nil {
-			if err := a.appServer.ApprovePending(approvalID); err == nil {
-				return nil
-			} else if a.appServer.HasPendingApproval(approvalID) {
-				return err
-			}
-			// Try session's current pending id when phone still has a stale id.
-			if snap := a.appServer.PendingApprovalFor(sessionID); snap != nil {
-				if err := a.appServer.ApprovePending(snap.ID); err == nil {
-					return nil
-				}
-			}
+		if err := a.appServer.ApprovePending(approvalID); err == nil {
+			return nil
+		} else if !errors.Is(err, agentexec.ErrNoPendingApproval) {
+			return err
+		}
+		// Try session's current pending id when phone still has a stale id.
+		if snap := a.appServer.PendingApprovalFor(sessionID); snap != nil {
+			return a.appServer.ApprovePending(snap.ID)
 		}
 	}
 	return a.commander.Approve(sessionID, approvalID)
@@ -774,17 +770,13 @@ func (a *CodexAdapter) Approve(sessionID string, approvalID string) error {
 
 func (a *CodexAdapter) Deny(sessionID string, approvalID string) error {
 	if a.appServer != nil && a.appServer.Initialized() {
-		if a.appServer.HasPendingApproval(approvalID) || a.appServer.PendingApprovalFor(sessionID) != nil {
-			if err := a.appServer.DenyPending(approvalID); err == nil {
-				return nil
-			} else if a.appServer.HasPendingApproval(approvalID) {
-				return err
-			}
-			if snap := a.appServer.PendingApprovalFor(sessionID); snap != nil {
-				if err := a.appServer.DenyPending(snap.ID); err == nil {
-					return nil
-				}
-			}
+		if err := a.appServer.DenyPending(approvalID); err == nil {
+			return nil
+		} else if !errors.Is(err, agentexec.ErrNoPendingApproval) {
+			return err
+		}
+		if snap := a.appServer.PendingApprovalFor(sessionID); snap != nil {
+			return a.appServer.DenyPending(snap.ID)
 		}
 	}
 	return a.commander.Deny(sessionID, approvalID)

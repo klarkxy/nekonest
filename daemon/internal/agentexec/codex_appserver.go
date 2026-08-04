@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -40,7 +41,20 @@ type CodexAppServer struct {
 	turnStatus   map[string]string
 	threadAlias  map[string]string
 	pendingAppr  map[string]*PendingApproval
+	resolvedAppr map[string]resolvedApproval
 	wireByThread map[string]string
+}
+
+const resolvedApprovalLimit = 512
+
+// ErrNoPendingApproval distinguishes an unknown/stale approval id from a
+// tracked decision failure. Callers may safely try a session alias fallback
+// only for this error.
+var ErrNoPendingApproval = errors.New("no pending app-server approval")
+
+type resolvedApproval struct {
+	accepted   bool
+	resolvedAt time.Time
 }
 
 type rpcResult struct {
@@ -99,6 +113,7 @@ func NewCodexAppServer() *CodexAppServer {
 		turnStatus:   make(map[string]string),
 		threadAlias:  make(map[string]string),
 		pendingAppr:  make(map[string]*PendingApproval),
+		resolvedAppr: make(map[string]resolvedApproval),
 		wireByThread: make(map[string]string),
 		binPath:      "codex",
 	}
@@ -558,6 +573,17 @@ func (c *CodexAppServer) DenyPending(approvalID string) error {
 // DecidePendingWithFallback responds using result payload or error frame when needed.
 func (c *CodexAppServer) DecidePendingWithFallback(approvalID string, accept bool) error {
 	c.mu.Lock()
+	if decision, ok := c.resolvedAppr[approvalID]; ok {
+		c.mu.Unlock()
+		if decision.accepted == accept {
+			return nil
+		}
+		return fmt.Errorf(
+			"approval_already_resolved: app-server approval %q was already %s",
+			approvalID,
+			approvalDecisionName(decision.accepted),
+		)
+	}
 	p := c.pendingAppr[approvalID]
 	if p == nil {
 		for _, cand := range c.pendingAppr {
@@ -572,7 +598,7 @@ func (c *CodexAppServer) DecidePendingWithFallback(approvalID string, accept boo
 	}
 	c.mu.Unlock()
 	if p == nil {
-		return fmt.Errorf("no pending app-server approval %q", approvalID)
+		return fmt.Errorf("%w %q", ErrNoPendingApproval, approvalID)
 	}
 	result, err := buildApprovalResult(p, accept)
 	if err != nil {
@@ -583,6 +609,7 @@ func (c *CodexAppServer) DecidePendingWithFallback(approvalID string, accept boo
 				c.mu.Unlock()
 				return respErr
 			}
+			c.rememberResolvedApproval(p, accept)
 			return nil
 		}
 		c.mu.Lock()
@@ -596,7 +623,43 @@ func (c *CodexAppServer) DecidePendingWithFallback(approvalID string, accept boo
 		c.mu.Unlock()
 		return err
 	}
+	c.rememberResolvedApproval(p, accept)
 	return nil
+}
+
+func (c *CodexAppServer) rememberResolvedApproval(p *PendingApproval, accept bool) {
+	if p == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.resolvedAppr == nil {
+		c.resolvedAppr = make(map[string]resolvedApproval)
+	}
+	decision := resolvedApproval{accepted: accept, resolvedAt: time.Now()}
+	for _, id := range []string{p.ID, p.RequestID} {
+		if id != "" {
+			c.resolvedAppr[id] = decision
+		}
+	}
+	for len(c.resolvedAppr) > resolvedApprovalLimit {
+		oldestID := ""
+		var oldest time.Time
+		for id, candidate := range c.resolvedAppr {
+			if oldestID == "" || candidate.resolvedAt.Before(oldest) {
+				oldestID = id
+				oldest = candidate.resolvedAt
+			}
+		}
+		delete(c.resolvedAppr, oldestID)
+	}
+}
+
+func approvalDecisionName(accept bool) string {
+	if accept {
+		return "approved"
+	}
+	return "denied"
 }
 
 // PendingApprovalFor returns a phone-facing snapshot for wire/session id if any.

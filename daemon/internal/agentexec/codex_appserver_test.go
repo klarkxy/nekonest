@@ -1,14 +1,22 @@
 package agentexec
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nekonest/daemon/internal/attach"
 )
+
+type testWriteCloser struct {
+	bytes.Buffer
+}
+
+func (w *testWriteCloser) Close() error { return nil }
 
 func TestParseThreadStartResponse(t *testing.T) {
 	raw := json.RawMessage(`{
@@ -111,6 +119,45 @@ func TestTrackServerRequestCommandApproval(t *testing.T) {
 	b, _ = json.Marshal(resDeny)
 	if string(b) != `{"decision":"decline"}` {
 		t.Fatalf("deny=%s", b)
+	}
+}
+
+func TestApprovalDecisionIsIdempotent(t *testing.T) {
+	c := NewCodexAppServer()
+	sink := &testWriteCloser{}
+	c.mu.Lock()
+	c.running = true
+	c.initialized = true
+	c.stdin = sink
+	c.mu.Unlock()
+	c.RegisterThreadIDs("thr1", "ses1", "ses1")
+	p := c.TrackServerRequest(ServerRequest{
+		ID:     "9",
+		Method: "item/commandExecution/requestApproval",
+		Params: json.RawMessage(`{"threadId":"thr1","turnId":"turn9","itemId":"item9","command":"echo ok"}`),
+	})
+	if p == nil {
+		t.Fatal("expected pending approval")
+	}
+
+	if err := c.ApprovePending(p.ID); err != nil {
+		t.Fatalf("first approval: %v", err)
+	}
+	firstResponse := sink.String()
+	if firstResponse == "" {
+		t.Fatal("first approval did not write a response")
+	}
+	if err := c.ApprovePending(p.ID); err != nil {
+		t.Fatalf("duplicate approval should be idempotent: %v", err)
+	}
+	if got := sink.String(); got != firstResponse {
+		t.Fatalf("duplicate approval wrote another response: %q", got)
+	}
+	if err := c.DenyPending(p.ID); err == nil || !strings.Contains(err.Error(), "approval_already_resolved") {
+		t.Fatalf("opposite duplicate decision error=%v", err)
+	}
+	if err := c.ApprovePending("missing"); !errors.Is(err, ErrNoPendingApproval) {
+		t.Fatalf("unknown approval error=%v", err)
 	}
 }
 
