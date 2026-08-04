@@ -1112,26 +1112,15 @@ export const useSessionStore = defineStore('sessions', () => {
         error: error || undefined
       }
     }
-    if (
-      (status === 'owned' || status === 'indeterminate') &&
-      sessionId &&
-      prev?.firstPrompt
-    ) {
+    // Only thread_owned may surface the first prompt as owned-thread history.
+    // thread_indeterminate must not synthesize a native session bubble/inbox row.
+    if (status === 'owned' && sessionId && prev?.firstPrompt) {
       const message: SessionMessage = {
         id: `msg_${opId}`,
         role: 'user',
         content: prev.firstPrompt,
         type: 'text',
-        timestamp: Math.floor(Date.now() / 1000),
-        ...(status === 'indeterminate'
-          ? {
-              metadata: {
-                delivery_status: 'failed' as const,
-                delivery_error: tGlobal('errors.ambiguousNoRetry'),
-                delivery_retry_allowed: false
-              }
-            }
-          : {})
+        timestamp: Math.floor(Date.now() / 1000)
       }
       if (currentSession.value?.id === sessionId) {
         upsertMessage(message)

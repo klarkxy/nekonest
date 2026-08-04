@@ -7,17 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-04
+
 ### Changed
 
 - Reduce repeated device-page chrome once a machine has resumable threads,
   while keeping concise version and total-thread status visible.
 - Clarify empty search results and Codex thread-starting feedback in the mobile
   client.
+- Restyle the five built-in agent catgirl avatars as one cohesive NekoNest
+  ensemble while preserving each agent's visual identity.
 
 ### Fixed
 
 - Explain approval-gated composing directly above the prompt bar and prevent
   stale thread-start operations from leaving the composer in a busy state.
+- Keep indeterminate Codex thread starts fail-closed: do not navigate or
+  synthesize owned history, disable duplicate starts, and wait for native
+  discovery reconciliation.
+- Keep phone-only archive semantics visible to touch and assistive-technology
+  users instead of hiding the explanation in hover text.
 
 ## [0.2.2] - 2026-08-04
 
@@ -178,7 +187,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/klarkxy/nekonest/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/klarkxy/nekonest/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/klarkxy/nekonest/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/klarkxy/nekonest/compare/v0.1.0...v0.2.0

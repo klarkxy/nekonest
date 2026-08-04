@@ -311,11 +311,57 @@ test.describe('390px primary visual matrix', () => {
   test('thread indeterminate with native id', async ({ page, request }) => {
     await openScenario(page, request, 'thread-indeterminate', localThreadPath, { localThread: true })
     await waitForConnected(page)
+    // Pre-seed an unsent draft for the native session id that will appear in the
+    // indeterminate payload. Ownership was never confirmed, so this draft must survive.
+    const nativeDraftText = 'unrelated unsent for native'
+    await page.evaluate(({ deviceId, nativeId, text }) => {
+      const key = `${deviceId}::${nativeId}`
+      localStorage.setItem('nekonest_input_drafts', JSON.stringify({
+        [key]: { text, attachments: [], updatedAt: Date.now() }
+      }))
+    }, { deviceId: MAIN_DEVICE_ID, nativeId: NATIVE_THREAD_ID, text: nativeDraftText })
     const input = await sendPrompt(page, 'ping ×19')
-    await expect(page).toHaveURL(new RegExp(`${NATIVE_THREAD_ID}$`))
-    await expect(page.getByText('ping ×19', { exact: true })).toBeVisible()
-    await expect(page.getByText('结果不确定，为避免重复已关掉重试', { exact: true })).toBeVisible()
-    await expect(input).toHaveValue('')
+    // Stay on the local draft route — never treat indeterminate as owned navigation.
+    await expect(page).toHaveURL(new RegExp(`${LOCAL_THREAD_ID}$`))
+    await expect(page).not.toHaveURL(new RegExp(`${NATIVE_THREAD_ID}$`))
+    // No synthesized owned-thread bubble / inbox.
+    await expect(page.locator('.message-bubble')).toHaveCount(0)
+    await expect(page.locator('.empty-title')).toHaveText('结果不确定')
+    await expect(page.locator('.empty-hint')).toContainText('等待本机发现与对账')
+    await expect(page.getByRole('button', { name: '已禁用创建' })).toBeDisabled()
+    await expect(page.locator('#session-attachment-input')).toBeDisabled()
+    // Prompt remains visible in-memory; persistence of phone-only draft is removed.
+    await expect(input).toHaveValue('ping ×19')
+    await expect.poll(async () => page.evaluate((draftId) => {
+      const raw = localStorage.getItem('nekonest_local_threads_v1')
+      if (!raw) return true
+      try {
+        const list = JSON.parse(raw) as Array<{ id?: string }>
+        return !list.some(item => item.id === draftId)
+      } catch {
+        return false
+      }
+    }, LOCAL_THREAD_ID)).toBe(true)
+    await expect.poll(async () => page.evaluate(({ deviceId, localId, nativeId, nativeText }) => {
+      const raw = localStorage.getItem('nekonest_input_drafts')
+      if (!raw) return false
+      try {
+        const map = JSON.parse(raw) as Record<string, { text?: string }>
+        const localKey = `${deviceId}::${localId}`
+        const nativeKey = `${deviceId}::${nativeId}`
+        // Phone-local draft must be gone; unowned native session draft must survive.
+        if (map[localKey] || Object.keys(map).some(key => key.includes(localId))) return false
+        const native = map[nativeKey]
+        return !!native && native.text === nativeText
+      } catch {
+        return false
+      }
+    }, {
+      deviceId: MAIN_DEVICE_ID,
+      localId: LOCAL_THREAD_ID,
+      nativeId: NATIVE_THREAD_ID,
+      nativeText: nativeDraftText
+    })).toBe(true)
     await capture(page, 'thread-indeterminate.png', false)
   })
 

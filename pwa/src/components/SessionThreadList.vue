@@ -30,10 +30,11 @@
         </label>
       </div>
       <div class="control-meta">
-        <label class="archive-toggle" :title="t('threadList.hint')">
+        <label class="archive-toggle" :aria-describedby="archiveHintId">
           <input v-model="prefs.showArchived" type="checkbox" class="archive-checkbox" />
           {{ t('threadList.showArchived') }}
         </label>
+        <p :id="archiveHintId" class="hint">{{ t('threadList.hint') }}</p>
       </div>
     </div>
 
@@ -232,6 +233,8 @@ const localThreads = useLocalThreadsStore()
 const searchQuery = ref('')
 /** Empty string = all agents. */
 const agentFilter = ref('')
+/** Stable id for archive semantics describedby. */
+const archiveHintId = 'thread-list-archive-hint'
 const deviceOnline = computed(() => props.deviceOnline !== false)
 
 const mergedSessions = computed(() => {
@@ -403,7 +406,8 @@ function shortPath(path: string, max = 36): string {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
+  justify-content: space-between;
+  gap: 6px 12px;
   min-height: 36px;
   padding-inline: 2px;
 }
@@ -425,6 +429,16 @@ function shortPath(path: string, max = 36): string {
   height: 18px;
   flex: 0 0 18px;
   accent-color: var(--neko-primary);
+}
+
+/* Compact, always-visible archive semantics (not hover/title-only). */
+.hint {
+  margin: 0;
+  flex: 1 1 10rem;
+  color: var(--neko-ink-faint);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: end;
 }
 
 @media (max-width: 360px) {

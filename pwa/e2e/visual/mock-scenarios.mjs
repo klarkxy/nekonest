@@ -3,7 +3,7 @@ export const FIXED_NOW = Math.floor(FIXED_NOW_MS / 1000)
 export const MAIN_DEVICE_ID = 'device-windows'
 export const MAIN_SESSION_ID = 'session-codex'
 export const NATIVE_THREAD_ID = 'native-thread-visual'
-export const APP_VERSION = '0.2.2'
+export const APP_VERSION = '0.2.3'
 
 export const SCENARIO_NAMES = new Set([
   'setup-fresh',

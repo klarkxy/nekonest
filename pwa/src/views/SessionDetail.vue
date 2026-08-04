@@ -254,12 +254,12 @@
       <label
         for="session-attachment-input"
         class="attachment-picker"
-        :class="{ disabled: sending || uploading || steerMode }"
+        :class="{ disabled: attachmentControlsDisabled }"
         role="button"
-        :tabindex="sending || uploading || steerMode ? -1 : 0"
-        :aria-disabled="sending || uploading || steerMode"
+        :tabindex="attachmentControlsDisabled ? -1 : 0"
+        :aria-disabled="attachmentControlsDisabled"
         :aria-label="t('session.attachAria')"
-        :title="steerMode ? t('session.attachSteerUnavailable') : t('session.attachAria')"
+        :title="attachmentPickerTitle"
         @keydown.enter.prevent="openAttachmentPicker"
         @keydown.space.prevent="openAttachmentPicker"
       >
@@ -272,7 +272,7 @@
         class="attachment-file"
         multiple
         accept="image/*,.txt,.md,.markdown,.pdf,.json,text/plain,text/markdown,application/pdf,application/json"
-        :disabled="sending || uploading || steerMode"
+        :disabled="attachmentControlsDisabled"
         aria-hidden="true"
         tabindex="-1"
         @change="onFileChange"
@@ -282,7 +282,7 @@
         :placeholder="composerPlaceholder"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 4 }"
-        :disabled="sending || uploading"
+        :disabled="sending || uploading || isIndeterminateStart"
         :aria-label="t('session.inputAria')"
         @keydown.enter.exact="onEnterKey"
         @paste="onPaste"
@@ -293,7 +293,7 @@
         class="send-btn"
         :aria-label="sendButtonLabel"
         @click="handleSend"
-        :disabled="sendBlocked || (steerMode ? !inputText.trim() : (!inputText.trim() && !pendingAtts.length)) || sending || uploading"
+        :disabled="composerSendDisabled"
         :loading="sending || uploading"
       >
         <template #icon>↑</template>
@@ -336,6 +336,8 @@ const deviceId = computed(() => String(route.params.deviceId || ''))
 const sessionId = computed(() => String(route.params.sessionId || ''))
 const isLocalDraft = computed(() => isLocalDraftSessionId(sessionId.value))
 const pendingStartOpId = ref('')
+/** Terminal start_thread outcome while still on the phone draft route. */
+const startTerminalStatus = ref<'indeterminate' | 'failed' | ''>('')
 const inputText = ref('')
 const sending = ref(false)
 const uploading = ref(false)
@@ -391,17 +393,26 @@ const sendBlocked = computed(
 
 const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
 
+const isIndeterminateStart = computed(
+  () => isLocalDraft.value && startTerminalStatus.value === 'indeterminate'
+)
+
 const isStartingThread = computed(
-  () => isLocalDraft.value && (sending.value || !!pendingStartOpId.value)
+  () =>
+    isLocalDraft.value &&
+    !isIndeterminateStart.value &&
+    (sending.value || !!pendingStartOpId.value)
 )
 
 const emptyTitle = computed(() => {
+  if (isIndeterminateStart.value) return t('session.draftIndeterminateTitle')
   if (isStartingThread.value) return t('session.draftStartingTitle')
   if (isLocalDraft.value) return t('session.draftEmptyTitle')
   return t('session.emptyTitle')
 })
 
 const emptyHint = computed(() => {
+  if (isIndeterminateStart.value) return t('session.draftIndeterminateHint')
   if (isStartingThread.value) return t('session.draftStartingHint')
   if (isLocalDraft.value) return t('session.draftEmptyHint')
   return t('session.emptyHint')
@@ -409,19 +420,41 @@ const emptyHint = computed(() => {
 
 const composerPlaceholder = computed(() => {
   if (hasPendingApproval.value) return t('session.placeholderApproval')
+  if (isIndeterminateStart.value) return t('session.placeholderIndeterminate')
   if (isStartingThread.value) return t('session.placeholderStarting')
   if (steerMode.value) return t('session.placeholderSteer')
   if (sendBlocked.value) return t('session.placeholderBusy')
   return t('session.placeholder')
 })
 
-const sendButtonLabel = computed(() =>
-  steerMode.value
-    ? t('session.steer')
-    : sendBlocked.value || isStartingThread.value
-      ? t('session.sendBlocked')
-      : t('session.send')
+const sendButtonLabel = computed(() => {
+  if (steerMode.value) return t('session.steer')
+  if (isIndeterminateStart.value) return t('session.sendIndeterminate')
+  if (sendBlocked.value || isStartingThread.value) return t('session.sendBlocked')
+  return t('session.send')
+})
+
+const attachmentControlsDisabled = computed(
+  () =>
+    sending.value ||
+    uploading.value ||
+    steerMode.value ||
+    isStartingThread.value ||
+    isIndeterminateStart.value
 )
+
+const attachmentPickerTitle = computed(() => {
+  if (isIndeterminateStart.value) return t('session.attachIndeterminate')
+  if (steerMode.value) return t('session.attachSteerUnavailable')
+  return t('session.attachAria')
+})
+
+const composerSendDisabled = computed(() => {
+  if (isIndeterminateStart.value || isStartingThread.value) return true
+  if (sending.value || uploading.value || sendBlocked.value) return true
+  if (steerMode.value) return !inputText.value.trim()
+  return !inputText.value.trim() && !pendingAtts.value.length
+})
 
 /**
  * Prefer a single explanation: approval needs a dedicated hint;
@@ -434,7 +467,7 @@ const composeStatusText = computed(() => {
       ? t('session.approvalComposeHint')
       : t('session.approvalComposeUnavailable')
   }
-  if (steerMode.value || isStartingThread.value) return ''
+  if (steerMode.value || isStartingThread.value || isIndeterminateStart.value) return ''
   if (sendBlocked.value && !showActivityBanner.value) return t('session.sendBusyHint')
   return ''
 })
@@ -529,10 +562,13 @@ function dismissErrors() {
 
 function saveDraftFor(did: string, sid: string) {
   if (!did || !sid) return
+  // After indeterminate cleanup, never re-persist a phone-only ghost draft.
+  if (startTerminalStatus.value === 'indeterminate') return
   draftStore.set(did, sid, inputText.value, pendingAtts.value)
 }
 
 function saveDraftNow() {
+  if (startTerminalStatus.value === 'indeterminate') return
   if (boundDraftKey) {
     saveDraftFor(boundDraftKey.deviceId, boundDraftKey.sessionId)
   } else {
@@ -541,7 +577,7 @@ function saveDraftNow() {
 }
 
 function scheduleSaveDraft() {
-  if (restoringDraft) return
+  if (restoringDraft || startTerminalStatus.value === 'indeterminate') return
   if (draftSaveTimer) window.clearTimeout(draftSaveTimer)
   draftSaveTimer = window.setTimeout(() => {
     draftSaveTimer = null
@@ -574,6 +610,9 @@ function bindSession() {
   uploadController = null
   uploading.value = false
   uploadError.value = ''
+  pendingStartOpId.value = ''
+  startTerminalStatus.value = ''
+  sending.value = false
   const did = deviceId.value
   const sid = sessionId.value
   if (
@@ -644,10 +683,12 @@ onUnmounted(() => {
   routeGeneration++
   uploadController?.abort()
   uploadController = null
-  if (boundDraftKey) {
+  if (draftSaveTimer) window.clearTimeout(draftSaveTimer)
+  draftSaveTimer = null
+  // Do not re-persist drafts after indeterminate ghost cleanup.
+  if (boundDraftKey && startTerminalStatus.value !== 'indeterminate') {
     saveDraftFor(boundDraftKey.deviceId, boundDraftKey.sessionId)
   }
-  if (draftSaveTimer) window.clearTimeout(draftSaveTimer)
   approvalDecision.dispose()
   for (const a of pendingAtts.value) {
     if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
@@ -723,7 +764,7 @@ function removeAtt(i: number) {
 }
 
 function openAttachmentPicker() {
-  if (sending.value || uploading.value || steerMode.value) return
+  if (attachmentControlsDisabled.value) return
   attachmentInputRef.value?.click()
 }
 
@@ -756,7 +797,7 @@ async function onPaste(ev: ClipboardEvent) {
 }
 
 async function addFiles(fileList: FileList | File[]) {
-  if (uploading.value) return
+  if (uploading.value || attachmentControlsDisabled.value) return
   uploadError.value = ''
   if (pendingAtts.value.length >= MAX_COUNT) {
     uploadError.value = t('errors.attachMax', { n: MAX_COUNT })
@@ -810,6 +851,8 @@ function onEnterKey(event: KeyboardEvent) {
 }
 
 async function handleSend() {
+  // Indeterminate: no auto-retry / re-start (avoid duplicate native threads).
+  if (isIndeterminateStart.value) return
   if (sendBlocked.value) {
     sessionStore.lastError = t('session.sendBusyHint')
     return
@@ -848,14 +891,17 @@ async function handleSend() {
   if (isLocalDraftSessionId(draftSid)) {
     const local = localThreads.get(draftSid)
     if (!local?.projectDir) {
+      // Missing local draft (e.g. reload after indeterminate cleanup) — never re-start alone.
       sessionStore.lastError = t('deviceDetail.startCodexNeedProject')
       sending.value = false
       return
     }
+    startTerminalStatus.value = ''
     localThreads.touch(draftSid, prompt || t('threadList.draftSummary'))
     const { ok, operationId } = sessionStore.startThread(did, local.projectDir, prompt)
     if (!ok) {
       pendingStartOpId.value = ''
+      startTerminalStatus.value = 'failed'
       sending.value = false
       return
     }
@@ -881,15 +927,32 @@ async function handleSend() {
         }, 200)
       })
     const result = await waitOwned()
-    // Accept owned, or indeterminate-with-id (daemon may still hand a usable native id).
     const realId = (result.sessionId || '').trim()
-    if ((result.status !== 'owned' && result.status !== 'indeterminate') || !realId) {
+
+    // thread_indeterminate is NOT ownership: stay on draft route, drop ghost persistence,
+    // never navigate / never synthesize native inbox. Keep in-memory attachments.
+    // Clear only the phone-local draft id — never mutate drafts for the unowned payload session_id.
+    if (result.status === 'indeterminate') {
+      draftStore.clear(did, draftSid)
+      localThreads.remove(draftSid)
+      pendingStartOpId.value = ''
+      startTerminalStatus.value = 'indeterminate'
+      sessionStore.lastError = null
+      sessionStore.clearStartOp(operationId)
+      sending.value = false
+      return
+    }
+
+    // Only thread_owned may clear/migrate into the native session and navigate.
+    if (result.status !== 'owned' || !realId) {
       sessionStore.lastError = result.error || t('deviceDetail.startCodexFailed')
       pendingStartOpId.value = ''
+      startTerminalStatus.value = 'failed'
       sending.value = false
       return
     }
     pendingStartOpId.value = ''
+    startTerminalStatus.value = ''
     // The first prompt was already accepted by start_thread. Do not migrate it
     // into the owned thread's composer as though it were still unsent.
     draftStore.clear(did, realId)
@@ -920,6 +983,7 @@ async function handleSend() {
         }
       }
     }
+    sessionStore.clearStartOp(operationId)
     sending.value = false
     return
   }

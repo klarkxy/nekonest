@@ -1,7 +1,7 @@
 {
   "name": "nekonest-pwa",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "猫娘窝 - 从手机续写家里电脑上的线团",
   "license": "SATA-2.0",
   "type": "module",

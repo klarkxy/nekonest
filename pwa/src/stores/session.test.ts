@@ -768,6 +768,46 @@ describe('session prompt outbox', () => {
     store.cleanup()
   })
 
+  it('does not synthesize native history for thread_indeterminate', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+
+    const { ok, operationId } = store.startThread('device-a', 'D:\\repo', 'ping ×19')
+    expect(ok).toBe(true)
+
+    emit({
+      type: 'thread_starting',
+      device_id: 'device-a',
+      timestamp: 1,
+      payload: { operation_id: operationId }
+    })
+    emit({
+      type: 'thread_indeterminate',
+      device_id: 'device-a',
+      timestamp: 2,
+      payload: { operation_id: operationId, session_id: 'native-thread-a' }
+    })
+
+    expect(store.startOps[operationId]).toMatchObject({
+      status: 'indeterminate',
+      sessionId: 'native-thread-a',
+      firstPrompt: 'ping ×19'
+    })
+    expect(store.messages).toEqual([])
+    store.setCurrentSession({
+      id: 'native-thread-a',
+      device_id: 'device-a',
+      agent_type: 'codex',
+      status: 'idle',
+      summary: '',
+      last_activity: 1
+    })
+    expect(store.messages).toEqual([])
+    expect(sentPrompts()).toHaveLength(0)
+    store.cleanup()
+  })
+
   it('migrates the legacy outbox array into per-command records', () => {
     localStorage.setItem(LEGACY_OUTBOX_STORAGE_KEY, JSON.stringify([{
       clientMsgId: 'legacy-message',
