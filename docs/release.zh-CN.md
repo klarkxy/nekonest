@@ -40,7 +40,7 @@ git diff --check
 
 1. 将 `[Unreleased]`（若有）整理为新版本小节并填日期  
 2. 确认 `pwa/package.json`、`server/internal/buildinfo/version.go` 与 `daemon/internal/buildinfo/version.go` 的版本均与即将打的 tag 一致（如 `0.2.0` ↔ `v0.2.0`）
-   用 `nekonest-server -version`、`nekonest-daemon -version` 与 PWA 组件版本面板核验。
+   用 `nekonest-server -version`、`nekonest-daemon -version`、PWA/Server 版本面板及每台机器卡片上的 Daemon 版本核验。
 3. 若环境变量、支持的智能体、部署步骤或验收路径有变，同步更新**中英**文档（`README.md` / `README.zh-CN.md`，`docs/*.md` / `docs/*.zh-CN.md`）  
 
 ## 3. 提交、标签与 GitHub Release

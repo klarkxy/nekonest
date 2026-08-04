@@ -38,6 +38,12 @@ Current builds use SemVer release strings. `pwa_version` and `daemon_version`
 remain optional for compatibility with older clients; missing values are shown
 as unknown rather than assumed current.
 
+The PWA treats the live `subscribe_ack.server_version` as authoritative after
+the WebSocket connects. Dynamic version-bearing HTTP responses (`/health` and
+`/api/devices`) use `Cache-Control: no-store`, and the service worker does not
+intercept them. The page-level panel compares PWA and Server only; daemon
+versions and update notices belong to their individual device cards.
+
 ## Envelope
 
 Every WebSocket application message is a `NekoMessage`:

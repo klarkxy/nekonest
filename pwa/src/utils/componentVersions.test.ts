@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { componentVersionStatus } from './componentVersions'
+import { componentVersionStatus, daemonVersionStatus } from './componentVersions'
 
 describe('componentVersionStatus', () => {
   it('reports a fully aligned release', () => {
     expect(componentVersionStatus({
       frontend: '0.2.0',
-      server: '0.2.0',
-      daemon: '0.2.0'
+      server: '0.2.0'
     })).toEqual({
       refreshRequired: false,
-      daemonUpdateRequired: false,
       allKnown: true,
       aligned: true
     })
@@ -18,31 +16,35 @@ describe('componentVersionStatus', () => {
   it('requests a refresh when the loaded frontend differs from the server', () => {
     expect(componentVersionStatus({
       frontend: '0.2.0',
-      server: '0.3.0',
-      daemon: '0.3.0'
+      server: '0.3.0'
     }).refreshRequired).toBe(true)
   })
 
-  it('reports an independently stale daemon', () => {
-    const status = componentVersionStatus({
-      frontend: '0.3.0',
-      server: '0.3.0',
-      daemon: '0.2.0'
-    })
-    expect(status.refreshRequired).toBe(false)
-    expect(status.daemonUpdateRequired).toBe(true)
-    expect(status.aligned).toBe(false)
-  })
-
-  it('keeps an unreported legacy daemon unknown instead of calling it aligned', () => {
+  it('keeps an unreported server unknown instead of calling it aligned', () => {
     expect(componentVersionStatus({
       frontend: '0.2.0',
-      server: '0.2.0',
-      daemon: ''
+      server: ''
     })).toEqual({
       refreshRequired: false,
-      daemonUpdateRequired: false,
       allKnown: false,
+      aligned: false
+    })
+  })
+})
+
+describe('daemonVersionStatus', () => {
+  it('reports a stale daemon independently for each device', () => {
+    expect(daemonVersionStatus('0.3.0', '0.2.0')).toEqual({
+      known: true,
+      updateRequired: true,
+      aligned: false
+    })
+  })
+
+  it('keeps an unreported legacy daemon unknown', () => {
+    expect(daemonVersionStatus('0.3.0', '')).toEqual({
+      known: false,
+      updateRequired: false,
       aligned: false
     })
   })

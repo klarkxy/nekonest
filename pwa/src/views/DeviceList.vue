@@ -55,7 +55,7 @@
       class="version-panel"
       :class="{
         'version-panel--ok': deviceStore.versionStatus.aligned,
-        'version-panel--warning': deviceStore.versionStatus.refreshRequired || deviceStore.versionStatus.daemonUpdateRequired
+        'version-panel--warning': deviceStore.versionStatus.refreshRequired
       }"
       :aria-label="t('deviceList.versionTitle')"
       aria-live="polite"
@@ -81,10 +81,6 @@
         <div>
           <dt>{{ t('deviceList.serverVersion') }}</dt>
           <dd>{{ displayVersion(deviceStore.serverVersion) }}</dd>
-        </div>
-        <div>
-          <dt>{{ t('deviceList.daemonVersion') }}</dt>
-          <dd>{{ displayVersion(deviceStore.activeDaemonVersion) }}</dd>
         </div>
       </dl>
     </section>
@@ -128,7 +124,10 @@
         >
           <RouterLink
             class="device-entry"
-            :class="{ 'device-entry--offline': device.status !== 'online' }"
+            :class="{
+              'device-entry--offline': device.status !== 'online',
+              'device-entry--daemon-stale': daemonNeedsUpdate(device)
+            }"
             :to="deviceDetailLocation(device.id)"
             :aria-label="t('deviceList.openDevice', {
               name: device.name,
@@ -147,10 +146,16 @@
                 <span>{{ device.status === 'online' ? t('common.online') : t('common.offline') }}</span>
                 <span class="meta-divider" aria-hidden="true"></span>
                 <span class="agent-count">{{ t('deviceList.threadCount', { n: device.active_agents }) }}</span>
-                <template v-if="device.daemon_version">
-                  <span class="meta-divider" aria-hidden="true"></span>
-                  <span class="daemon-version">{{ t('deviceList.daemonVersionShort', { version: device.daemon_version }) }}</span>
-                </template>
+                <span class="meta-divider" aria-hidden="true"></span>
+                <span class="daemon-version">
+                  {{ device.daemon_version
+                    ? t('deviceList.daemonVersionShort', { version: device.daemon_version })
+                    : t('deviceList.daemonVersionUnknown') }}
+                </span>
+                <span
+                  v-if="daemonNeedsUpdate(device)"
+                  class="daemon-update-badge"
+                >{{ t('deviceList.daemonUpdateNeeded') }}</span>
               </span>
             </span>
             <span class="device-arrow" aria-hidden="true">›</span>
@@ -207,6 +212,7 @@ import {
 } from '@/router/navigation'
 import type { Device } from '@/types/protocol'
 import { selectVisibleDevices } from '@/utils/deviceVisibility'
+import { daemonVersionStatus } from '@/utils/componentVersions'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -242,11 +248,7 @@ const connection = computed(() => {
 
 const versionSummary = computed(() => {
   const status = deviceStore.versionStatus
-  if (status.refreshRequired && status.daemonUpdateRequired) {
-    return t('deviceList.versionMixed')
-  }
   if (status.refreshRequired) return t('deviceList.versionRefreshNeeded')
-  if (status.daemonUpdateRequired) return t('deviceList.versionDaemonUpdate')
   if (status.aligned) return t('deviceList.versionAligned')
   if (!deviceStore.serverVersion) return t('deviceList.versionChecking')
   return t('deviceList.versionUnknown')
@@ -275,6 +277,13 @@ async function refreshFrontend() {
 
 function displayVersion(version: string): string {
   return version ? `v${version}` : t('deviceList.versionUnreported')
+}
+
+function daemonNeedsUpdate(device: Device): boolean {
+  return device.status === 'online' && daemonVersionStatus(
+    deviceStore.serverVersion,
+    device.daemon_version || ''
+  ).updateRequired
 }
 
 function onOpenDevice(device: Device) {
@@ -550,7 +559,7 @@ function osLabel(os: string): string {
 
 .version-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin: 0;
 }
@@ -733,6 +742,10 @@ function osLabel(os: string): string {
   background: var(--neko-neutral-ink);
 }
 
+.device-entry--daemon-stale {
+  border-color: var(--neko-danger-line);
+}
+
 .device-entry--offline .device-name,
 .device-entry--offline .device-entry__meta {
   color: var(--neko-ink-soft);
@@ -801,6 +814,17 @@ function osLabel(os: string): string {
   flex: 0 1 auto;
   min-width: 0;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.daemon-update-badge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 5px;
+  color: var(--neko-danger-ink);
+  background: var(--neko-danger-soft);
+  font-size: 10px;
+  font-weight: 700;
   white-space: nowrap;
 }
 

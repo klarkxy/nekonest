@@ -127,9 +127,9 @@ describe('device store loading states', () => {
     expect(store.versionStatus.refreshRequired).toBe(true)
   })
 
-  it('tracks the selected daemon version from the subscribe acknowledgement', async () => {
+  it('uses the live acknowledgement as the authoritative server version and updates that device daemon', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
-      server_version: '0.2.0',
+      server_version: '0.1.0',
       devices: [{
         id: 'device-a',
         name: '书房电脑',
@@ -153,7 +153,7 @@ describe('device store loading states', () => {
       }
     })
 
-    expect(store.activeDaemonVersion).toBe('0.1.0')
-    expect(store.versionStatus.daemonUpdateRequired).toBe(true)
+    expect(store.serverVersion).toBe('0.2.0')
+    expect(store.devices[0]?.daemon_version).toBe('0.1.0')
   })
 })

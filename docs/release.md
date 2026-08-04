@@ -40,7 +40,7 @@ If behavior or deploy paths changed, run [e2e-smoke.md](./e2e-smoke.md) on a rea
 
 1. Fold `[Unreleased]` (if any) into a new version section with a date  
 2. Align `pwa/package.json` `version`, `server/internal/buildinfo/version.go`, and `daemon/internal/buildinfo/version.go` with the tag (`0.2.0` ↔ `v0.2.0`)
-   Verify with `nekonest-server -version`, `nekonest-daemon -version`, and the PWA component-version panel.
+   Verify with `nekonest-server -version`, `nekonest-daemon -version`, the PWA/Server version panel, and each machine's Daemon version on its device card.
 3. If env vars, agents, deploy steps, or acceptance paths changed, update **both** English and Chinese docs (`README.md` / `README.zh-CN.md`, `docs/*.md` / `docs/*.zh-CN.md`)
 
 ## 3. Commit, tag, GitHub Release

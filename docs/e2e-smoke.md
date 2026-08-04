@@ -30,7 +30,7 @@ One nest = one mode. Mismatch rejects the handshake (no sealed→open downgrade)
 
 1. Open PWA; enter the nest admin secret (setup).  
 2. Pair: run `nekonest-daemon -pair gen` on the host; paste **QR JSON** (preferred) or 6-digit code; compare **fingerprint** with the PC screen.  
-3. Device list shows the host **online** and the PWA / server / daemon releases aligned. A deliberately stale PWA shows **Refresh now**; a stale daemon is reported separately.
+3. Device list shows the host **online**. The page-level PWA / Server releases align; each device card shows that machine's Daemon release. A deliberately stale PWA shows **Refresh now**; only the stale machine is marked for a Daemon update.
 4. On the host, open/use a supported agent so a recent thread exists.  
 5. Phone: **directory → agent → thread** visible; session capabilities appear when advertised.  
 6. Open a thread; history loads; send a short prompt; stream appears.  

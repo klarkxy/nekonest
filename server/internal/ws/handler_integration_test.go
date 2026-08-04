@@ -162,6 +162,9 @@ func TestComponentVersionsReportRefreshAndDaemonUpdateState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer healthResp.Body.Close()
+	if got := healthResp.Header.Get("Cache-Control"); got != "no-store, max-age=0" {
+		t.Fatalf("health Cache-Control = %q", got)
+	}
 	var health map[string]any
 	if err := json.NewDecoder(healthResp.Body).Decode(&health); err != nil {
 		t.Fatal(err)

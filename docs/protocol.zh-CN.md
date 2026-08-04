@@ -34,6 +34,8 @@ JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致
 
 当前构建使用 SemVer 发行版本。为兼容旧客户端，`pwa_version` 与 `daemon_version` 均为可选；缺失时显示“未知”，不得假定为当前版本。
 
+WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权威值。携带版本的动态 HTTP 响应（`/health` 与 `/api/devices`）使用 `Cache-Control: no-store`，Service Worker 也不会拦截这些请求。页面顶部只比较网页与 Server；Daemon 版本和更新提示归属各自的设备卡片。
+
 ## 信封
 
 每条 WebSocket 应用消息为 `NekoMessage`：

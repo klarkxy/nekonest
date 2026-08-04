@@ -32,7 +32,7 @@ registerRoute(
       return Response.error()
     },
     {
-      denylist: [/^\/api\//, /^\/ws\//]
+      denylist: [/^\/api\//, /^\/ws\//, /^\/health(?:\?|$)/]
     }
   )
 )

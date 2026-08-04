@@ -16,15 +16,10 @@ export const useDeviceStore = defineStore('devices', () => {
   const connected = ref(false)
   const authError = ref(false)
   const serverVersion = ref('')
-  const versionDeviceId = ref('')
 
-  const activeDaemonVersion = computed(() =>
-    devices.value.find(device => device.id === versionDeviceId.value)?.daemon_version || ''
-  )
   const versionStatus = computed(() => componentVersionStatus({
     frontend: APP_VERSION,
-    server: serverVersion.value,
-    daemon: activeDaemonVersion.value
+    server: serverVersion.value
   }))
 
   const HANDLER_ID = 'device-store'
@@ -42,7 +37,6 @@ export const useDeviceStore = defineStore('devices', () => {
         if (typeof reportedServer === 'string') {
           serverVersion.value = reportedServer
         }
-        versionDeviceId.value = msg.device_id
         const reportedDaemon = msg.payload?.daemon_version
         const device = devices.value.find(d => d.id === msg.device_id)
         if (device && typeof reportedDaemon === 'string') {
@@ -105,7 +99,6 @@ export const useDeviceStore = defineStore('devices', () => {
         binding.bound[0]?.id ||
         devices.value[0]?.id
       if (target) {
-        versionDeviceId.value = target
         nekoWS().subscribe(target)
         binding.setLastDevice(target)
       }
@@ -126,7 +119,6 @@ export const useDeviceStore = defineStore('devices', () => {
     authError,
     frontendVersion: APP_VERSION,
     serverVersion,
-    activeDaemonVersion,
     versionStatus,
     initWebSocket,
     fetchDevices

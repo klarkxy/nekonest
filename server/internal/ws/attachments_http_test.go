@@ -195,12 +195,18 @@ func TestRequirePhoneAuthAndRegister(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
 	rr := httptest.NewRecorder()
 	s.handleListDevices(rr, req)
+	if got := rr.Header().Get("Cache-Control"); got != "no-store, max-age=0" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("%d", rr.Code)
 	}
 	req.Header.Set("Authorization", "Bearer tok")
 	rr2 := httptest.NewRecorder()
 	s.handleListDevices(rr2, req)
+	if got := rr2.Header().Get("Cache-Control"); got != "no-store, max-age=0" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
 	if rr2.Code != http.StatusOK {
 		t.Fatalf("%d %s", rr2.Code, rr2.Body.String())
 	}

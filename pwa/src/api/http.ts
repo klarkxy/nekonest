@@ -65,7 +65,7 @@ export function authHeaders(extra?: HeadersInit): Headers {
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = authHeaders(init.headers)
-  return fetch(path, { ...init, headers })
+  return fetch(path, { ...init, headers, cache: 'no-store' })
 }
 
 /** Bootstrap a phone identity using the admin nest secret. */
