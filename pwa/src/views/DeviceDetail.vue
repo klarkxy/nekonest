@@ -22,7 +22,6 @@
     <section
       v-if="showWelcome"
       class="welcome-scene"
-      :class="{ 'welcome-scene--compact': compactWelcome }"
       aria-labelledby="welcome-title"
     >
       <div class="scene-portrait">
@@ -42,7 +41,11 @@
       </div>
     </section>
 
-    <dl class="device-stats" :aria-label="t('deviceDetail.statsAria')">
+    <dl
+      v-if="showWelcome"
+      class="device-stats"
+      :aria-label="t('deviceDetail.statsAria')"
+    >
       <div>
         <dt>{{ t('deviceDetail.statStatus') }}</dt>
         <dd>
@@ -59,7 +62,6 @@
     <section class="sessions-section" aria-labelledby="sessions-title">
       <div class="section-heading">
         <div>
-          <p class="section-kicker">{{ t('deviceDetail.sectionKicker') }}</p>
           <h2 id="sessions-title">{{ t('deviceDetail.sectionTitle') }}</h2>
         </div>
         <div class="session-overview" role="status" aria-live="polite">
@@ -69,8 +71,12 @@
           <span v-if="waitingApprovalCount" class="session-count-badge session-count-badge--waiting">
             {{ t('deviceDetail.waitingBadge', { n: waitingApprovalCount }) }}
           </span>
-          <span v-if="device?.status !== 'online'" class="session-count-badge session-count-badge--offline">
-            {{ t('deviceDetail.offlineBadge') }}
+          <!-- Offline/empty keep the welcome + stats strip; total only when the tree is primary. -->
+          <span
+            v-if="isOnline && hasThreads"
+            class="session-count-badge session-count-badge--total"
+          >
+            {{ t('deviceDetail.threadTotalBadge', { n: sessionStore.sessions.length + localThreadCount }) }}
           </span>
         </div>
       </div>
@@ -135,27 +141,20 @@ const loadingSessions = ref(false)
 const localThreadCount = computed(() => localThreads.listForDevice(deviceId.value).length)
 
 const isOnline = computed(() => device.value?.status === 'online')
-const compactWelcome = computed(
-  () => isOnline.value && (sessionStore.sessions.length > 0 || localThreadCount.value > 0)
+const hasThreads = computed(
+  () => sessionStore.sessions.length > 0 || localThreadCount.value > 0
 )
-const showWelcome = computed(
-  () => !isOnline.value || (sessionStore.sessions.length === 0 && localThreadCount.value === 0) || compactWelcome.value
-)
+/** Offline / empty only — avoid a filler "welcome back" strip when the tree is already primary. */
+const showWelcome = computed(() => !isOnline.value || !hasThreads.value)
 
 const welcomeTitle = computed(() => {
   if (!isOnline.value) return t('deviceDetail.welcomeOfflineTitle')
-  if (sessionStore.sessions.length === 0 && localThreadCount.value === 0) {
-    return t('deviceDetail.welcomeEmptyTitle')
-  }
-  return t('deviceDetail.welcomeBackTitle')
+  return t('deviceDetail.welcomeEmptyTitle')
 })
 
 const welcomeBody = computed(() => {
   if (!isOnline.value) return t('deviceDetail.welcomeOfflineBody')
-  if (sessionStore.sessions.length === 0 && localThreadCount.value === 0) {
-    return t('deviceDetail.welcomeEmptyBody')
-  }
-  return t('deviceDetail.welcomeBackBody')
+  return t('deviceDetail.welcomeEmptyBody')
 })
 
 watch(
@@ -286,7 +285,6 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 }
 
 .device-title p,
-.section-kicker,
 .speaker {
   margin: 0;
   color: var(--neko-primary-deep);
@@ -315,11 +313,11 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   height: 30px;
   place-items: center;
   border-radius: 10px;
-  background: rgba(235, 229, 232, 0.8);
+  background: var(--neko-neutral-soft);
 }
 
 .device-status-mark--online {
-  background: rgba(226, 241, 233, 0.86);
+  background: var(--neko-success-soft);
 }
 
 .welcome-scene {
@@ -330,35 +328,6 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   gap: 0;
   min-height: 142px;
   margin: 0 -4px 15px;
-}
-
-.welcome-scene--compact {
-  min-height: 0;
-  margin-bottom: 12px;
-}
-
-.welcome-scene--compact .scene-portrait {
-  width: 72px;
-  transform: translate(2px, 2px);
-}
-
-.welcome-scene--compact .scene-portrait img {
-  width: 72px;
-  height: 72px;
-  border-radius: 22px 22px 28px 14px;
-}
-
-.welcome-scene--compact .scene-dialogue {
-  min-height: 0;
-  padding: 12px 14px 12px 20px;
-}
-
-.welcome-scene--compact .scene-dialogue h2 {
-  font-size: 13px;
-}
-
-.welcome-scene--compact .scene-dialogue > p:last-of-type {
-  font-size: 11px;
 }
 
 .scene-portrait {
@@ -478,7 +447,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 }
 
 .section-heading h2 {
-  margin: 3px 0 0;
+  margin: 0;
   color: var(--neko-ink);
   font-family: var(--neko-display);
   font-size: 19px;
@@ -498,10 +467,16 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   border: 1px solid transparent;
   border-radius: 7px;
   color: var(--neko-primary-deep);
-  background: rgba(236, 229, 245, 0.86);
-  font-size: 9px;
+  background: var(--neko-primary-soft);
+  font-size: 10px;
   font-weight: 680;
   font-variant-numeric: tabular-nums;
+}
+
+.session-count-badge--total {
+  border-color: var(--neko-line);
+  color: var(--neko-ink-soft);
+  background: var(--neko-surface-muted);
 }
 
 .session-count-badge--active {
@@ -572,16 +547,16 @@ html[data-theme='dark'] .retry-load {
     padding-inline: 16px;
   }
 
-  .welcome-scene:not(.welcome-scene--compact) {
+  .welcome-scene {
     grid-template-columns: 78px minmax(0, 1fr);
   }
 
-  .welcome-scene:not(.welcome-scene--compact) .scene-portrait,
-  .welcome-scene:not(.welcome-scene--compact) .scene-portrait img {
+  .welcome-scene .scene-portrait,
+  .welcome-scene .scene-portrait img {
     width: 90px;
   }
 
-  .welcome-scene:not(.welcome-scene--compact) .scene-portrait img {
+  .welcome-scene .scene-portrait img {
     height: 90px;
   }
 

@@ -122,7 +122,7 @@ test.describe('390px primary visual matrix', () => {
     await openScenario(page, request, 'device-filter', devicePath)
     await expect(page.getByText('完善 NekoNest 本地截图回归')).toBeVisible()
     await page.getByPlaceholder('搜索线团或目录…').fill('不存在的线团')
-    await expect(page.getByText('活跃线团都收起来了，打开上方开关可查看。')).toBeVisible()
+    await expect(page.getByText('没有匹配的线团或目录。试试别的关键词。')).toBeVisible()
     await capture(page, 'device-search-empty.png')
   })
 
@@ -226,6 +226,7 @@ test.describe('390px primary visual matrix', () => {
     await openScenario(page, request, 'session-approval', sessionPath)
     await expect(page.getByText('需要审批', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '批准' })).toBeVisible()
+    await expect(page.getByText('请先批准或拒绝上方请求，再继续发送。')).toBeVisible()
     await capture(page, 'session-approval.png', false)
   })
 
@@ -295,6 +296,7 @@ test.describe('390px primary visual matrix', () => {
     const input = await sendPrompt(page, 'ping ×19')
     await expect(page).toHaveURL(new RegExp(`${LOCAL_THREAD_ID}$`))
     await expect(input).toHaveValue('ping ×19')
+    await expect(page.locator('.empty-title')).toHaveText('正在创建 Codex 线团…')
     await capture(page, 'thread-starting.png', false)
   })
 

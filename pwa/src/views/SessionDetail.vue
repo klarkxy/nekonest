@@ -211,14 +211,10 @@
             @error="onAgentAvatarError"
           />
         </div>
-        <p class="empty-title">
-          {{ isLocalDraft ? t('session.draftEmptyTitle') : t('session.emptyTitle') }}
-        </p>
-        <p class="empty-hint">
-          {{ isLocalDraft ? t('session.draftEmptyHint') : t('session.emptyHint') }}
-        </p>
+        <p class="empty-title">{{ emptyTitle }}</p>
+        <p class="empty-hint">{{ emptyHint }}</p>
         <n-button
-          v-if="!isLocalDraft"
+          v-if="!isLocalDraft && !isStartingThread"
           size="small"
           @click="reloadHistory"
         >{{ t('session.reloadHistory') }}</n-button>
@@ -250,8 +246,8 @@
       <button type="button" class="error-dismiss" :aria-label="t('common.close')" @click="dismissErrors">×</button>
     </div>
 
-    <p v-if="sendBlocked || steerMode" class="compose-status" role="status">
-      {{ steerMode ? t('session.steerHint') : t('session.sendBusyHint') }}
+    <p v-if="composeStatusText" class="compose-status" role="status">
+      {{ composeStatusText }}
     </p>
 
     <div class="input-bar">
@@ -393,23 +389,55 @@ const sendBlocked = computed(
   () => sessionBusy.value && sessionStore.wsStatus === 'connected' && !steerMode.value
 )
 
-const composerPlaceholder = computed(() =>
-  steerMode.value
-    ? t('session.placeholderSteer')
-    : sendBlocked.value
-      ? t('session.placeholderBusy')
-      : t('session.placeholder')
+const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
+
+const isStartingThread = computed(
+  () => isLocalDraft.value && (sending.value || !!pendingStartOpId.value)
 )
+
+const emptyTitle = computed(() => {
+  if (isStartingThread.value) return t('session.draftStartingTitle')
+  if (isLocalDraft.value) return t('session.draftEmptyTitle')
+  return t('session.emptyTitle')
+})
+
+const emptyHint = computed(() => {
+  if (isStartingThread.value) return t('session.draftStartingHint')
+  if (isLocalDraft.value) return t('session.draftEmptyHint')
+  return t('session.emptyHint')
+})
+
+const composerPlaceholder = computed(() => {
+  if (hasPendingApproval.value) return t('session.placeholderApproval')
+  if (isStartingThread.value) return t('session.placeholderStarting')
+  if (steerMode.value) return t('session.placeholderSteer')
+  if (sendBlocked.value) return t('session.placeholderBusy')
+  return t('session.placeholder')
+})
 
 const sendButtonLabel = computed(() =>
   steerMode.value
     ? t('session.steer')
-    : sendBlocked.value
+    : sendBlocked.value || isStartingThread.value
       ? t('session.sendBlocked')
       : t('session.send')
 )
 
-const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
+/**
+ * Prefer a single explanation: approval needs a dedicated hint;
+ * steer is already covered by the activity banner + placeholder;
+ * plain busy (no banner) still needs the compose strip.
+ */
+const composeStatusText = computed(() => {
+  if (hasPendingApproval.value) {
+    return approveSupported.value
+      ? t('session.approvalComposeHint')
+      : t('session.approvalComposeUnavailable')
+  }
+  if (steerMode.value || isStartingThread.value) return ''
+  if (sendBlocked.value && !showActivityBanner.value) return t('session.sendBusyHint')
+  return ''
+})
 
 const interruptSupported = computed(() => {
   const c = sessionCaps.value
@@ -459,7 +487,7 @@ const wsLabel = computed(() => {
 const liveStatusText = computed(() => {
   const parts = [wsLabel.value]
   if (isLocalDraft.value) {
-    parts.push(t('session.draftTag'), t('session.draftEmptyTitle'))
+    parts.push(t('session.draftTag'), emptyTitle.value)
   } else if (showHeaderActivity.value) {
     parts.push(threadActivity.value.headline, threadActivity.value.detail)
   }
@@ -827,6 +855,7 @@ async function handleSend() {
     localThreads.touch(draftSid, prompt || t('threadList.draftSummary'))
     const { ok, operationId } = sessionStore.startThread(did, local.projectDir, prompt)
     if (!ok) {
+      pendingStartOpId.value = ''
       sending.value = false
       return
     }
@@ -856,9 +885,11 @@ async function handleSend() {
     const realId = (result.sessionId || '').trim()
     if ((result.status !== 'owned' && result.status !== 'indeterminate') || !realId) {
       sessionStore.lastError = result.error || t('deviceDetail.startCodexFailed')
+      pendingStartOpId.value = ''
       sending.value = false
       return
     }
+    pendingStartOpId.value = ''
     // The first prompt was already accepted by start_thread. Do not migrate it
     // into the owned thread's composer as though it were still unsent.
     draftStore.clear(did, realId)

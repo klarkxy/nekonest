@@ -30,16 +30,16 @@
         </label>
       </div>
       <div class="control-meta">
-        <label class="archive-toggle">
+        <label class="archive-toggle" :title="t('threadList.hint')">
           <input v-model="prefs.showArchived" type="checkbox" class="archive-checkbox" />
           {{ t('threadList.showArchived') }}
         </label>
-        <p class="hint">{{ t('threadList.hint') }}</p>
       </div>
     </div>
 
     <div v-if="visibleProjects.length === 0" class="empty-hint">
-      <template v-if="agentFilter && mergedSessions.length > 0">{{ t('threadList.emptyFilter') }}</template>
+      <template v-if="searchQuery.trim()">{{ t('threadList.emptySearch') }}</template>
+      <template v-else-if="agentFilter && mergedSessions.length > 0">{{ t('threadList.emptyFilter') }}</template>
       <template v-else-if="prefs.showArchived">{{ t('threadList.emptyNone') }}</template>
       <template v-else-if="mergedSessions.length === 0">
         {{ t('threadList.emptyCreateOnPc') }}
@@ -403,7 +403,6 @@ function shortPath(path: string, max = 36): string {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: 8px 12px;
   min-height: 36px;
   padding-inline: 2px;
@@ -413,11 +412,12 @@ function shortPath(path: string, max = 36): string {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
+  min-height: 44px;
   color: var(--neko-ink-soft);
   font-size: 12px;
   font-weight: 600;
   user-select: none;
+  cursor: pointer;
 }
 
 .archive-checkbox {
@@ -425,15 +425,6 @@ function shortPath(path: string, max = 36): string {
   height: 18px;
   flex: 0 0 18px;
   accent-color: var(--neko-primary);
-}
-
-.hint {
-  margin: 0;
-  flex: 1 1 10rem;
-  color: var(--neko-ink-faint);
-  font-size: 11px;
-  line-height: 1.45;
-  text-align: end;
 }
 
 @media (max-width: 360px) {

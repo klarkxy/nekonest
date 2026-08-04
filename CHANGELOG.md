@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Reduce repeated device-page chrome once a machine has resumable threads,
+  while keeping concise version and total-thread status visible.
+- Clarify empty search results and Codex thread-starting feedback in the mobile
+  client.
+
+### Fixed
+
+- Explain approval-gated composing directly above the prompt bar and prevent
+  stale thread-start operations from leaving the composer in a busy state.
+
 ## [0.2.2] - 2026-08-04
 
 ### Added

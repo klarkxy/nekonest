@@ -18,7 +18,6 @@
           width="132"
           height="132"
         />
-        <figcaption>{{ t('brand.duoCaption') }}</figcaption>
       </figure>
     </header>
 
@@ -55,7 +54,8 @@
       class="version-panel"
       :class="{
         'version-panel--ok': deviceStore.versionStatus.aligned,
-        'version-panel--warning': deviceStore.versionStatus.refreshRequired
+        'version-panel--warning': deviceStore.versionStatus.refreshRequired,
+        'version-panel--compact': versionCompact
       }"
       :aria-label="t('deviceList.versionTitle')"
       aria-live="polite"
@@ -72,8 +72,13 @@
         >
           {{ t('deviceList.refreshNow') }}
         </button>
+        <span
+          v-else-if="versionCompact && deviceStore.frontendVersion"
+          class="version-panel__pill"
+          translate="no"
+        >{{ displayVersion(deviceStore.frontendVersion) }}</span>
       </div>
-      <dl class="version-grid">
+      <dl v-if="!versionCompact" class="version-grid">
         <div>
           <dt>{{ t('deviceList.frontendVersion') }}</dt>
           <dd>{{ displayVersion(deviceStore.frontendVersion) }}</dd>
@@ -181,7 +186,6 @@
           />
           <h3>{{ t('deviceList.emptyTitle') }}</h3>
           <p>{{ t('deviceList.emptyBody') }}</p>
-          <RouterLink class="empty-pair-link" :to="pairLocation()">{{ t('deviceList.emptyPair') }}</RouterLink>
         </div>
       </div>
     </section>
@@ -253,6 +257,11 @@ const versionSummary = computed(() => {
   if (!deviceStore.serverVersion) return t('deviceList.versionChecking')
   return t('deviceList.versionUnknown')
 })
+
+/** Aligned builds only need a one-line status; expand when refresh or versions differ. */
+const versionCompact = computed(() =>
+  deviceStore.versionStatus.aligned && !deviceStore.versionStatus.refreshRequired
+)
 
 onMounted(() => {
   deviceStore.initWebSocket()
@@ -410,20 +419,6 @@ function osLabel(os: string): string {
   transform: rotate(2deg);
 }
 
-.mascot-stage figcaption {
-  position: absolute;
-  right: -1px;
-  bottom: -7px;
-  padding: 5px 9px;
-  border: 1px solid var(--neko-line);
-  border-radius: 8px 8px 11px 5px;
-  color: var(--neko-primary-deep);
-  background: var(--neko-surface-solid);
-  box-shadow: var(--neko-shadow-soft);
-  font-size: 11px;
-  font-weight: 700;
-}
-
 .connection-panel {
   display: flex;
   min-height: 44px;
@@ -512,6 +507,12 @@ function osLabel(os: string): string {
   border-color: var(--neko-success-line);
 }
 
+.version-panel--compact {
+  gap: 0;
+  margin-bottom: 12px;
+  padding: 8px 13px;
+}
+
 .version-panel--warning {
   border-color: var(--neko-danger-line);
   color: var(--neko-danger-ink);
@@ -524,6 +525,21 @@ function osLabel(os: string): string {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.version-panel--compact .version-panel__summary {
+  min-height: 36px;
+}
+
+.version-panel__pill {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: var(--neko-success-ink);
+  background: color-mix(in srgb, var(--neko-surface-solid) 72%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .version-panel__summary > div {
@@ -926,13 +942,12 @@ function osLabel(os: string): string {
 
 .empty-state p {
   max-width: 17rem;
-  margin: 7px 0 17px;
+  margin: 7px 0 0;
   color: var(--neko-ink-soft);
   font-size: 12px;
   line-height: 1.6;
 }
 
-.empty-pair-link,
 .dock-pair {
   display: inline-flex;
   align-items: center;
@@ -948,7 +963,6 @@ function osLabel(os: string): string {
   box-shadow: var(--neko-shadow-soft);
 }
 
-html[data-theme='dark'] .empty-pair-link,
 html[data-theme='dark'] .dock-pair {
   color: #1a1422;
 }
@@ -990,8 +1004,7 @@ html[data-theme='dark'] .dock-pair {
     transform: translateY(-2px);
   }
 
-  .dock-pair:hover,
-  .empty-pair-link:hover {
+  .dock-pair:hover {
     background: var(--neko-primary-deep);
   }
 }
