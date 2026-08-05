@@ -101,6 +101,7 @@
         :sessions="sessionStore.sessions"
         :device-id="deviceId"
         :device-online="isOnline"
+        :start-capabilities="sessionStore.startCapabilities"
       />
     </section>
   </div>
@@ -220,9 +221,7 @@ async function fetchSessions(want: string) {
     }
     const data = await res.json()
     if (!isCurrentRequest(want, gen, controller)) return
-    if (data.sessions) {
-      sessionStore.sessions = data.sessions
-    }
+    sessionStore.applySessionList(data, want)
     loadError.value = ''
   } catch (error) {
     if (!controller.signal.aborted && isCurrentRequest(want, gen, controller)) {

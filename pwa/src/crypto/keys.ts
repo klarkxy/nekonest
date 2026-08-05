@@ -60,6 +60,16 @@ export async function getContentKey(
   sessionId = '',
   epoch?: number
 ): Promise<Uint8Array | null> {
+  const match = await getContentKeyRecord(deviceId, scope, sessionId, epoch)
+  return match ? b64urlDecode(match.keyB64) : null
+}
+
+async function getContentKeyRecord(
+  deviceId: string,
+  scope: 'device_catalog' | 'session',
+  sessionId = '',
+  epoch?: number
+): Promise<StoredContentKey | null> {
   const db = await openDB()
   const all = await new Promise<StoredContentKey[]>((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readonly')
@@ -73,8 +83,7 @@ export async function getContentKey(
   )
   if (!matches.length) return null
   matches.sort((a, b) => b.epoch - a.epoch)
-  const pick = epoch != null ? matches.find(m => m.epoch === epoch) || matches[0] : matches[0]
-  return b64urlDecode(pick.keyB64)
+  return epoch != null ? matches.find(m => m.epoch === epoch) || null : matches[0]
 }
 
 async function unwrapPackage(
@@ -198,16 +207,17 @@ export async function encryptSessionPayload(
   senderId: string,
   type: string,
   payload: unknown,
-  clientMsgId?: string
+  clientMsgId?: string,
+  timestamp?: number
 ): Promise<SealedPayload | null> {
-  const key = await getContentKey(deviceId, 'session', sessionId)
-  if (!key) {
+  const sessionKey = await getContentKeyRecord(deviceId, 'session', sessionId)
+  if (!sessionKey) {
     // Fall back to catalog key if session key not yet distributed.
-    const cat = await getContentKey(deviceId, 'device_catalog', '')
+    const cat = await getContentKeyRecord(deviceId, 'device_catalog', '')
     if (!cat) return null
-    return sealWithKey(cat, 'device_catalog', 1, deviceId, sessionId, senderId, type, payload, clientMsgId)
+    return sealWithKey(b64urlDecode(cat.keyB64), 'device_catalog', cat.epoch, deviceId, sessionId, senderId, type, payload, clientMsgId, timestamp)
   }
-  return sealWithKey(key, 'session', 1, deviceId, sessionId, senderId, type, payload, clientMsgId)
+  return sealWithKey(b64urlDecode(sessionKey.keyB64), 'session', sessionKey.epoch, deviceId, sessionId, senderId, type, payload, clientMsgId, timestamp)
 }
 
 async function sealWithKey(
@@ -219,10 +229,11 @@ async function sealWithKey(
   senderId: string,
   type: string,
   payload: unknown,
-  clientMsgId?: string
+  clientMsgId?: string,
+  timestamp?: number
 ): Promise<SealedPayload> {
   const seq = Date.now() % 1_000_000_000
-  const ts = Math.floor(Date.now() / 1000)
+  const ts = timestamp ?? Math.floor(Date.now() / 1000)
   const aad: AADFields = {
     protocol_version: '1.0',
     transport_mode: 'sealed',

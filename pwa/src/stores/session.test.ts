@@ -7,6 +7,7 @@ const harness = vi.hoisted(() => ({
   connected: false,
   status: 'disconnected' as 'connecting' | 'connected' | 'disconnected' | 'auth_error',
   subscribedDevice: null as string | null,
+  decrypted: null as unknown,
   sent: [] as Array<Partial<NekoMessage>>,
   handlers: new Map<string, (msg: NekoMessage) => void>(),
   statusHandlers: new Map<string, (status: 'connecting' | 'connected' | 'disconnected' | 'auth_error') => void>()
@@ -52,6 +53,14 @@ vi.mock('@/api/http', () => ({
   apiFetch: vi.fn(async () => new Response('', { status: 503 }))
 }))
 
+vi.mock('@/crypto/keys', async () => {
+  const actual = await vi.importActual<typeof import('@/crypto/keys')>('@/crypto/keys')
+  return {
+    ...actual,
+    decryptSealedPayload: vi.fn(async () => harness.decrypted)
+  }
+})
+
 import {
   LEGACY_OUTBOX_STORAGE_KEY,
   MAX_OUTBOX,
@@ -88,6 +97,7 @@ function persistedOutboxItems() {
 describe('session prompt outbox', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    harness.decrypted = null
     localStorage.clear()
     harness.connected = false
     harness.status = 'disconnected'
@@ -102,6 +112,7 @@ describe('session prompt outbox', () => {
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()
+    vi.unstubAllEnvs()
   })
 
   it('keeps an offline prompt as one optimistic queued message', () => {
@@ -727,13 +738,18 @@ describe('session prompt outbox', () => {
     const store = useSessionStore()
     store.subscribeDevice('device-a')
 
-    const { ok, operationId } = store.startThread('device-a', 'D:\\repo', '  ping ×19  ')
+    const { ok, operationId } = store.startThread('device-a', 'kilo', 'D:\\repo', '  ping ×19  ')
     expect(ok).toBe(true)
     expect(harness.sent).toHaveLength(1)
     expect(harness.sent[0]).toMatchObject({
       type: 'start_thread',
       device_id: 'device-a',
-      payload: { operation_id: operationId, prompt: '  ping ×19  ' }
+      payload: {
+        operation_id: operationId,
+        agent_type: 'kilo',
+        project_dir: 'D:\\repo',
+        prompt: '  ping ×19  '
+      }
     })
 
     emit({
@@ -746,12 +762,12 @@ describe('session prompt outbox', () => {
       type: 'thread_owned',
       device_id: 'device-a',
       timestamp: 2,
-      payload: { operation_id: operationId, session_id: 'native-thread-a' }
+      payload: { operation_id: operationId, session_id: 'native-thread-a', prompt_accepted: true }
     })
     store.setCurrentSession({
       id: 'native-thread-a',
       device_id: 'device-a',
-      agent_type: 'codex',
+      agent_type: 'kilo',
       status: 'running',
       summary: '',
       last_activity: 1
@@ -773,7 +789,7 @@ describe('session prompt outbox', () => {
     const store = useSessionStore()
     store.subscribeDevice('device-a')
 
-    const { ok, operationId } = store.startThread('device-a', 'D:\\repo', 'ping ×19')
+    const { ok, operationId } = store.startThread('device-a', 'grok_build', 'D:\\repo', 'ping ×19')
     expect(ok).toBe(true)
 
     emit({
@@ -791,6 +807,7 @@ describe('session prompt outbox', () => {
 
     expect(store.startOps[operationId]).toMatchObject({
       status: 'indeterminate',
+      agentType: 'grok_build',
       sessionId: 'native-thread-a',
       firstPrompt: 'ping ×19'
     })
@@ -805,6 +822,176 @@ describe('session prompt outbox', () => {
     })
     expect(store.messages).toEqual([])
     expect(sentPrompts()).toHaveLength(0)
+    store.cleanup()
+  })
+
+  it('downgrades an owned result without prompt acknowledgement to indeterminate', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    const { operationId } = store.startThread('device-a', 'kimi_cli', 'D:\\repo', 'keep me')
+
+    emit({
+      type: 'thread_owned',
+      device_id: 'device-a',
+      timestamp: 2,
+      payload: {
+        operation_id: operationId,
+        session_id: 'kimi_cli:native-thread',
+        prompt_accepted: false
+      }
+    })
+
+    expect(store.startOps[operationId]).toMatchObject({
+      status: 'indeterminate',
+      promptAccepted: false,
+      sessionId: 'kimi_cli:native-thread'
+    })
+    expect(store.messages).toEqual([])
+    store.cleanup()
+  })
+
+  it('decrypts sealed thread results without requiring plaintext application details', async () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+
+    const { ok, operationId } = store.startThread('device-a', 'kimi_cli', 'D:\\repo', 'ping')
+    expect(ok).toBe(true)
+    vi.stubEnv('VITE_NEKONEST_TRANSPORT_MODE', 'sealed')
+    harness.decrypted = {
+      operation_id: operationId,
+      agent_type: 'kimi_cli',
+      error: 'private native error'
+    }
+
+    emit({
+      protocol_version: '1.0',
+      transport_mode: 'sealed',
+      type: 'thread_failed',
+      device_id: 'device-a',
+      client_msg_id: operationId,
+      timestamp: 2,
+      sealed_payload: {
+        alg: 'aes-256-gcm',
+        version: 1,
+        key_scope: 'device_catalog',
+        epoch: 1,
+        sender_id: 'device-a',
+        recipient_id: 'phones',
+        sequence: 1,
+        nonce: 'opaque',
+        ciphertext: 'opaque'
+      }
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.startOps[operationId]).toMatchObject({
+      status: 'failed',
+      agentType: 'kimi_cli',
+      error: 'private native error'
+    })
+    store.cleanup()
+  })
+
+  it('downgrades an unauthenticated sealed owned result to indeterminate', async () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+
+    const { ok, operationId } = store.startThread('device-a', 'claude_code', 'D:\\repo', 'ping')
+    expect(ok).toBe(true)
+    vi.stubEnv('VITE_NEKONEST_TRANSPORT_MODE', 'sealed')
+    harness.decrypted = null
+
+    emit({
+      protocol_version: '1.0',
+      transport_mode: 'sealed',
+      type: 'thread_owned',
+      device_id: 'device-a',
+      session_id: 'untrusted-native-session',
+      client_msg_id: operationId,
+      timestamp: 2,
+      sealed_payload: {
+        alg: 'aes-256-gcm',
+        version: 1,
+        key_scope: 'device_catalog',
+        epoch: 1,
+        sender_id: 'device-a',
+        recipient_id: 'phones',
+        sequence: 1,
+        nonce: 'tampered',
+        ciphertext: 'tampered'
+      }
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.startOps[operationId]).toMatchObject({
+      status: 'indeterminate',
+      agentType: 'claude_code'
+    })
+    expect(store.startOps[operationId].sessionId).toBeUndefined()
+    expect(store.messages).toEqual([])
+    store.cleanup()
+  })
+
+  it('rejects plaintext thread results when the local nest mode is sealed', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+
+    const { ok, operationId } = store.startThread('device-a', 'grok_build', 'D:\\repo', 'ping')
+    expect(ok).toBe(true)
+    vi.stubEnv('VITE_NEKONEST_TRANSPORT_MODE', 'sealed')
+
+    emit({
+      protocol_version: '1.0',
+      transport_mode: 'open',
+      type: 'thread_owned',
+      device_id: 'device-a',
+      session_id: 'untrusted-native-session',
+      client_msg_id: operationId,
+      timestamp: 2,
+      payload: {
+        operation_id: operationId,
+        session_id: 'untrusted-native-session'
+      }
+    })
+
+    expect(store.startOps[operationId]).toMatchObject({
+      status: 'indeterminate',
+      agentType: 'grok_build'
+    })
+    expect(store.startOps[operationId].sessionId).toBeUndefined()
+    expect(store.messages).toEqual([])
+    store.cleanup()
+  })
+
+  it('keeps a present start-capability catalog distinct from legacy session capabilities', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+
+    emit({
+      type: 'session_list',
+      device_id: 'device-a',
+      timestamp: 1,
+      payload: {
+        sessions: [],
+        start_capabilities: [
+          { agent_type: 'claude_code', available: true, spawn: true },
+          { agent_type: 'kilo', available: false, spawn: false, reason: 'CLI missing' }
+        ]
+      }
+    })
+
+    expect(store.startCapabilities).toEqual([
+      expect.objectContaining({ agent_type: 'claude_code', spawn: true }),
+      expect.objectContaining({ agent_type: 'kilo', available: false, reason: 'CLI missing' })
+    ])
+    store.applySessionList({ sessions: [] }, 'device-a')
+    expect(store.startCapabilities).toBeNull()
     store.cleanup()
   })
 

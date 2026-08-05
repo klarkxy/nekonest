@@ -56,6 +56,38 @@ func TestClaudeResumeArgsAuthorizesLocalDirectoryWithoutFileFlag(t *testing.T) {
 	}
 }
 
+func TestNativeStartArgsUseExplicitSessionIDs(t *testing.T) {
+	claude := claudeStartArgs("8d0c7f6f-a7ca-4e35-b63f-a3d6f3f42ee5", "first prompt")
+	if !reflect.DeepEqual(claude, []string{
+		"--session-id", "8d0c7f6f-a7ca-4e35-b63f-a3d6f3f42ee5",
+		"-p", "first prompt", "--output-format", "stream-json", "--verbose",
+	}) {
+		t.Fatalf("claude start args = %#v", claude)
+	}
+	grok := grokStartArgs("7fcd5e7f-7c88-407a-9c12-a162d4e50c35", "first prompt", `D:\repo`)
+	if !reflect.DeepEqual(grok, []string{
+		"--session-id", "7fcd5e7f-7c88-407a-9c12-a162d4e50c35",
+		"-p", "first prompt", "--output-format", "streaming-json", "--permission-mode", "auto", "--cwd", `D:\repo`,
+	}) {
+		t.Fatalf("grok start args = %#v", grok)
+	}
+}
+
+func TestHeadlessStartRequiresPositivePromptOutput(t *testing.T) {
+	if claudePromptAcknowledged(`{"type":"system","subtype":"init"}`) {
+		t.Fatal("Claude init event was treated as prompt acknowledgement")
+	}
+	if !claudePromptAcknowledged(`{"type":"assistant","message":{"content":[]}}`) {
+		t.Fatal("Claude assistant event did not acknowledge prompt processing")
+	}
+	if grokPromptAcknowledged(`{"type":"error","message":"denied"}`) {
+		t.Fatal("Grok error event was treated as prompt acknowledgement")
+	}
+	if !grokPromptAcknowledged(`{"type":"tool_call"}`) {
+		t.Fatal("Grok tool event did not acknowledge prompt processing")
+	}
+}
+
 func TestKiloResumeArgsAttachEveryFileAndTerminateOptions(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "attachments")
 	first := filepath.Join(dir, "photo.png")
@@ -252,6 +284,86 @@ func TestKimiSynthesizedMessageIDsDoNotCollideAcrossRuns(t *testing.T) {
 	}
 	if ids[0] == ids[1] {
 		t.Fatalf("message id reused across runs: %q", ids[0])
+	}
+}
+
+func TestACPMessageChunksAccumulateBeforeOutput(t *testing.T) {
+	kimi := NewKimiCommander()
+	var kimiEvents []struct{ content, id string }
+	kimi.OnAgentOutput = func(_ string, _ string, content string, id string) {
+		kimiEvents = append(kimiEvents, struct{ content, id string }{content, id})
+	}
+	kimi.handleACPUpdate("kimi-native", map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"messageId":     "kimi-message",
+		"content":       map[string]any{"type": "text", "text": "hello"},
+	})
+	kimi.handleACPUpdate("kimi-native", map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"messageId":     "kimi-message",
+		"content":       map[string]any{"type": "text", "text": " world"},
+	})
+	if len(kimiEvents) != 2 || kimiEvents[1].content != "hello world" ||
+		kimiEvents[0].id != "kimi-message" || kimiEvents[1].id != "kimi-message" {
+		t.Fatalf("Kimi ACP events = %#v", kimiEvents)
+	}
+
+	kilo := NewKiloCommander()
+	var kiloEvents []struct{ content, id string }
+	kilo.OnAgentOutput = func(_ string, _ uint64, _ string, content, id string) {
+		kiloEvents = append(kiloEvents, struct{ content, id string }{content, id})
+	}
+	kilo.handleACPUpdate("kilo-native", 7, map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"messageId":     "kilo-message",
+		"content":       map[string]any{"type": "text", "text": "hello"},
+	})
+	kilo.handleACPUpdate("kilo-native", 7, map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"messageId":     "kilo-message",
+		"content":       map[string]any{"type": "text", "text": " world"},
+	})
+	if len(kiloEvents) != 2 || kiloEvents[1].content != "hello world" ||
+		kiloEvents[0].id != "kilo-message" || kiloEvents[1].id != "kilo-message" {
+		t.Fatalf("Kilo ACP events = %#v", kiloEvents)
+	}
+}
+
+func TestACPMessageChunkFallbackIDsRemainStable(t *testing.T) {
+	kimi := NewKimiCommander()
+	var ids []string
+	kimi.OnAgentOutput = func(_ string, _ string, _ string, id string) { ids = append(ids, id) }
+	for _, text := range []string{"one", " two"} {
+		kimi.handleACPUpdate("kimi-native", map[string]any{
+			"sessionUpdate": "agent_message_chunk",
+			"content":       map[string]any{"type": "text", "text": text},
+		})
+	}
+	if len(ids) != 2 || ids[0] == "" || ids[0] != ids[1] {
+		t.Fatalf("Kimi ACP fallback ids = %#v", ids)
+	}
+}
+
+func TestStopAllClearsACPChunkAccumulators(t *testing.T) {
+	kimi := NewKimiCommander()
+	kimi.handleACPUpdate("kimi-native", map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"content":       map[string]any{"type": "text", "text": "partial"},
+	})
+	kimi.StopAll()
+	if len(kimi.acpChunks) != 0 || len(kimi.acpIDs) != 0 {
+		t.Fatalf("Kimi ACP state survived StopAll: %#v %#v", kimi.acpChunks, kimi.acpIDs)
+	}
+
+	kilo := NewKiloCommander()
+	kilo.OnAgentOutput = func(_ string, _ uint64, _ string, _, _ string) {}
+	kilo.handleACPUpdate("kilo-native", 1, map[string]any{
+		"sessionUpdate": "agent_message_chunk",
+		"content":       map[string]any{"type": "text", "text": "partial"},
+	})
+	kilo.StopAll()
+	if len(kilo.acpChunks) != 0 || len(kilo.acpIDs) != 0 {
+		t.Fatalf("Kilo ACP state survived StopAll: %#v %#v", kilo.acpChunks, kilo.acpIDs)
 	}
 }
 

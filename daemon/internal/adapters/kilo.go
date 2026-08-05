@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -55,6 +56,24 @@ func (a *KiloAdapter) Name() string { return "kilo" }
 // IsAvailable reports whether the Kilo CLI is present.
 func (a *KiloAdapter) IsAvailable() bool {
 	return a.commander.IsAvailable()
+}
+
+func (a *KiloAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapability {
+	if a.commander == nil {
+		return ThreadStartCapability{Reason: "Kilo commander is unavailable"}
+	}
+	if err := a.commander.ProbeThreadStart(ctx); err != nil {
+		return ThreadStartCapability{Reason: err.Error()}
+	}
+	return ThreadStartCapability{Available: true}
+}
+
+func (a *KiloAdapter) StartNativeThread(ctx context.Context, request ThreadStartRequest) (ThreadStartResult, error) {
+	if a.commander == nil {
+		return ThreadStartResult{}, fmt.Errorf("Kilo commander is unavailable")
+	}
+	sessionID, created, promptAccepted, err := a.commander.StartThread(ctx, request.ProjectDir, request.Prompt)
+	return ThreadStartResult{SessionID: sessionID, Created: created, PromptAccepted: promptAccepted}, err
 }
 
 // GetCommander returns the underlying commander.
@@ -551,6 +570,7 @@ func (a *KiloAdapter) latestExecutionError(
 var _ ClosableAdapter = (*KiloAdapter)(nil)
 var _ Adapter = (*KiloAdapter)(nil)
 var _ OutputAdapter = (*KiloAdapter)(nil)
+var _ NativeThreadStarter = (*KiloAdapter)(nil)
 var _ Adapter = (*ClaudeCodeAdapter)(nil)
 var _ Adapter = (*CodexAdapter)(nil)
 

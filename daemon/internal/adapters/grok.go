@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -49,6 +50,24 @@ func (a *GrokBuildAdapter) Name() string { return string(AgentGrokBuild) }
 
 func (a *GrokBuildAdapter) IsAvailable() bool {
 	return a.commander != nil && a.commander.IsAvailable()
+}
+
+func (a *GrokBuildAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapability {
+	if a.commander == nil {
+		return ThreadStartCapability{Reason: "Grok commander is unavailable"}
+	}
+	if err := a.commander.ProbeThreadStart(ctx); err != nil {
+		return ThreadStartCapability{Reason: err.Error()}
+	}
+	return ThreadStartCapability{Available: true}
+}
+
+func (a *GrokBuildAdapter) StartNativeThread(ctx context.Context, request ThreadStartRequest) (ThreadStartResult, error) {
+	if a.commander == nil {
+		return ThreadStartResult{}, fmt.Errorf("Grok commander is unavailable")
+	}
+	nativeID, created, promptAccepted, err := a.commander.StartThread(ctx, request.ProjectDir, request.Prompt)
+	return ThreadStartResult{SessionID: publicSessionID(AgentGrokBuild, nativeID), Created: created, PromptAccepted: promptAccepted}, err
 }
 
 func (a *GrokBuildAdapter) Close() error {
@@ -695,3 +714,4 @@ func firstTime(values map[string]interface{}, keys ...string) time.Time {
 
 var _ ClosableAdapter = (*GrokBuildAdapter)(nil)
 var _ OutputAdapter = (*GrokBuildAdapter)(nil)
+var _ NativeThreadStarter = (*GrokBuildAdapter)(nil)

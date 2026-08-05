@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add capability-gated native thread creation for Claude Code, Codex, Kilo,
+  Kimi CLI, and Grok Build in directories discovered from native sessions.
+
+### Fixed
+
+- Make thread creation fail closed with a durable operation journal and require
+  positive native-store ownership before reporting a new thread as owned.
+
 ## [0.2.3] - 2026-08-04
 
 ### Changed

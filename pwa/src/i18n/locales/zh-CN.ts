@@ -145,7 +145,11 @@ export default {
     loadNetwork: '网络不顺，线团清单没拿到。',
     startCodexStarting: '正在创建 Codex 线团…',
     startCodexFailed: '创建 Codex 线团失败',
-    startCodexNeedProject: '缺少项目目录，无法创建。'
+    startCodexNeedProject: '缺少项目目录，无法创建。',
+    startThreadFailed: '创建 {agent} 线团失败',
+    startThreadNeedProject: '缺少项目目录，无法创建。',
+    startThreadUnavailable: '该 agent 或项目已不在当前可新建范围内。',
+    startPromptUnconfirmed: '原生线程已创建，但首条提示词未确认。内容已保留在输入框，请先核对原生历史再决定是否重发。'
   },
   threadList: {
     showArchived: '显示已收起',
@@ -173,6 +177,11 @@ export default {
     unarchiveProjectAria: '放回项目 {project} 下的所有线团',
     newCodexTitle: '在此目录新建 Codex 线团',
     newCodexAria: '在 {project} 新建 Codex 线团',
+    newThreadPicker: '新建线团…',
+    newThreadPickerAria: '在 {project} 新建线团',
+    newThreadForAgent: '新建 {agent} 线团',
+    newThreadUnavailable: '{agent}：不可用 — {reason}',
+    startUnavailableDefault: '此设备暂不可用',
     draftBadge: '草稿',
     draftSummary: '未发送的新线团'
   },
@@ -186,8 +195,8 @@ export default {
     draftTag: '新线团',
     draftEmptyTitle: '这是手机新建的线团',
     draftEmptyHint:
-      '还不会去同步电脑历史。写好第一句（可带附件）再发送，才会在本机 Codex 里真正创建。',
-    draftStartingTitle: '正在创建 Codex 线团…',
+      '还不会去同步电脑历史。写好第一句（可带附件）再发送，才会在本机 {agent} 里真正创建。',
+    draftStartingTitle: '正在创建 {agent} 线团…',
     draftStartingHint: '第一句已送出。创建成功后会进入本机线团；失败可改写后再发。',
     draftIndeterminateTitle: '结果不确定',
     draftIndeterminateHint:
@@ -287,6 +296,7 @@ export default {
     outboxPersist: '待发消息没存住，先别关页面',
     agentError: '猫娘这边出错了',
     ambiguousNoRetry: '结果不确定，为避免重复已关掉重试',
+    sealedKeyMissing: '设备密封密钥不可用，线程未启动',
     busyRetry: '猫娘还在处理上一条，结束后再重试',
     promptRejected: '猫娘没接下这条指令',
     wrongDevice: '这条线团属于别的电脑，请先回去换猫窝',

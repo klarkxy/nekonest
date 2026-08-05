@@ -48,7 +48,7 @@
 1. `nekonest-daemon -doctor` 打印 app-server `available` / `ensure`。  
 2. 若能力为 `control_mode=app_server` 且 `approve=true`：主机触发真审批 → 手机批准/拒绝生效。  
 3. 若 `steer=true`：中途 steer 生效。  
-4. 若 `spawn=true`：仅对**当前已发现** Codex 项目目录 `start_thread`；生命周期 `thread_starting → thread_owned | failed | indeterminate`；无幽灵 nest 行。  
+4. 对每个宣告 `spawn=true` 的 agent：`start_thread` 只能进入 daemon **当前已发现**的原生项目目录并集；生命周期 `thread_starting → thread_owned | failed | indeterminate`；无幽灵 nest 行。
 5. app-server 不健康时：Codex 保持 `exec_resume`（仅发送/历史/中断）；不假冒 approve/spawn。
 
 ## C. 密封模式（第二轮可选）

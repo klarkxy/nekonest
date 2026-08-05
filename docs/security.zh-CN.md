@@ -30,10 +30,10 @@ NekoNest 如何信任各组件、哪些密钥保护哪些接口，以及运维�
 
 ## 影响安全的产品边界
 
-- 手机主要**续接**原生线程；仅 Codex 的 `start_thread` 可在**当前已发现**项目目录经 app-server 开线程。
+- 手机主要**续接**原生线程。每个受支持 agent 都只有在原生 starter 已安装且探测通过后才能宣告 `start_thread`；目标仍限于 daemon **当前已发现**的项目目录。
 - Daemon **不需要**家用机入站端口。
 - 各 agent **本机原生存储**是发现与历史的权威来源。
-- Codex app-server 是唯一完整审批路径；其他 agent 诚实宣告能力。
+- Codex app-server 是唯一完整审批路径；其他 agent 诚实宣告能力，原生新建不代表支持审批或 steer。
 
 ## 密钥与凭据
 

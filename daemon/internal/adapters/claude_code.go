@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,24 @@ func (a *ClaudeCodeAdapter) Name() string { return "claude_code" }
 // IsAvailable checks if the Claude CLI is installed.
 func (a *ClaudeCodeAdapter) IsAvailable() bool {
 	return a.commander.IsAvailable()
+}
+
+func (a *ClaudeCodeAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapability {
+	if a.commander == nil {
+		return ThreadStartCapability{Reason: "Claude commander is unavailable"}
+	}
+	if err := a.commander.ProbeThreadStart(ctx); err != nil {
+		return ThreadStartCapability{Reason: err.Error()}
+	}
+	return ThreadStartCapability{Available: true}
+}
+
+func (a *ClaudeCodeAdapter) StartNativeThread(ctx context.Context, request ThreadStartRequest) (ThreadStartResult, error) {
+	if a.commander == nil {
+		return ThreadStartResult{}, fmt.Errorf("Claude commander is unavailable")
+	}
+	sessionID, created, promptAccepted, err := a.commander.StartThread(ctx, request.ProjectDir, request.Prompt)
+	return ThreadStartResult{SessionID: sessionID, Created: created, PromptAccepted: promptAccepted}, err
 }
 
 // Close releases all file watchers and stops running agent processes.
@@ -687,6 +706,7 @@ func parseMessageTime(v interface{}) (time.Time, bool) {
 // ensure ClaudeCodeAdapter implements ClosableAdapter
 var _ ClosableAdapter = (*ClaudeCodeAdapter)(nil)
 var _ OutputAdapter = (*ClaudeCodeAdapter)(nil)
+var _ NativeThreadStarter = (*ClaudeCodeAdapter)(nil)
 
 // GetCommander returns the underlying ClaudeCommander for direct access.
 func (a *ClaudeCodeAdapter) GetCommander() *agentexec.ClaudeCommander {

@@ -110,6 +110,25 @@ export interface SessionCapabilities {
   attachment_mode?: AttachmentMode
 }
 
+/**
+ * Device-level native thread-start capability sent with `session_list`.
+ * Older daemons omit the catalog entirely; callers must then use the legacy
+ * per-session Codex spawn capability rather than assuming support.
+ */
+export interface AgentStartCapability {
+  agent_type: AgentType
+  available: boolean
+  spawn: boolean
+  reason?: string
+  control_path?: string
+  control_version?: string
+}
+
+export interface SessionListPayload {
+  sessions?: AgentSession[]
+  start_capabilities?: AgentStartCapability[]
+}
+
 export function capabilityEnabled(
   caps: SessionCapabilities | null | undefined,
   key: keyof Pick<SessionCapabilities, 'approve' | 'deny' | 'interrupt' | 'steer' | 'queue' | 'spawn'>

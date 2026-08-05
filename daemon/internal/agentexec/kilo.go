@@ -1,6 +1,7 @@
 package agentexec
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,6 +21,9 @@ type KiloCommander struct {
 	mu            sync.Mutex
 	cliPath       string
 	executors     map[string]*AgentExecutor
+	acpRuns       map[string]*ACPProcess
+	acpChunks     map[string]map[string]string // sessionID -> messageID -> cumulative content
+	acpIDs        map[string]string            // sessionID -> fallback messageID for an ID-less first turn
 	nextRunNumber uint64
 
 	// sessionDirs remembers project directory per session for resume.
@@ -46,8 +50,94 @@ func NewKiloCommander() *KiloCommander {
 	return &KiloCommander{
 		cliPath:     resolveKiloCLI(),
 		executors:   make(map[string]*AgentExecutor),
+		acpRuns:     make(map[string]*ACPProcess),
+		acpChunks:   make(map[string]map[string]string),
+		acpIDs:      make(map[string]string),
 		sessionDirs: make(map[string]string),
 	}
+}
+
+// ProbeThreadStart checks Kilo's ACP entry point without creating a session.
+func (c *KiloCommander) ProbeThreadStart(ctx context.Context) error {
+	if !c.IsAvailable() {
+		return fmt.Errorf("kilo CLI not found")
+	}
+	if err := probeCLIHelp(ctx, c.cliPath, "acp"); err != nil {
+		return err
+	}
+	return ProbeACPStart(ctx, c.cliPath, []string{"acp"}, "")
+}
+
+// StartThread creates a Kilo session through ACP's session/new then submits
+// the first prompt. The returned ID is native and requires store confirmation.
+func (c *KiloCommander) StartThread(ctx context.Context, workDir, prompt string) (string, bool, bool, error) {
+	if err := c.ProbeThreadStart(ctx); err != nil {
+		return "", false, false, err
+	}
+	var stateMu sync.Mutex
+	var createdID string
+	var runNumber uint64
+	exited := false
+	started, err := StartACPThread(ctx, ACPStartOptions{
+		Command: c.cliPath,
+		Args:    []string{"acp"},
+		Dir:     workDir,
+		OnSessionCreated: func(sessionID string) {
+			c.mu.Lock()
+			c.nextRunNumber++
+			runNumber = c.nextRunNumber
+			c.sessionDirs[sessionID] = workDir
+			c.acpChunks[sessionID] = make(map[string]string)
+			delete(c.acpIDs, sessionID)
+			if c.OnStreamStart != nil {
+				c.OnStreamStart(sessionID, runNumber, time.Now().UnixMilli())
+			}
+			c.mu.Unlock()
+			stateMu.Lock()
+			createdID = sessionID
+			stateMu.Unlock()
+		},
+		OnUpdate: func(sessionID string, update map[string]any) {
+			c.handleACPUpdate(sessionID, runNumber, update)
+		},
+		OnPromptResult: func(sessionID string, promptErr error) {
+			if promptErr == nil {
+				return
+			}
+			c.mu.Lock()
+			onOutput := c.OnAgentOutput
+			c.mu.Unlock()
+			if onOutput != nil {
+				onOutput(sessionID, runNumber, "error", promptErr.Error(), fmt.Sprintf("kilo_acp_prompt_error_%d", runNumber))
+			}
+		},
+		OnExit: func(exitCode int) {
+			stateMu.Lock()
+			exited = true
+			id := createdID
+			stateMu.Unlock()
+			c.mu.Lock()
+			delete(c.acpRuns, id)
+			delete(c.acpChunks, id)
+			delete(c.acpIDs, id)
+			onStreamEnd := c.OnStreamEnd
+			c.mu.Unlock()
+			if onStreamEnd != nil && id != "" {
+				onStreamEnd(id, runNumber, exitCode)
+			}
+		},
+	})
+	if err != nil {
+		return started.SessionID, started.NativeCreatePossible, started.PromptAccepted, err
+	}
+	stateMu.Lock()
+	if !exited {
+		c.mu.Lock()
+		c.acpRuns[started.SessionID] = started.Process
+		c.mu.Unlock()
+	}
+	stateMu.Unlock()
+	return started.SessionID, started.NativeCreatePossible, started.PromptAccepted, nil
 }
 
 // resolveKiloCLI finds the kilo binary on PATH or common install locations.
@@ -348,6 +438,36 @@ func (c *KiloCommander) parseAndForwardOutput(
 	}
 }
 
+func (c *KiloCommander) handleACPUpdate(sessionID string, runNumber uint64, update map[string]any) {
+	if c.OnAgentOutput == nil || update["sessionUpdate"] != "agent_message_chunk" {
+		return
+	}
+	content, _ := update["content"].(map[string]any)
+	text, _ := content["text"].(string)
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	messageID, _ := update["messageId"].(string)
+	c.mu.Lock()
+	if messageID == "" {
+		messageID = c.acpIDs[sessionID]
+		if messageID == "" {
+			messageID = fmt.Sprintf("kilo_acp_%s_%d", sessionID, runNumber)
+			c.acpIDs[sessionID] = messageID
+		}
+	}
+	if c.acpChunks[sessionID] == nil {
+		c.acpChunks[sessionID] = make(map[string]string)
+	}
+	c.acpChunks[sessionID][messageID] += text
+	cumulative := c.acpChunks[sessionID][messageID]
+	onOutput := c.OnAgentOutput
+	c.mu.Unlock()
+	if onOutput != nil {
+		onOutput(sessionID, runNumber, "assistant", cumulative, messageID)
+	}
+}
+
 func extractKiloText(msg map[string]interface{}) string {
 	for _, key := range []string{"text", "content", "message", "error"} {
 		if s, ok := msg[key].(string); ok && s != "" {
@@ -427,11 +547,18 @@ func (c *KiloCommander) Deny(sessionID, approvalID string) error {
 func (c *KiloCommander) Interrupt(sessionID string) error {
 	c.mu.Lock()
 	executor, ok := c.executors[sessionID]
+	acp := c.acpRuns[sessionID]
 	c.mu.Unlock()
+	if ok {
+		return executor.Interrupt()
+	}
+	if acp != nil {
+		return acp.Cancel()
+	}
 	if !ok {
 		return fmt.Errorf("no running executor for session %s", sessionID)
 	}
-	return executor.Interrupt()
+	return nil
 }
 
 // StopAll stops every tracked executor (daemon shutdown).
@@ -442,8 +569,18 @@ func (c *KiloCommander) StopAll() {
 		list = append(list, e)
 	}
 	c.executors = make(map[string]*AgentExecutor)
+	acpList := make([]*ACPProcess, 0, len(c.acpRuns))
+	for _, process := range c.acpRuns {
+		acpList = append(acpList, process)
+	}
+	c.acpRuns = make(map[string]*ACPProcess)
+	c.acpChunks = make(map[string]map[string]string)
+	c.acpIDs = make(map[string]string)
 	c.mu.Unlock()
 	for _, e := range list {
 		_ = e.Stop()
+	}
+	for _, process := range acpList {
+		_ = process.Stop()
 	}
 }

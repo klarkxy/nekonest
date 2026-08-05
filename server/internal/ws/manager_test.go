@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -10,6 +11,15 @@ import (
 	"github.com/nekonest/server/internal/db"
 	"github.com/nekonest/server/internal/protocol"
 )
+
+func TestThreadStartRelayFailureIsFailClosedAfterWriteAttempt(t *testing.T) {
+	if typ, _ := threadStartRelayFailure(ErrDeviceOffline); typ != protocol.MsgThreadFailed {
+		t.Fatalf("offline result = %s", typ)
+	}
+	if typ, message := threadStartRelayFailure(errors.New("write: broken pipe")); typ != protocol.MsgThreadIndeterminate || message == "" {
+		t.Fatalf("write failure result = %s, %q", typ, message)
+	}
+}
 
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
@@ -323,6 +333,68 @@ func TestUpdateSessionsConvenience(t *testing.T) {
 	}
 	cm.UpdateSessions("missing", []*protocol.AgentSession{{ID: "x"}})
 	cm.UpdateSessionsFrom(nil, nil)
+}
+
+func TestAgentStartCapabilitiesStayWithLiveDaemonGeneration(t *testing.T) {
+	d := testDB(t)
+	_, _ = d.RegisterDevice("dev1", "PC")
+	cm := NewConnectionManager(d)
+	first := cm.AddDaemonVersioned("dev1", nil, "0.2.3")
+
+	cm.UpdateSessionListFrom(first, []*protocol.AgentSession{{ID: "session-1"}}, []protocol.AgentStartCapability{
+		{AgentType: protocol.AgentCodex, Available: true},
+		{AgentType: protocol.AgentKimiCLI, Available: false, Reason: "native start not verified"},
+		{AgentType: "unknown", Available: true},
+		{AgentType: protocol.AgentCodex, Available: false, Reason: "duplicate ignored"},
+	})
+	sessions, capabilities := cm.GetDeviceSessionSnapshot("dev1")
+	if len(sessions) != 1 || sessions[0].ID != "session-1" {
+		t.Fatalf("sessions=%#v", sessions)
+	}
+	if len(capabilities) != 2 || !capabilities[0].Available || capabilities[1].Reason != "native start not verified" {
+		t.Fatalf("capabilities=%#v", capabilities)
+	}
+
+	second := cm.AddDaemonVersioned("dev1", nil, "0.2.3")
+	cm.UpdateSessionListFrom(first, []*protocol.AgentSession{{ID: "stale-session"}}, []protocol.AgentStartCapability{
+		{AgentType: protocol.AgentGrokBuild, Available: true},
+	})
+	sessions, capabilities = cm.GetDeviceSessionSnapshot("dev1")
+	if len(sessions) != 0 || len(capabilities) != 0 {
+		t.Fatalf("stale generation updated snapshot: sessions=%#v capabilities=%#v", sessions, capabilities)
+	}
+
+	cm.UpdateSessionListFrom(second, []*protocol.AgentSession{{ID: "session-2"}}, []protocol.AgentStartCapability{
+		{AgentType: protocol.AgentGrokBuild, Available: true},
+	})
+	sessions, capabilities = cm.GetDeviceSessionSnapshot("dev1")
+	if len(sessions) != 1 || sessions[0].ID != "session-2" || len(capabilities) != 1 || capabilities[0].AgentType != protocol.AgentGrokBuild {
+		t.Fatalf("live generation snapshot: sessions=%#v capabilities=%#v", sessions, capabilities)
+	}
+}
+
+func TestAgentStartCapabilitiesPreserveExplicitEmptyCatalog(t *testing.T) {
+	d := testDB(t)
+	_, _ = d.RegisterDevice("dev1", "PC")
+	cm := NewConnectionManager(d)
+	dc := cm.AddDaemonVersioned("dev1", nil, "0.2.3")
+
+	cm.UpdateSessionListFrom(dc, nil, []protocol.AgentStartCapability{})
+	_, capabilities := cm.GetDeviceSessionSnapshot("dev1")
+	if capabilities == nil || len(capabilities) != 0 {
+		t.Fatalf("explicit empty catalog collapsed to legacy absence: %#v", capabilities)
+	}
+	if filtered := cleanAgentStartCapabilities([]protocol.AgentStartCapability{{
+		AgentType: "unknown", Available: true, Spawn: true,
+	}}); filtered == nil || len(filtered) != 0 {
+		t.Fatalf("present catalog with only unknown agents did not fail closed: %#v", filtered)
+	}
+
+	cm.UpdateSessionListFrom(dc, nil, nil)
+	_, capabilities = cm.GetDeviceSessionSnapshot("dev1")
+	if capabilities != nil {
+		t.Fatalf("legacy absent catalog became explicit: %#v", capabilities)
+	}
 }
 
 func TestPhoneOutboundQueueIsBounded(t *testing.T) {

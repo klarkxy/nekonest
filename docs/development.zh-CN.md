@@ -126,7 +126,7 @@ pnpm test:visual:update
 pnpm test:visual:report
 ```
 
-黄金截图与 `e2e/visual/visual.spec.ts` 放在一起；`test-results/` 与 `playwright-report/` 是已忽略的本地产物。主矩阵为 `390×844`、简体中文、浅色主题，并抽查窄屏、桌面、深色主题和英文布局。视觉运行还会检查预期页面状态、console/page error、横向溢出、主要触控尺寸、投递状态，以及 Codex `start_thread` 首条提示词的归属。
+黄金截图与 `e2e/visual/visual.spec.ts` 放在一起；`test-results/` 与 `playwright-report/` 是已忽略的本地产物。主矩阵为 `390×844`、简体中文、浅色主题，并抽查窄屏、桌面、深色主题和英文布局。视觉运行还会检查预期页面状态、console/page error、横向溢出、主要触控尺寸、投递状态，以及 agent 范围 `start_thread` 的首条提示词归属。
 
 如需对已经启动的本地 PWA/server/daemon 真栈做只读截图冒烟，设置 PWA 地址及可选设备/会话 ID。手机令牌或管理员密钥只通过当前 PowerShell 会话传入，不要写入文件：
 

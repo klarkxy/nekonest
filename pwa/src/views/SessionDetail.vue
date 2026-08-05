@@ -316,6 +316,7 @@ import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThrea
 import { projectBaseName, projectDisplay, sessionActivityPresentation, shortSummary } from '@/utils/agent'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
 import { createApprovalDecisionGuard } from '@/utils/approvalDecision'
+import { bindStartOperationIfAllowed } from '@/utils/startCapabilities'
 import {
   pickAndUpload,
   isImageMime,
@@ -406,15 +407,15 @@ const isStartingThread = computed(
 
 const emptyTitle = computed(() => {
   if (isIndeterminateStart.value) return t('session.draftIndeterminateTitle')
-  if (isStartingThread.value) return t('session.draftStartingTitle')
+  if (isStartingThread.value) return t('session.draftStartingTitle', { agent: agentLabelText.value })
   if (isLocalDraft.value) return t('session.draftEmptyTitle')
   return t('session.emptyTitle')
 })
 
 const emptyHint = computed(() => {
   if (isIndeterminateStart.value) return t('session.draftIndeterminateHint')
-  if (isStartingThread.value) return t('session.draftStartingHint')
-  if (isLocalDraft.value) return t('session.draftEmptyHint')
+  if (isStartingThread.value) return t('session.draftStartingHint', { agent: agentLabelText.value })
+  if (isLocalDraft.value) return t('session.draftEmptyHint', { agent: agentLabelText.value })
   return t('session.emptyHint')
 })
 
@@ -634,7 +635,7 @@ function bindSession() {
     sessionStore.setCurrentSession({
       id: local.id,
       device_id: local.deviceId,
-      agent_type: 'codex',
+      agent_type: local.agentType,
       status: 'idle',
       summary: local.summary || t('threadList.draftSummary'),
       last_activity: local.lastActivity,
@@ -650,6 +651,12 @@ function bindSession() {
       summary: '',
       last_activity: 0
     })
+  }
+  if (local?.startOperationId) {
+    // The exact request may already have crossed the native boundary before a
+    // reload. Never mint a second operation id or automatically retry it.
+    pendingStartOpId.value = local.startOperationId
+    startTerminalStatus.value = 'indeterminate'
   }
   // Local drafts have no native history yet.
   if (!isLocalDraftSessionId(sid)) {
@@ -887,19 +894,48 @@ async function handleSend() {
   const draftSid = sessionId.value
   const did = deviceId.value
 
-  // Local Codex draft: start native thread first, then send (with attachments).
+  // Local draft: first prompt creates the native thread; no synthetic history
+  // exists until the selected adapter confirms native ownership.
   if (isLocalDraftSessionId(draftSid)) {
     const local = localThreads.get(draftSid)
     if (!local?.projectDir) {
       // Missing local draft (e.g. reload after indeterminate cleanup) — never re-start alone.
-      sessionStore.lastError = t('deviceDetail.startCodexNeedProject')
+      sessionStore.lastError = t('deviceDetail.startThreadNeedProject')
       sending.value = false
       return
     }
     startTerminalStatus.value = ''
     localThreads.touch(draftSid, prompt || t('threadList.draftSummary'))
-    const { ok, operationId } = sessionStore.startThread(did, local.projectDir, prompt)
+    const boundOperationId = `local_start_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const bindResult = bindStartOperationIfAllowed(
+      local.agentType,
+      local.projectDir,
+      sessionStore.sessions,
+      sessionStore.startCapabilities,
+      () => localThreads.bindStartOperation(draftSid, boundOperationId)
+    )
+    if (bindResult === 'unavailable') {
+      sessionStore.lastError = t('deviceDetail.startThreadUnavailable')
+      sending.value = false
+      return
+    }
+    if (bindResult === 'persist_failed') {
+      sessionStore.lastError = t('errors.outboxPersist')
+      // Nothing was sent and no durable operation exists, so this is a local
+      // preflight failure rather than an ambiguous native-start outcome.
+      startTerminalStatus.value = 'failed'
+      sending.value = false
+      return
+    }
+    const { ok, operationId } = sessionStore.startThread(
+      did,
+      local.agentType,
+      local.projectDir,
+      prompt,
+      boundOperationId
+    )
     if (!ok) {
+      localThreads.clearStartOperation(draftSid)
       pendingStartOpId.value = ''
       startTerminalStatus.value = 'failed'
       sending.value = false
@@ -908,7 +944,7 @@ async function handleSend() {
     pendingStartOpId.value = operationId
     // Keep composer content until owned; clear after migrate.
     const waitOwned = () =>
-      new Promise<{ sessionId?: string; error?: string; status: string }>((resolve) => {
+      new Promise<{ sessionId?: string; promptAccepted?: boolean; error?: string; status: string }>((resolve) => {
         const started = Date.now()
         const tick = window.setInterval(() => {
           const op = sessionStore.startOps[operationId]
@@ -917,12 +953,13 @@ async function handleSend() {
             window.clearInterval(tick)
             resolve({
               sessionId: op.sessionId,
+              promptAccepted: op.promptAccepted,
               error: op.error,
               status: op.status
             })
           } else if (Date.now() - started > 90000) {
             window.clearInterval(tick)
-            resolve({ status: 'failed', error: t('deviceDetail.startCodexFailed') })
+            resolve({ status: 'indeterminate', error: t('errors.ambiguousNoRetry') })
           }
         }, 200)
       })
@@ -945,14 +982,32 @@ async function handleSend() {
 
     // Only thread_owned may clear/migrate into the native session and navigate.
     if (result.status !== 'owned' || !realId) {
-      sessionStore.lastError = result.error || t('deviceDetail.startCodexFailed')
+      sessionStore.lastError = result.error || t('deviceDetail.startThreadFailed', {
+        agent: getAgentMeta(local.agentType).label
+      })
       pendingStartOpId.value = ''
-      startTerminalStatus.value = 'failed'
+      if (result.status === 'failed') {
+        startTerminalStatus.value = 'failed'
+        localThreads.clearStartOperation(draftSid)
+      } else {
+        // An owned result without a usable native id is still unsafe to retry.
+        startTerminalStatus.value = 'indeterminate'
+      }
       sending.value = false
       return
     }
     pendingStartOpId.value = ''
     startTerminalStatus.value = ''
+    if (result.promptAccepted !== true) {
+      draftStore.set(did, realId, inputText.value, pendingAtts.value)
+      draftStore.clear(did, draftSid)
+      localThreads.remove(draftSid)
+      sessionStore.lastError = t('deviceDetail.startPromptUnconfirmed')
+      await router.replace(sessionDetailLocation(did, realId))
+      sessionStore.clearStartOp(operationId)
+      sending.value = false
+      return
+    }
     // The first prompt was already accepted by start_thread. Do not migrate it
     // into the owned thread's composer as though it were still unsent.
     draftStore.clear(did, realId)
@@ -964,7 +1019,7 @@ async function handleSend() {
     // Navigate to native session, then send attachments (prompt already in start_thread).
     await router.replace(sessionDetailLocation(did, realId))
     if (atts.length) {
-      const okSend = sessionStore.sendPrompt(did, realId, prompt || t('session.attachmentsFollowup'), atts)
+      const okSend = sessionStore.sendPrompt(did, realId, t('session.attachmentsFollowup'), atts)
       if (!okSend) {
         pendingAtts.value = attsSnapshot
         inputText.value = prompt

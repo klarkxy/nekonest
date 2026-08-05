@@ -1,0 +1,518 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	pathpkg "path"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nekonest/daemon/internal/adapters"
+	"github.com/nekonest/daemon/internal/startjournal"
+)
+
+const (
+	defaultStartProbeTimeout     = 8 * time.Second
+	defaultNativeStartTimeout    = 60 * time.Second
+	defaultOwnershipWait         = 8 * time.Second
+	defaultOwnershipPollInterval = 100 * time.Millisecond
+)
+
+var supportedStartAgents = []adapters.AgentType{
+	adapters.AgentClaudeCode,
+	adapters.AgentCodex,
+	adapters.AgentKilo,
+	adapters.AgentKimiCLI,
+	adapters.AgentGrokBuild,
+}
+
+type threadStartCommand struct {
+	OperationID string
+	AgentType   adapters.AgentType
+	ProjectDir  string
+	Prompt      string
+}
+
+type threadStartEvent struct {
+	OperationID    string
+	AgentType      string
+	State          startjournal.Status
+	SessionID      string
+	PromptAccepted bool
+	Message        string
+}
+
+type threadStartCoordinator struct {
+	journal             *startjournal.Journal
+	lookupAdapter       func(string) (adapters.Adapter, bool)
+	snapshotProjectDirs func() []string
+	probeTimeout        time.Duration
+	startTimeout        time.Duration
+	ownershipWait       time.Duration
+	ownershipPoll       time.Duration
+}
+
+func (c *threadStartCoordinator) Handle(parent context.Context, command threadStartCommand, emit func(threadStartEvent)) {
+	if emit == nil {
+		return
+	}
+	agentType := command.AgentType
+	if agentType == "" {
+		agentType = adapters.AgentCodex
+	}
+	normalizedDir, err := normalizeProjectDir(command.ProjectDir)
+	if err != nil {
+		emit(threadStartEvent{
+			OperationID: command.OperationID,
+			AgentType:   string(agentType),
+			State:       startjournal.StatusFailed,
+			Message:     err.Error(),
+		})
+		return
+	}
+	record, fresh, err := c.journal.Begin(command.OperationID, startjournal.Request{
+		AgentType:    string(agentType),
+		ProjectDir:   normalizedDir,
+		PromptDigest: startjournal.PromptDigest(command.Prompt),
+	})
+	if err != nil {
+		message := err.Error()
+		if !startjournal.IsConflict(err) {
+			message = "thread was not started because its durable start record could not be written: " + message
+		}
+		emit(threadStartEvent{
+			OperationID: command.OperationID,
+			AgentType:   string(agentType),
+			State:       startjournal.StatusFailed,
+			Message:     message,
+		})
+		return
+	}
+	if !fresh {
+		emit(eventFromStartRecord(record))
+		return
+	}
+	emit(eventFromStartRecord(record))
+
+	finish := func(status startjournal.Status, sessionID, message string, promptAccepted ...bool) {
+		accepted := len(promptAccepted) > 0 && promptAccepted[0]
+		finished, finishErr := c.journal.FinishWithPromptOutcome(command.OperationID, status, sessionID, message, accepted)
+		if finishErr == nil {
+			emit(eventFromStartRecord(finished))
+			return
+		}
+		fallback := "thread start outcome is indeterminate because its durable result could not be written; automatic retry is disabled: " + finishErr.Error()
+		failedClosed, ok := c.journal.FailClosed(command.OperationID, fallback)
+		if ok {
+			failedClosed.SessionID = sessionID
+			emit(eventFromStartRecord(failedClosed))
+			return
+		}
+		emit(threadStartEvent{
+			OperationID:    command.OperationID,
+			AgentType:      string(agentType),
+			State:          startjournal.StatusIndeterminate,
+			SessionID:      sessionID,
+			PromptAccepted: false,
+			Message:        fallback,
+		})
+	}
+
+	if strings.TrimSpace(command.Prompt) == "" {
+		finish(startjournal.StatusFailed, "", "initial prompt is required")
+		return
+	}
+	projectDir, err := resolveCurrentProjectDir(command.ProjectDir, c.snapshotProjectDirs())
+	if err != nil {
+		finish(startjournal.StatusFailed, "", err.Error())
+		return
+	}
+	adapter, exists := c.lookupAdapter(string(agentType))
+	starter, canStart := adapter.(adapters.NativeThreadStarter)
+	if !exists || adapter == nil || !canStart {
+		finish(startjournal.StatusFailed, "", "native thread creation is not implemented for "+string(agentType))
+		return
+	}
+
+	probeTimeout := c.probeTimeout
+	if probeTimeout <= 0 {
+		probeTimeout = defaultStartProbeTimeout
+	}
+	probeCtx, cancelProbe := context.WithTimeout(parent, probeTimeout)
+	capability, probePanic := probeNativeThreadStart(probeCtx, starter)
+	cancelProbe()
+	if probePanic != nil {
+		finish(startjournal.StatusFailed, "", "native thread creation probe failed: "+probePanic.Error())
+		return
+	}
+	if !capability.Available {
+		reason := strings.TrimSpace(capability.Reason)
+		if reason == "" {
+			reason = "native thread creation is unavailable for " + string(agentType)
+		}
+		finish(startjournal.StatusFailed, "", reason)
+		return
+	}
+
+	startTimeout := c.startTimeout
+	if startTimeout <= 0 {
+		startTimeout = defaultNativeStartTimeout
+	}
+	startCtx, cancelStart := context.WithTimeout(parent, startTimeout)
+	started, startErr, startPanic := invokeNativeThreadStart(startCtx, starter, adapters.ThreadStartRequest{
+		ProjectDir: projectDir,
+		Prompt:     command.Prompt,
+	})
+	cancelStart()
+	sessionID := strings.TrimSpace(started.SessionID)
+	crossedNativeBoundary := started.Created || started.PromptAccepted
+	promptAccepted := started.PromptAccepted && startErr == nil && startPanic == nil
+	ownershipConfirmed := crossedNativeBoundary && sessionID != "" && c.waitForOwnership(parent, adapter, sessionID)
+	if ownershipConfirmed && promptAccepted {
+		finish(startjournal.StatusOwned, sessionID, "", true)
+		return
+	}
+	if ownershipConfirmed {
+		reason := "native thread ownership was confirmed, but the initial prompt was not; the outcome is indeterminate and automatic retry is disabled"
+		if startErr != nil {
+			reason += ": " + startErr.Error()
+		}
+		finish(startjournal.StatusIndeterminate, sessionID, reason)
+		return
+	}
+	if startPanic != nil || crossedNativeBoundary {
+		reason := "native thread start outcome is indeterminate; ownership was not confirmed in the agent's native store and automatic retry is disabled"
+		if startPanic != nil {
+			reason += ": " + startPanic.Error()
+		} else if startErr != nil {
+			reason += ": " + startErr.Error()
+		} else if sessionID == "" {
+			reason += ": no native session id returned"
+		}
+		finish(startjournal.StatusIndeterminate, sessionID, reason)
+		return
+	}
+	reason := "native thread was not created"
+	if startErr != nil {
+		reason = startErr.Error()
+	}
+	finish(startjournal.StatusFailed, "", reason)
+}
+
+func (c *threadStartCoordinator) waitForOwnership(ctx context.Context, adapter adapters.Adapter, sessionID string) bool {
+	if safeOwnsSession(adapter, sessionID) {
+		return true
+	}
+	wait := c.ownershipWait
+	if wait <= 0 {
+		wait = defaultOwnershipWait
+	}
+	poll := c.ownershipPoll
+	if poll <= 0 {
+		poll = defaultOwnershipPollInterval
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return safeOwnsSession(adapter, sessionID)
+		case <-ticker.C:
+			if safeOwnsSession(adapter, sessionID) {
+				return true
+			}
+		}
+	}
+}
+
+func eventFromStartRecord(record startjournal.Record) threadStartEvent {
+	return threadStartEvent{
+		OperationID:    record.OperationID,
+		AgentType:      record.AgentType,
+		State:          record.Status,
+		SessionID:      record.SessionID,
+		PromptAccepted: record.PromptAccepted,
+		Message:        record.Message,
+	}
+}
+
+func probeNativeThreadStart(ctx context.Context, starter adapters.NativeThreadStarter) (capability adapters.ThreadStartCapability, panicErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			panicErr = fmt.Errorf("adapter panic: %v", recovered)
+		}
+	}()
+	return starter.ProbeThreadStart(ctx), nil
+}
+
+func invokeNativeThreadStart(ctx context.Context, starter adapters.NativeThreadStarter, request adapters.ThreadStartRequest) (result adapters.ThreadStartResult, err error, panicErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			panicErr = fmt.Errorf("adapter panic: %v", recovered)
+		}
+	}()
+	result, err = starter.StartNativeThread(ctx, request)
+	return result, err, nil
+}
+
+func safeOwnsSession(adapter adapters.Adapter, sessionID string) (owned bool) {
+	defer func() {
+		if recover() != nil {
+			owned = false
+		}
+	}()
+	return adapter != nil && adapter.OwnsSession(sessionID)
+}
+
+func parseStartAgentType(value string) (adapters.AgentType, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return adapters.AgentCodex, true
+	}
+	for _, agentType := range supportedStartAgents {
+		if value == string(agentType) {
+			return agentType, true
+		}
+	}
+	return "", false
+}
+
+func coalesceStartProjectDir(projectDir, legacyCWD string) (string, error) {
+	projectDir = strings.TrimSpace(projectDir)
+	legacyCWD = strings.TrimSpace(legacyCWD)
+	if projectDir == "" {
+		return legacyCWD, nil
+	}
+	if legacyCWD == "" {
+		return projectDir, nil
+	}
+	projectKey, err := normalizeProjectDir(projectDir)
+	if err != nil {
+		return "", err
+	}
+	legacyKey, err := normalizeProjectDir(legacyCWD)
+	if err != nil {
+		return "", err
+	}
+	if projectKey != legacyKey {
+		return "", errors.New("project_dir and cwd must identify the same discovered directory")
+	}
+	return projectDir, nil
+}
+
+// normalizeProjectDir performs OS-independent lexical normalization so a
+// Windows path cannot bypass validation on Linux (or vice versa). Windows
+// comparisons are case-insensitive; POSIX comparisons preserve case.
+func normalizeProjectDir(value string) (string, error) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return "", errors.New("project_dir is required")
+	}
+	if strings.ContainsRune(raw, '\x00') {
+		return "", errors.New("project_dir contains NUL")
+	}
+	slashed := strings.ReplaceAll(raw, `\`, "/")
+	lowerSlashed := strings.ToLower(slashed)
+	if strings.HasPrefix(lowerSlashed, "//./") {
+		return "", errors.New("Windows device paths are not allowed")
+	}
+	if strings.HasPrefix(lowerSlashed, "//?/unc/") {
+		slashed = "//" + slashed[len("//?/unc/"):]
+		lowerSlashed = strings.ToLower(slashed)
+	} else if strings.HasPrefix(lowerSlashed, "//?/") {
+		slashed = slashed[len("//?/"):]
+		lowerSlashed = strings.ToLower(slashed)
+	}
+	if isWindowsDriveAbsolute(slashed) {
+		if containsParentSegment(strings.Split(slashed[3:], "/")) {
+			return "", errors.New("project_dir must not contain '..'")
+		}
+		cleaned := pathpkg.Clean("/" + slashed[3:])
+		return "windows:" + strings.ToLower(slashed[:2]+cleaned), nil
+	}
+	if len(slashed) >= 2 && slashed[1] == ':' {
+		return "", errors.New("Windows project_dir must be drive-absolute")
+	}
+	if strings.HasPrefix(slashed, "//") {
+		parts := strings.Split(strings.TrimPrefix(slashed, "//"), "/")
+		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+			return "", errors.New("UNC project_dir requires server and share")
+		}
+		if containsParentSegment(parts) {
+			return "", errors.New("project_dir must not contain '..'")
+		}
+		cleaned := strings.TrimPrefix(pathpkg.Clean("/"+strings.Join(parts, "/")), "/")
+		return "windows:unc/" + strings.ToLower(cleaned), nil
+	}
+	if strings.HasPrefix(raw, "/") {
+		parts := strings.Split(raw, "/")
+		if containsParentSegment(parts) {
+			return "", errors.New("project_dir must not contain '..'")
+		}
+		return "posix:" + pathpkg.Clean(raw), nil
+	}
+	return "", errors.New("project_dir must be an absolute Windows or POSIX path")
+}
+
+func isWindowsDriveAbsolute(value string) bool {
+	if len(value) < 3 || value[1] != ':' || value[2] != '/' {
+		return false
+	}
+	letter := value[0]
+	return (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z')
+}
+
+func containsParentSegment(parts []string) bool {
+	for _, part := range parts {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalNativeProjectDir(value string) (string, string, error) {
+	normalized, err := normalizeProjectDir(value)
+	if err != nil {
+		return "", "", err
+	}
+	if runtime.GOOS == "windows" && !strings.HasPrefix(normalized, "windows:") {
+		return "", "", errors.New("project_dir is not a native Windows path")
+	}
+	if runtime.GOOS != "windows" && !strings.HasPrefix(normalized, "posix:") {
+		return "", "", errors.New("project_dir is not a native POSIX path")
+	}
+	cleaned := filepath.Clean(strings.TrimSpace(value))
+	if !filepath.IsAbs(cleaned) {
+		return "", "", errors.New("project_dir must be absolute")
+	}
+	canonical, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return "", "", fmt.Errorf("canonicalize project_dir: %w", err)
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return "", "", fmt.Errorf("stat project_dir: %w", err)
+	}
+	if !info.IsDir() {
+		return "", "", errors.New("project_dir is not a directory")
+	}
+	canonical = filepath.Clean(canonical)
+	canonicalNormalized, err := normalizeProjectDir(canonical)
+	if err != nil {
+		return "", "", err
+	}
+	return canonical, canonicalNormalized, nil
+}
+
+func resolveCurrentProjectDir(requested string, discovered []string) (string, error) {
+	requestedNormalized, err := normalizeProjectDir(requested)
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range discovered {
+		candidateNormalized, candidateErr := normalizeProjectDir(candidate)
+		if candidateErr != nil || requestedNormalized != candidateNormalized {
+			continue
+		}
+		requestedCanonical, requestedResolved, requestedErr := canonicalNativeProjectDir(requested)
+		candidateCanonical, candidateResolved, candidateErr := canonicalNativeProjectDir(candidate)
+		if requestedErr == nil && candidateErr == nil && requestedResolved == candidateResolved {
+			// Pass the daemon-resolved native path, never an untrusted spelling.
+			if runtime.GOOS == "windows" && !strings.EqualFold(requestedCanonical, candidateCanonical) {
+				continue
+			}
+			if runtime.GOOS != "windows" && requestedCanonical != candidateCanonical {
+				continue
+			}
+			return candidateCanonical, nil
+		}
+	}
+	return "", errors.New("directory not in currently discovered projects")
+}
+
+func snapshotProjectDirs(mu *sync.Mutex, sessions map[string]*adapters.SessionInfo) []string {
+	mu.Lock()
+	defer mu.Unlock()
+	dirs := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		if session != nil && strings.TrimSpace(session.ProjectDir) != "" {
+			dirs = append(dirs, session.ProjectDir)
+		}
+	}
+	return dirs
+}
+
+type agentStartCapabilityCache struct {
+	mu      sync.Mutex
+	ttl     time.Duration
+	updated time.Time
+	entries []map[string]interface{}
+}
+
+func newAgentStartCapabilityCache(ttl time.Duration) *agentStartCapabilityCache {
+	return &agentStartCapabilityCache{ttl: ttl}
+}
+
+func (c *agentStartCapabilityCache) Get(parent context.Context, registry *adapters.Registry) []map[string]interface{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) > 0 && time.Since(c.updated) < c.ttl {
+		return cloneStartCapabilities(c.entries)
+	}
+	entries := make([]map[string]interface{}, 0, len(supportedStartAgents))
+	for _, agentType := range supportedStartAgents {
+		entry := map[string]interface{}{
+			"agent_type": string(agentType),
+			"available":  false,
+			"spawn":      false,
+		}
+		adapter, exists := registry.Get(string(agentType))
+		starter, canStart := adapter.(adapters.NativeThreadStarter)
+		if !exists || adapter == nil || !canStart {
+			entry["reason"] = "native thread creation is not implemented"
+		} else {
+			probeCtx, cancel := context.WithTimeout(parent, defaultStartProbeTimeout)
+			capability, panicErr := probeNativeThreadStart(probeCtx, starter)
+			cancel()
+			if panicErr != nil {
+				entry["reason"] = "native thread creation probe failed"
+			} else {
+				entry["available"] = capability.Available
+				entry["spawn"] = capability.Available
+				if !capability.Available {
+					reason := strings.TrimSpace(capability.Reason)
+					if reason == "" {
+						reason = "native thread creation is unavailable"
+					}
+					entry["reason"] = reason
+				}
+			}
+		}
+		entries = append(entries, entry)
+	}
+	c.entries = cloneStartCapabilities(entries)
+	c.updated = time.Now()
+	return entries
+}
+
+func cloneStartCapabilities(entries []map[string]interface{}) []map[string]interface{} {
+	cloned := make([]map[string]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		copyEntry := make(map[string]interface{}, len(entry))
+		for key, value := range entry {
+			copyEntry[key] = value
+		}
+		cloned = append(cloned, copyEntry)
+	}
+	return cloned
+}

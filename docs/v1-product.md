@@ -37,7 +37,7 @@ Non-jobs (explicit):
 
 These survive v1 and constrain every feature below.
 
-1. **Native store is authority** for discovery and transcript history, and for ownership after Codex thread start. Nest SQLite is durability/relay, not a second agent database that diverges forever.
+1. **Native store is authority** for discovery and transcript history, and for ownership after an agent-scoped thread start. Nest SQLite is durability/relay, not a second agent database that diverges forever.
 2. **Daemon initiates** the connection to the nest. Home host never requires inbound ports for core product.
 3. **Presentation is derived:** `directory → agent → thread`. Orphans land in **未分类 / Uncategorized**. Do not rewrite source session rows to build the tree.
 4. **Delivery is not transport:** WebSocket write success ≠ agent acceptance. Keep accepted / committed / failed / not_seen / indeterminate (and phone-visible states derived from them).
@@ -46,7 +46,7 @@ These survive v1 and constrain every feature below.
 7. **No fake capabilities:** if an agent cannot host an approval, steer, attachment path, or start-thread, the UI must say so — never green-check a no-op. Capability flags default false/unsupported when absent.
 8. **One missing agent is non-fatal** for the rest of the nest.
 9. **Sealed by default:** new nests use E2E sealed transport; open relay requires explicit administrator configuration; sealed and open clients never mix on one nest; never auto-downgrade sealed to open.
-10. **Codex-only full control:** approve/deny, steer, full attachments, and phone `start_thread` are Codex app-server promises. Other agents advertise honest compatibility-resume capabilities only.
+10. **Codex-only full control:** approve/deny, steer, and full attachments are Codex app-server promises. Any of the five agents may advertise agent-scoped phone `start_thread` only after its native starter is installed and probed; that capability does not promote a compatibility adapter to full control.
 
 ## 4. Competitive position (why v1 looks like this)
 
@@ -141,8 +141,8 @@ Priority tags:
 | Formal host OS | **Windows + Linux**. macOS later. |
 | Primary agent | **Codex** is the only full-control v1 agent. Normative path: `codex app-server` JSON-RPC; pin/probe a minimum compatible CLI beginning with the locally verified 0.144.1 protocol surface. |
 | Codex controls | Send, approve/deny, interrupt, and steer are **MUST**. Follow-up queue is **SHOULD**. Legacy `codex exec resume` is a capability-degraded compatibility path. |
-| Start thread | **Codex only.** Phone may start only in daemon-reported directories already discovered from native sessions. Use app-server so the native store owns the result. No arbitrary path entry or filesystem browsing. Lifecycle: `starting → owned \| failed \| indeterminate` (no permanent ghost row). |
-| Other agents | Claude Code, Kilo, Kimi CLI, Grok Build: **compatibility resume** — discover, ownership, history, send/stream, interrupt, and attachments per advertised capability. **No** approval/start/steer/queue promise. |
+| Start thread | **Agent-scoped, capability-gated.** The phone opens a local-only draft; it creates the native thread only when the first prompt is sent. An installed/probed starter may target only a directory in the daemon's **current union of native-discovered project directories**. No arbitrary path entry or filesystem browsing. Lifecycle: `starting → owned \| failed \| indeterminate` (no permanent ghost row); `owned` requires positive first-prompt acknowledgement and native-store ownership. |
+| Other agents | Claude Code, Kilo, Kimi CLI, Grok Build: **compatibility resume** — discover, ownership, history, send/stream, interrupt, attachments per advertised capability, plus start only when native `spawn` is truly installed/probed and advertised. **No** approval/steer/queue promise. |
 | Attachments | Codex app-server **MUST** support images and ordinary files end-to-end. Other adapters advertise `native_image`, `path_best_effort`, or `unsupported`; UI never implies a stronger tier. |
 | Notifications | Codex waiting for approval, waiting for user input, and run failure are **MUST**. Success and device offline are **SHOULD**. Sealed push contains only generic event text plus device/session references; details decrypt after opening the PWA. |
 | Expansion agents | **No** v1 release gate for additional agents beyond the five wire ids. |
@@ -194,7 +194,7 @@ Priority tags:
 | D17 | Config validate + safe reload of non-identity fields | SHOULD | |
 | D18 | Optional local HTTP debug (loopback) | MAY | |
 | D19 | Daemon-side encryption keys for E2E (S13) | MUST | With S13; restrictive permissions; XDG on Linux |
-| D20 | Codex-only `start_thread` via app-server in currently discovered project dirs | MUST | Journal: starting → owned \| failed \| indeterminate; native ownership required before owned |
+| D20 | Agent-scoped `start_thread` on first prompt | MUST | Start only when the selected agent's native starter is installed/probed and `spawn=true`; target only the daemon's current union of discovered native project dirs. Journal: starting → owned \| failed \| indeterminate; positive prompt acknowledgement and native ownership required before owned |
 | D21 | Steer active Codex turns | MUST | Capability-gated; non-Codex false |
 | D22 | Publish encrypted device catalog (session list, discovered roots, capabilities) | MUST | With S13 |
 
@@ -206,16 +206,16 @@ Wire ids remain stable; adding an agent is a full-stack change (schema, server, 
 
 | Wire id | Product | Role | Guarantees |
 |---|---|---|---|
-| `codex` | Codex | **Only full-control v1 agent** | Discover, ownership, history, send/stream, interrupt, **approve/deny**, **steer**, **spawn/`start_thread`**, **attachments `native_image_and_file`** via `codex app-server`. Queue is SHOULD when protocol can guarantee ordering. Legacy `codex exec resume` is degraded compatibility only (advertise real capabilities). Exclude subagents from main list. Pin/probe minimum CLI from 0.144.1 surface. |
+| `codex` | Codex | **Only full-control v1 agent** | Discover, ownership, history, send/stream, interrupt, **approve/deny**, **steer**, **attachments `native_image_and_file`** via `codex app-server`. May advertise **spawn/`start_thread`** only when its native starter is installed/probed. Queue is SHOULD when protocol can guarantee ordering. Legacy `codex exec resume` is degraded compatibility only (advertise real capabilities). Exclude subagents from main list. Pin/probe minimum CLI from 0.144.1 surface. |
 
 #### 7.3.2 Compatibility-resume agents (MUST)
 
 | Wire id | Product | Guarantees | Explicit non-promises |
 |---|---|---|---|
-| `claude_code` | Claude Code | Discover, ownership, history, send/stream, interrupt; attachments per advertised tier | No approval / start_thread / steer / queue promise |
-| `kilo` | Kilo | Same compatibility-resume set | Same non-promises |
-| `kimi_cli` | Kimi CLI | Same; modern store; legacy path documented | Same non-promises |
-| `grok_build` | Grok Build | Same; safe non-interactive defaults | Same non-promises |
+| `claude_code` | Claude Code | Discover, ownership, history, send/stream, interrupt; attachments and agent-scoped start per advertised tier | No approval / steer / queue promise; start is false unless its native starter is installed/probed |
+| `kilo` | Kilo | Same compatibility-resume set; agent-scoped start only when advertised | Same non-promises |
+| `kimi_cli` | Kimi CLI | Same; modern store; legacy path documented; agent-scoped start only when advertised | Same non-promises |
+| `grok_build` | Grok Build | Same; safe non-interactive defaults; agent-scoped start only when advertised | Same non-promises |
 
 Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsupported`. UI must never imply a stronger tier than advertised.
 
@@ -227,7 +227,7 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 
 **Full-control (Codex) MUST** document and test ownership, list filtering, history stability, app-server send/stream, interrupt, attachments (image + file), approval, steer, start-thread lifecycle, status detection from positive signals, crash/restart, and fixture corpus.
 
-**Compatibility-resume agents MUST** document and test ownership, list filtering, history stability, resume/send argv, stream mapping, interrupt, attachment strategy + failure modes, honest capability flags (approval/start/steer/queue false unless truly implemented), and fixture corpus. They must **not** report `waiting_approval` / `waiting_user` by inference.
+**Compatibility-resume agents MUST** document and test ownership, list filtering, history stability, resume/send argv, stream mapping, interrupt, attachment strategy + failure modes, honest capability flags (approval/steer/queue false unless truly implemented; start false unless a native starter is installed/probed), and fixture corpus. They must **not** report `waiting_approval` / `waiting_user` by inference.
 
 ### 7.4 Phone client (PWA-first)
 
@@ -261,7 +261,7 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 | P26 | Offline banner + last-sync time | SHOULD | |
 | P27 | Accessibility: focus order, labels, contrast | SHOULD | |
 | P28 | Optional secondary “raw log” view for power users | MAY | Not primary UX |
-| P29 | Codex-only start-thread UX over discovered directories | MUST | Navigate only after `thread_owned`; show recovery on indeterminate |
+| P29 | Agent-scoped start-thread UX over discovered directories | MUST | First open a phone-local draft; send its first prompt to create natively only when `spawn=true`. Navigate only after `thread_owned`; show recovery on indeterminate |
 | P30 | IndexedDB identity/key store; key-loss re-pair as new identity | MUST | No server recovery of old phone private keys |
 
 ### 7.5 Thread lifecycle (product decision for v1)
@@ -269,16 +269,16 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 | ID | Feature | Priority | Rules |
 |---|---|---|---|
 | L1 | Resume existing native threads | MUST | Core path for all five agents; native id preserved |
-| L2 | **Start thread from phone** | MUST | **Codex only**, via app-server, so the **native store gains the thread** |
-| L3 | Directory picker limited to **currently discovered** project directories from daemon discovery | MUST | No arbitrary filesystem walk; no operator path typing; reject vanished dirs, `..`, symlink escape |
-| L4 | Refuse start when Codex app-server missing, `spawn=false`, or directory not in current discovered set | MUST | Clear error → `thread_failed` before spawn when possible |
-| L5 | Start lifecycle states | MUST | `thread_starting` → `thread_owned` \| `thread_failed` \| `thread_indeterminate`. Fail-closed journal by device + operation id. No auto-retry after indeterminate. **No permanent nest-only ghost row.** |
+| L2 | **Start thread from phone** | MUST | Start with an **agent-scoped phone-local draft**. Its first prompt invokes the selected installed/probed native starter so that agent's **native store gains the thread** |
+| L3 | Directory picker limited to the daemon's **current union of discovered** native project directories | MUST | No arbitrary filesystem walk; no operator path typing; reject vanished dirs, `..`, symlink escape |
+| L4 | Refuse start when the selected agent's native starter is missing/unprobed, `spawn=false`, or directory is not in the current discovered union | MUST | Clear error → `thread_failed` before spawn when possible |
+| L5 | Start lifecycle states | MUST | `thread_starting` → `thread_owned` \| `thread_failed` \| `thread_indeterminate`. Set `thread_owned` only after positive first-prompt acknowledgement and ownership in the selected agent's native store; otherwise use `thread_indeterminate`. Fail-closed journal by device + operation id. No auto-retry after indeterminate. **No permanent nest-only ghost row.** |
 | L6 | No cross-agent “fake migrate” of transcripts | MUST | Handoff between agents is LATER unless native tools support it |
 | L7 | Archive/hide thread in phone view only | SHOULD | Does not delete native store |
 | L8 | Delete/kill native thread from phone | LATER | Too destructive for v1 default |
 | L9 | Generic `create_session` / nest-invented sessions | Forbidden | Do not reintroduce |
 
-**Invariant:** after L2 success (`thread_owned`), discovery must find the thread from the native Codex store; phone never keeps a permanent thread that the host cannot own. Indeterminate starts reconcile via future discovery only.
+**Invariant:** after L2 success (`thread_owned`), discovery must find the thread from the selected agent's native store; phone never keeps a permanent thread that the host cannot own. A phone-local draft is not a nest session. Indeterminate starts reconcile via future discovery only.
 
 ### 7.6 Control plane beyond chat
 
@@ -357,7 +357,7 @@ Journey split (replaces kitchen-sink single story):
 | W4 | Phone handles full prompt lifecycle types; deprecate `prompt_sent` | MUST |
 | W5 | Session status: `idle` \| `running` \| `waiting_user` \| `waiting_approval` \| `error` | MUST |
 | W6 | Capability flags (absent = false/unsupported) | MUST |
-| W7 | Codex `start_thread` / `thread_starting` / `thread_owned` / `thread_failed` / `thread_indeterminate` | MUST |
+| W7 | Agent-scoped `start_thread` / `thread_starting` / `thread_owned` / `thread_failed` / `thread_indeterminate` | MUST |
 | W8 | Approval payloads with stable approval id; `steer` | MUST |
 | W9 | E2E control + `sealed_payload`; pair/key messages (`pair_*`, `key_package`, `phone_revoked`) | MUST |
 | W10 | Generic `attention_event` for push-driving classes | MUST |
@@ -372,7 +372,7 @@ Any W* change follows the existing cross-layer checklist (`protocol.json`, Go, T
 1. Operator deploys nest with TLS, admin secret, bootstrap token; transport mode sealed (default).  
 2. Installs daemon on home host (Windows or Linux), registers identity keys, runs doctor (green).  
 3. Opens PWA, establishes phone identity, pairs via QR (or code + fingerprint).  
-4. Sees device online and decrypted session list **or** empty state with Codex “start in project” when discovered roots exist.
+4. Sees device online and decrypted session list **or** an empty state with an agent picker that offers “start in project” only for agents whose native starter is installed/probed and whose discovered-directory union is non-empty.
 
 ### J2a — Delivery and interrupt
 
@@ -392,12 +392,12 @@ Any W* change follows the existing cross-layer checklist (`protocol.json`, Go, T
 2. Receive generic push; deep-link; decrypt approval details.  
 3. Approve or deny; observe continuation or honest failure.
 
-### J3 — Start Codex thread from phone
+### J3 — Start an agent-scoped thread from phone
 
-1. User picks a directory from **currently discovered** roots + Codex with app-server present.  
-2. Daemon emits starting → owned (native store confirms) or failed / indeterminate.  
-3. On owned, phone navigates to the thread under correct directory/agent; PC CLI sees the same native thread.  
-4. Forged or vanished paths are rejected; retries do not double-spawn.
+1. User picks a supported agent with `spawn=true` and a directory from the daemon's **current union of discovered** native project dirs; the PWA opens a local-only draft.
+2. Before sending, the phone durably binds the draft to one operation id (and seals the whole command under the device-catalog key in sealed mode). Reload never mints a replacement operation. The daemon starts the selected native CLI/app-server and emits starting → owned only after positive first-prompt acknowledgement and native-store ownership; otherwise failed / indeterminate.
+3. On owned, phone navigates to the thread under correct directory/agent; PC CLI sees the same native thread and the accepted first prompt may be synthesized locally. Indeterminate keeps the draft recoverable.
+4. Forged or vanished paths are rejected; unresolved starts cannot be retried or double-spawned.
 
 ### J4 — Multi-host
 
@@ -448,7 +448,7 @@ Home
               ├─ Directory
               │     └─ Agent
               │           └─ Thread list (status badges)
-              ├─ Start Codex thread (discovered dirs only)
+              ├─ Start agent thread (capability-gated; discovered dirs only)
               └─ Device settings / doctor summary / revoke
 
 Thread
@@ -502,7 +502,7 @@ Do not block v1 on:
 | Area | v0.1 (launch slice) | v1.0.0 contract |
 |---|---|---|
 | Host OS | Windows product | **Windows + Linux**; macOS later |
-| Create thread | Forbidden on phone | **Codex-only** `start_thread` into **currently discovered** dirs via app-server; no generic `create_session` |
+| Create thread | Forbidden on phone | Agent-scoped local draft → first-prompt `start_thread` via installed/probed native starter, into the daemon's **current union of discovered** dirs; no generic `create_session` |
 | Approvals | Wire mostly; UI display-only; CLI often unavailable | **Codex real bridge** + UI; others honest unavailable |
 | Steer | Not productized | **Codex MUST** when app-server capable |
 | Delivery UX | Mostly `prompt_sent` / failed | Full lifecycle including not_seen / indeterminate |
@@ -525,14 +525,14 @@ Waves are delivery order inside the v1 effort; the tag still requires MUST compl
 
 | Wave | Focus | Exits when |
 |---|---|---|
-| **W0 — Contract** | This document frozen; AGENTS.md exception for Codex start_thread | EN/ZH parity; no open release-blocking decisions |
+| **W0 — Contract** | This document frozen; AGENTS.md rules for agent-scoped first-prompt start | EN/ZH parity; no open release-blocking decisions |
 | **W1 — Protocol scaffolding** | Envelope, status, capabilities, start/steer/pair/key messages, major.minor + mode | Old clients fail clearly; v1 peers negotiate first |
 | **W2 — Server migration + phone identities** | schema_meta, migrate-v1, admin secret, grants, revoke | Two phones independent; revoke immediate |
 | **W3 — Crypto + pairing** | Vectors, QR, key packages, epochs | Relay cannot substitute keys; second phone pairs |
 | **W4 — Sealed relay durability** | Opaque payloads, sealed attachments, generic attention push | No plaintext application content on sealed server |
 | **W5 — Capabilities + control UX** | Flags, delivery states, gated controls | No control without capability |
 | **W6 — Codex app-server full control** | approve/deny/interrupt/steer/attachments | J2a–J2c on pinned baseline |
-| **W7 — Codex start-thread** | Discovered dirs, journal lifecycle | J3; native ownership |
+| **W7 — Agent-scoped start-thread** | Local draft, discovered-directory union, journal lifecycle | J3; native ownership |
 | **W8 — Windows + Linux formal** | paths, process groups, artifacts, doctor, systemd | J1 on both OS baselines |
 | **W9 — Release docs + gates** | Migration, security model, CHANGELOG, smoke | v1.0.0 tag |
 
@@ -543,14 +543,14 @@ All former open items are closed. Resolutions:
 | # | Topic | Resolution |
 |---|---|---|
 | 1 | **E2E default** | Sealed-by-default for new nests. Open relay retained, disabled by default, **admin-only** enable. One nest one mode; no mix; no auto-downgrade. |
-| 2 | **Start-thread UX** | **Only** directories in the daemon’s **current discovered** set from native sessions. No arbitrary path entry; no separate operator allowlist file required for v1. Codex app-server only. |
+| 2 | **Start-thread UX** | Local-only draft first; the first prompt uses the selected agent's installed/probed native starter. Target **only** directories in the daemon's **current union of discovered** native project dirs. No arbitrary path entry or separate operator allowlist file required for v1. |
 | 3 | **Auth evolution** | Admin bootstrap secret (`NEKONEST_ADMIN_SECRET`, one-release `NEKONEST_PHONE_SECRET` alias). General access: **independent revocable phone tokens** + device grants. Multi-phone keys wrapped per phone. |
 | 4 | **Codex approval transport** | Normative: **`codex app-server` JSON-RPC**. Pin/probe minimum compatible CLI from locally verified **0.144.1** protocol surface. Legacy `exec resume` is degraded only. Claude Code and others: no approval promise in v1. |
 | 5 | **Expansion agents** | **None required** for v1.0.0. No “at least two” gate. |
 | 6 | **Message type names** | Stabilize in implementation against plan catalog: `start_thread`, `thread_starting`, `thread_owned`, `thread_failed`, `thread_indeterminate`, `steer`, `pair_request`, `pair_confirm`, `pair_ready`, `pair_failed`, `key_package`, `phone_revoked`, `attention_event`; status includes `waiting_user`. Exact schema lands in Phase 1 `protocol.json`. |
 | 7 | **Formal OS** | Windows + Linux MUST; macOS LATER. |
-| 8 | **Agent roles** | Codex full-control; four others compatibility-resume only. |
-| 9 | **Start lifecycle** | `starting → owned \| failed \| indeterminate`; no permanent ghost row. |
+| 8 | **Agent roles** | Codex full-control; four others compatibility-resume only. All five may advertise agent-scoped start only after native-starter install/probe; this grants no other control capability. |
+| 9 | **Start lifecycle** | `starting → owned \| failed \| indeterminate`; native ownership before owned; no permanent ghost row. |
 | 10 | **Notifications** | MUST: waiting_approval, waiting_user, run failure. SHOULD: success, device offline. |
 | 11 | **Protocol versioning** | `major.minor` as in §7.0. |
 | 12 | **Migration / key loss / metadata** | As in §7.0 table. |
@@ -562,7 +562,7 @@ Changing any row requires updating this file and `v1-product.zh-CN.md` before fu
 | | |
 |---|---|
 | **Canonical product contract for v1.0.0** | This file + `v1-product.zh-CN.md` |
-| **Live engineering invariants** | [AGENTS.md](../AGENTS.md) (includes Codex-only `start_thread` exception; forbids generic `create_session`) |
+| **Live engineering invariants** | [AGENTS.md](../AGENTS.md) (includes agent-scoped first-prompt `start_thread`; forbids generic `create_session`) |
 | **v0.1 operator docs** | `docs/*.md` until rewritten at release — **reference only** during v1 build |
 | **Shipped root README** | Describes **live v0.1** behavior until release rewrite — do not treat as v1 contract |
 | **Frozen history** | `docs/archive/` — never treat as contract |

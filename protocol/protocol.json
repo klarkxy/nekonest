@@ -153,6 +153,10 @@
         }
       }
     },
+    "AgentType": {
+      "type": "string",
+      "enum": ["claude_code", "codex", "kilo", "kimi_cli", "grok_build"]
+    },
     "SessionCapabilities": {
       "type": "object",
       "description": "Absent fields default to false/unsupported",
@@ -179,16 +183,51 @@
         }
       }
     },
+    "AgentStartCapability": {
+      "type": "object",
+      "description": "Device-level native thread-start capability published in session_list. Unknown or unavailable entries mean the phone must not offer creation. During minor-version migration only, an omitted catalog may fall back to an explicit per-session Codex spawn flag.",
+      "required": ["agent_type", "available", "spawn"],
+      "additionalProperties": false,
+      "properties": {
+        "agent_type": { "$ref": "#/definitions/AgentType" },
+        "available": {
+          "type": "boolean",
+          "description": "The daemon found a usable native start path for this agent."
+        },
+        "spawn": {
+          "type": "boolean",
+          "description": "Native thread creation is currently permitted for this agent."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Concrete unavailable or disabled reason for UI display."
+        },
+        "control_path": { "type": "string", "description": "Native mechanism, for example app_server, cli, or acp." },
+        "control_version": { "type": "string", "description": "Optional probed native control protocol or CLI version." }
+      }
+    },
+    "SessionListPayload": {
+      "type": "object",
+      "description": "Payload of session_list. Older peers may omit start_capabilities.",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/AgentSession" }
+        },
+        "start_capabilities": {
+          "type": "array",
+          "description": "Optional device-level catalog for native thread creation. Absent or unknown agents are unavailable; this catalog gates phone-local drafts and start_thread.",
+          "items": { "$ref": "#/definitions/AgentStartCapability" }
+        }
+      }
+    },
     "AgentSession": {
       "type": "object",
       "required": ["id", "device_id", "agent_type", "status"],
       "properties": {
         "id": { "type": "string" },
         "device_id": { "type": "string" },
-        "agent_type": {
-          "type": "string",
-          "enum": ["claude_code", "codex", "kilo", "kimi_cli", "grok_build"]
-        },
+        "agent_type": { "$ref": "#/definitions/AgentType" },
         "status": {
           "type": "string",
           "enum": ["idle", "running", "waiting_user", "waiting_approval", "error"]
@@ -235,6 +274,69 @@
         "size": { "type": "integer" },
         "key": { "type": "string" }
       }
+    },
+    "StartThreadPayload": {
+      "type": "object",
+      "description": "Phone-local draft creation request. The daemon creates the native thread and delivers prompt as its first prompt; the phone must not create a session row itself. Legacy cwd and initial_prompt aliases may be accepted by a receiver.",
+      "required": ["agent_type", "operation_id", "project_dir", "prompt"],
+      "properties": {
+        "agent_type": { "$ref": "#/definitions/AgentType" },
+        "project_dir": {
+          "type": "string",
+          "description": "Must exactly resolve to a directory in the daemon's current discovered project-dir union; arbitrary path input is rejected."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Legacy project_dir alias; when both are supplied they must resolve to the same discovered directory."
+        },
+        "operation_id": { "type": "string", "description": "Stable start operation id; normally equals envelope client_msg_id." },
+        "prompt": {
+          "type": "string",
+          "description": "Required first prompt copied from the phone-local draft."
+        },
+        "initial_prompt": {
+          "type": "string",
+          "description": "Legacy prompt alias accepted by a receiver when prompt is absent."
+        }
+      }
+    },
+    "ThreadStartResult": {
+      "type": "object",
+      "description": "Payload for thread_starting, thread_owned, thread_failed, and thread_indeterminate. thread_owned is legal only after both positive first-prompt acknowledgement and ownership in the selected agent's native store; otherwise the sender must fail closed as thread_indeterminate.",
+      "required": ["operation_id", "state"],
+      "properties": {
+        "agent_type": { "$ref": "#/definitions/AgentType" },
+        "operation_id": { "type": "string", "description": "Stable start operation id; normally equals envelope client_msg_id." },
+        "state": {
+          "type": "string",
+          "enum": ["thread_starting", "thread_owned", "thread_failed", "thread_indeterminate"]
+        },
+        "session": {
+          "$ref": "#/definitions/AgentSession",
+          "description": "Required by the sender for thread_owned; it is a native-store-owned session."
+        },
+        "session_id": { "type": "string", "description": "Native wire session id when known." },
+        "thread_id": { "type": "string", "description": "Native CLI thread id when distinct from session_id." },
+        "prompt_accepted": { "type": "boolean", "description": "True only when the native control path positively confirmed the first prompt. thread_owned requires true; false or absent requires thread_indeterminate and the phone must retain the prompt." },
+        "reason": { "type": "string", "description": "Failure or indeterminate explanation safe for display." },
+        "error": { "type": "string", "description": "Compatibility error text." },
+        "message": { "type": "string", "description": "Compatibility display message." }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "const": "thread_owned" } },
+            "required": ["state"]
+          },
+          "then": {
+            "required": ["session_id", "prompt_accepted"],
+            "properties": {
+              "session_id": { "type": "string", "minLength": 1 },
+              "prompt_accepted": { "const": true }
+            }
+          }
+        }
+      ]
     }
   }
 }

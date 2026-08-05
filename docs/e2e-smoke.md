@@ -49,7 +49,7 @@ Local baseline used in development: **codex-cli 0.144.1** with `codex app-server
 2. If capabilities show `control_mode=app_server` and `approve=true`:  
    - Trigger a real approval on host; phone shows approval UI; Approve/Deny resolve.  
 3. If `steer=true`: steer mid-turn; agent incorporates correction.  
-4. If `spawn=true`: start_thread only for a **currently discovered** Codex project dir; lifecycle `thread_starting → thread_owned | failed | indeterminate`; no ghost nest-only row.  
+4. For every agent advertising `spawn=true`: start_thread only for a directory in the daemon's **currently discovered** native project union; lifecycle `thread_starting → thread_owned | failed | indeterminate`; no ghost nest-only row.
 5. If app-server unhealthy: Codex stays `exec_resume` (send/history/interrupt only); no fake approve/spawn.
 
 ## C. Sealed mode (optional second pass)

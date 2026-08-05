@@ -91,6 +91,22 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 | `project_dir` / `project` | 目录分组 |
 | `pending_approval` | 可选工具审批结构 |
 
+### SessionCapabilities
+
+| 字段 | 说明 |
+|---|---|
+| `control_mode` | `app_server` \| `exec_resume` \| `compatibility` |
+| `approve`、`deny`、`interrupt`、`steer`、`queue`、`spawn` | 布尔值；缺省为 false。只有已安装并探测通过的原生 starter、且目录获准时 `spawn` 才可为 true；它不代表任何其他控制能力。 |
+| `attachment_mode` | `native_image_and_file` \| `native_image` \| `path_best_effort` \| `unsupported` |
+
+### `session_list` 开线程能力目录
+
+`session_list.payload.start_capabilities` 是可选的设备级目录。缺省时禁用设备级新建；在 minor 版本迁移期间，旧 daemon 仅可通过会话中明确的 `capabilities.spawn=true` 保留 Codex 新建入口。每项含 `agent_type`、`available`、`spawn`，以及可选的展示 `reason`、`control_path` / `control_version`。仅当 `available=true` 且 `spawn=true` 时，PWA 才可提供本地草稿；目录必须来自 daemon 当前原生发现项目目录的并集，绝不可输入任意路径。
+
+### 原生开线程载荷
+
+`start_thread.payload` 使用 `agent_type`、`operation_id`、`project_dir`、`prompt`；`cwd` 与 `initial_prompt` 仍是可选的遗留别名。该 prompt 是原生线程首条提示词，不是先由手机创建的会话。sealed 模式会用设备目录密钥加密整个正文；relay 只能看到路由元数据与稳定 operation id。发送前 PWA 必须把本地草稿与该 operation id 持久绑定；刷新后不得另造 operation 或重试未决新建。`thread_*` 载荷为兼容保留 `operation_id`、`session_id`、`thread_id`、`error`、`message`；sealed 模式下这些结果载荷也用设备目录密钥加密，外层仅保留状态、operation id 与原生 session id 作为路由元数据。可见的路由元数据不等于已认证的业务结果：结果密文缺失或认证失败时，PWA 必须本地降为 `thread_indeterminate`，绝不能采信外层 `thread_owned` 或 `thread_failed`。`thread_owned` 必须同时具备原生 store 所有权与首条提示词正向确认，因此其 `prompt_accepted` 必须为 true；任一证据缺失都须使用 `thread_indeterminate` 并保留本地草稿。
+
 ### SessionMessage
 
 | 字段 | 说明 |
@@ -145,6 +161,17 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 
 **不要**把「WebSocket 写成功」等同于 `prompt_accepted` / 业务成功。
 
+### 控制与生命周期（v1）
+
+| type | 作用 |
+|---|---|
+| `approve` / `deny` | 工具审批（有能力时为 Codex app-server） |
+| `interrupt` | 停止运行中的工作 |
+| `steer` | 回合中修正（Codex） |
+| `start_thread` / `thread_*` | agent 范围的手机本地草稿：在获准的已发现目录用首条提示词原生开线程 |
+| `pair_*` / `key_package` / `phone_revoked` | 配对与 E2E 密钥分发 |
+| `attention_event` | 通用、适合密封模式推送的事件类别 |
+
 ### 历史与订阅
 
 | type | 作用 |
@@ -175,8 +202,10 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 
 ## 线上明确非目标
 
-- 支持的产品合同中**没有**手机侧 `create_session`（或等价物）。线程须先在 PC 原生 UI/CLI 创建。
-- 未经明确产品决策与全栈更新，勿重新引入远程建线程。
+- 支持的产品合同中**没有**通用手机侧 `create_session`（或等价物）或窝侧幽灵线程。
+- 唯一允许的手机新建路径是 agent 范围的 `start_thread`：先创建手机本地草稿；仅当所选 agent 的 starter 已安装/探测通过且宣告 `spawn=true` 时，才将首条提示词原生建线程。目录必须来自 daemon **当前原生发现项目目录并集**。
+- 生命周期为 `thread_starting → thread_owned | thread_failed | thread_indeterminate`；仅在首条提示词得到正向确认、且所选 agent 原生 store 明确认领后才发送 `thread_owned`，否则报 `thread_indeterminate`。
+- 不得发明永久窝侧会话行。
 
 ## REST 配套 API
 

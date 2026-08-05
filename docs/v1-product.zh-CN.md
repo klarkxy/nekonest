@@ -35,7 +35,7 @@ NekoNest 是**自托管的猫娘窝**：在不向家用主机开入站端口、�
 
 ## 3. 产品原则（不可妥协的 DNA）
 
-1. **原生 store 为权威**（发现与 transcript，以及 Codex 开线程后的所有权）。窝侧 SQLite 是中继与耐久，不是永久分叉的第二套 agent 库。  
+1. **原生 store 为权威**（发现与 transcript，以及 agent 范围开线程后的所有权）。窝侧 SQLite 是中继与耐久，不是永久分叉的第二套 agent 库。
 2. **Daemon 主动出站**连窝。核心产品不要求家用主机入站端口。  
 3. **呈现为派生视图：** `目录 → agent → 线程`。无目录进 **未分类**。不为建树改写源会话行。  
 4. **投递 ≠ 传输：** WebSocket 写成功 ≠ agent 已接受。保留 accepted / committed / failed / not_seen / indeterminate 及手机侧可见派生状态。  
@@ -44,7 +44,7 @@ NekoNest 是**自托管的猫娘窝**：在不向家用主机开入站端口、�
 7. **不假装能力：** agent 做不了审批/steer/附件/开线程时，UI 必须说明，禁止空操作亮绿灯。能力标志缺省为 false/unsupported。  
 8. **单个 agent 缺失对其余非致命。**  
 9. **默认密封：** 新窝使用 E2E 密封传输；开放中继须管理员显式配置；同一窝密封/开放客户端不得混用；禁止自动从密封降级为开放。  
-10. **仅 Codex 全控制：** approve/deny、steer、完整附件、手机 `start_thread` 是 Codex app-server 承诺。其余 agent 仅诚实宣告兼容续聊能力。  
+10. **仅 Codex 全控制：** approve/deny、steer 与完整附件是 Codex app-server 承诺。五个 agent 都只有在原生 starter 已安装并探测通过时，才可宣告 agent 范围的手机 `start_thread`；这不会把兼容适配器提升为全控制。
 
 ## 4. 竞品定位（为何 v1 长这样）
 
@@ -139,8 +139,8 @@ v1.0.0 = **单人运维自托管窝**可日常在路上使用的功能完备版�
 | 正式主机 OS | **Windows + Linux**。macOS 更后。 |
 | 主 agent | **Codex** 为唯一全控制 v1 agent。规范路径：`codex app-server` JSON-RPC；钉选/探测最低兼容 CLI，自本地已验证的 0.144.1 协议面起。 |
 | Codex 控制 | 发送、approve/deny、中断、steer 为 **MUST**。后续排队为 **SHOULD**。遗留 `codex exec resume` 为能力降级兼容路径。 |
-| 开线程 | **仅 Codex。** 手机仅可在 daemon 报告的、已从原生会话发现的目录中开线程。经 app-server 使原生 store 拥有结果。禁止任意路径输入或扫盘。生命周期：`starting → owned \| failed \| indeterminate`（无永久幽灵行）。 |
-| 其他 agent | Claude Code、Kilo、Kimi CLI、Grok Build：**兼容续聊** — 发现、所有权、历史、发送/流、中断、按宣告能力的附件。**不**承诺审批/开线程/steer/排队。 |
+| 开线程 | **按 agent 与能力门控。** 手机先打开仅本地草稿；只在发送首条提示词时创建原生线程。已安装并探测通过的 starter 只能进入 daemon **当前由原生会话发现的项目目录并集**。禁止任意路径输入或扫盘。生命周期：`starting → owned \| failed \| indeterminate`（无永久幽灵行）；`owned` 须有首条提示词正向确认和原生 store 所有权。 |
+| 其他 agent | Claude Code、Kilo、Kimi CLI、Grok Build：**兼容续聊** — 发现、所有权、历史、发送/流、中断、按宣告能力的附件；仅在原生 `spawn` 确已安装、探测通过且已宣告时可开线程。**不**承诺审批/steer/排队。 |
 | 附件 | Codex app-server **MUST** 端到端支持图片与普通文件。其他适配器宣告 `native_image`、`path_best_effort` 或 `unsupported`；UI 不得暗示更高等级。 |
 | 通知 | Codex 等待审批、等待用户输入、运行失败为 **MUST**。成功与设备离线为 **SHOULD**。密封推送仅含通用事件文案 + 设备/会话引用；详情在打开 PWA 后解密。 |
 | 扩展 agent | **无** v1 发版门槛要求在五个 wire id 之外再加 agent。 |
@@ -192,7 +192,7 @@ v1.0.0 = **单人运维自托管窝**可日常在路上使用的功能完备版�
 | D17 | 配置校验 + 非身份字段安全热更 | SHOULD | |
 | D18 | 可选本机 loopback 调试 HTTP | MAY | |
 | D19 | E2E 密钥（配合 S13） | MUST | 与 S13 同发；权限收紧；Linux 用 XDG |
-| D20 | 仅 Codex：经 app-server 在当前已发现项目目录 `start_thread` | MUST | 日志：starting → owned \| failed \| indeterminate；owned 前须原生所有权 |
+| D20 | 首条提示词触发的 agent 范围 `start_thread` | MUST | 仅当所选 agent 原生 starter 已安装、探测通过且 `spawn=true`；目标仅限 daemon 当前已发现项目目录并集。日志：starting → owned \| failed \| indeterminate；owned 前须首条提示词正向确认和原生所有权 |
 | D21 | 驾驭进行中的 Codex 回合（steer） | MUST | 能力门控；非 Codex 为 false |
 | D22 | 发布加密设备目录（会话列表、已发现根、能力） | MUST | 配合 S13 |
 
@@ -204,16 +204,16 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 
 | Wire id | 产品 | 角色 | 保证 |
 |---|---|---|---|
-| `codex` | Codex | **唯一全控制 v1 agent** | 发现、所有权、历史、发送/流、中断、**approve/deny**、**steer**、**spawn/`start_thread`**、**附件 `native_image_and_file`**，经 `codex app-server`。排队在协议能保证顺序时为 SHOULD。遗留 `codex exec resume` 仅为降级兼容（如实宣告能力）。主列表排除 subagent。自 0.144.1 面钉选/探测最低 CLI。 |
+| `codex` | Codex | **唯一全控制 v1 agent** | 发现、所有权、历史、发送/流、中断、**approve/deny**、**steer**、**附件 `native_image_and_file`**，经 `codex app-server`。仅当原生 starter 已安装、探测通过时可宣告 **spawn/`start_thread`**。排队在协议能保证顺序时为 SHOULD。遗留 `codex exec resume` 仅为降级兼容（如实宣告能力）。主列表排除 subagent。自 0.144.1 面钉选/探测最低 CLI。 |
 
 #### 7.3.2 兼容续聊 agent（MUST）
 
 | Wire id | 产品 | 保证 | 明确不承诺 |
 |---|---|---|---|
-| `claude_code` | Claude Code | 发现、所有权、历史、发送/流、中断；附件按宣告等级 | 不承诺审批 / start_thread / steer / 排队 |
-| `kilo` | Kilo | 同上兼容续聊集合 | 同上不承诺 |
-| `kimi_cli` | Kimi CLI | 同上；现代 store；遗留路径有文档 | 同上不承诺 |
-| `grok_build` | Grok Build | 同上；安全非交互默认 | 同上不承诺 |
+| `claude_code` | Claude Code | 发现、所有权、历史、发送/流、中断；附件与 agent 范围开线程按宣告等级 | 不承诺审批 / steer / 排队；原生 starter 未安装或未探测通过时 start=false |
+| `kilo` | Kilo | 同上兼容续聊集合；仅在已宣告时 agent 范围开线程 | 同上不承诺 |
+| `kimi_cli` | Kimi CLI | 同上；现代 store；遗留路径有文档；仅在已宣告时 agent 范围开线程 | 同上不承诺 |
+| `grok_build` | Grok Build | 同上；安全非交互默认；仅在已宣告时 agent 范围开线程 | 同上不承诺 |
 
 非 Codex 附件等级：`native_image` \| `path_best_effort` \| `unsupported`。UI 不得暗示高于宣告的等级。
 
@@ -225,7 +225,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 
 **全控制（Codex）MUST** 文档化并测试所有权、列表过滤、历史稳定、app-server 发送/流、中断、附件（图片+文件）、审批、steer、开线程生命周期、正信号状态检测、崩溃/重启与 fixture 语料。
 
-**兼容续聊 agent MUST** 文档化并测试所有权、列表过滤、历史稳定、resume/send 参数、流映射、中断、附件策略与失败模式、诚实能力标志（除非真正实现否则审批/开线程/steer/排队为 false）与 fixture 语料。不得靠推断报告 `waiting_approval` / `waiting_user`。
+**兼容续聊 agent MUST** 文档化并测试所有权、列表过滤、历史稳定、resume/send 参数、流映射、中断、附件策略与失败模式、诚实能力标志（除非真正实现否则审批/steer/排队为 false；原生 starter 未安装或未探测通过时开线程为 false）与 fixture 语料。不得靠推断报告 `waiting_approval` / `waiting_user`。
 
 ### 7.4 手机客户端（PWA 优先）
 
@@ -259,7 +259,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | P26 | 离线横幅 + 上次同步时间 | SHOULD | |
 | P27 | 无障碍：焦点、标签、对比度 | SHOULD | |
 | P28 | 可选「原始日志」次要视图 | MAY | 不作主 UX |
-| P29 | 仅 Codex：在已发现目录上开线程 UX | MUST | 仅 `thread_owned` 后导航；indeterminate 显示恢复说明 |
+| P29 | 已发现目录上的 agent 范围开线程 UX | MUST | 先打开手机本地草稿；仅在 `spawn=true` 时发送首条提示词来原生创建。仅 `thread_owned` 后导航；indeterminate 显示恢复说明 |
 | P30 | IndexedDB 身份/密钥存储；密钥丢失以新身份重配 | MUST | 服务器不恢复旧手机私钥 |
 
 ### 7.5 线程生命周期（v1 产品决策）
@@ -267,16 +267,16 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | ID | 功能 | 优先级 | 规则 |
 |---|---|---|---|
 | L1 | 续接已有原生线程 | MUST | 五个 agent 的核心路径；保留原生 id |
-| L2 | **从手机开线程** | MUST | **仅 Codex**，经 app-server，使**原生 store 出现线程** |
-| L3 | 目录选择限于 daemon 发现得到的**当前已发现**项目目录 | MUST | 禁止任意扫盘；禁止运维手输路径；拒绝消失目录、`..`、符号链接逃逸 |
-| L4 | Codex app-server 缺失、`spawn=false`、或目录不在当前已发现集合时拒绝 | MUST | 错误清晰；可能时在 spawn 前 → `thread_failed` |
-| L5 | 开线程生命周期状态 | MUST | `thread_starting` → `thread_owned` \| `thread_failed` \| `thread_indeterminate`。按设备 + 操作 id fail-closed 日志。indeterminate 后不自动重试。**无永久窝侧幽灵行。** |
+| L2 | **从手机开线程** | MUST | 先创建 **agent 范围的手机本地草稿**。发送首条提示词时才调用所选、已安装并探测通过的原生 starter，使该 agent 的**原生 store 出现线程** |
+| L3 | 目录选择限于 daemon 发现得到的**当前已发现原生项目目录并集** | MUST | 禁止任意扫盘；禁止运维手输路径；拒绝消失目录、`..`、符号链接逃逸 |
+| L4 | 所选 agent 的原生 starter 缺失/未探测通过、`spawn=false`、或目录不在当前已发现并集时拒绝 | MUST | 错误清晰；可能时在 spawn 前 → `thread_failed` |
+| L5 | 开线程生命周期状态 | MUST | `thread_starting` → `thread_owned` \| `thread_failed` \| `thread_indeterminate`。仅在首条提示词得到正向确认、且所选 agent 原生 store 正向确认所有权后设 `thread_owned`；否则为 `thread_indeterminate`。按设备 + 操作 id fail-closed 日志。indeterminate 后不自动重试。**无永久窝侧幽灵行。** |
 | L6 | 不做跨 agent 假迁移 transcript | MUST | 跨 agent handoff 属 LATER（除非原生工具支持） |
 | L7 | 手机视图归档/隐藏 | SHOULD | 不删原生 store |
 | L8 | 从手机删除/杀死原生线程 | LATER | v1 默认过毁 |
 | L9 | 通用 `create_session` / 窝发明会话 | 禁止 | 不得重新引入 |
 
-**不变量：** L2 成功（`thread_owned`）后，下一次发现必须能从原生 Codex store 找到该线程；手机不得永久持有主机无法 own 的线程。不确定的开线程仅通过后续发现对账。
+**不变量：** L2 成功（`thread_owned`）后，下一次发现必须能从所选 agent 的原生 store 找到该线程；手机不得永久持有主机无法 own 的线程。手机本地草稿不是窝侧会话。不确定的开线程仅通过后续发现对账。
 
 ### 7.6 聊天之外的控制面
 
@@ -355,7 +355,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | W4 | 手机处理完整 prompt 生命周期类型；弃用 `prompt_sent` | MUST |
 | W5 | 会话状态：`idle` \| `running` \| `waiting_user` \| `waiting_approval` \| `error` | MUST |
 | W6 | 能力标志（缺省 = false/unsupported） | MUST |
-| W7 | Codex `start_thread` / `thread_starting` / `thread_owned` / `thread_failed` / `thread_indeterminate` | MUST |
+| W7 | agent 范围 `start_thread` / `thread_starting` / `thread_owned` / `thread_failed` / `thread_indeterminate` | MUST |
 | W8 | 带稳定 approval id 的审批载荷；`steer` | MUST |
 | W9 | E2E 控制与 `sealed_payload`；配对/密钥消息（`pair_*`、`key_package`、`phone_revoked`） | MUST |
 | W10 | 驱动推送的通用 `attention_event` | MUST |
@@ -370,7 +370,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 1. 运维部署窝（TLS、管理员密钥、bootstrap）；传输模式密封（默认）。  
 2. 家用主机装 daemon（Windows 或 Linux），注册身份密钥，doctor 全绿。  
 3. 打开 PWA，建立手机身份，经 QR（或验证码 + 指纹）配对。  
-4. 看到设备在线与解密后的会话列表，或在已发现根存在时出现 Codex「在项目中开始」。
+4. 看到设备在线与解密后的会话列表，或在已发现目录并集非空时出现 agent 选择器；只有原生 starter 已安装并探测通过的 agent 可显示「在项目中开始」。
 
 ### J2a — 投递与中断
 
@@ -390,12 +390,12 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 2. 收到通用推送；深链；解密审批详情。  
 3. 批准或拒绝；观察继续或诚实失败。
 
-### J3 — 手机开 Codex 线程
+### J3 — 从手机开 agent 范围线程
 
-1. 从**当前已发现**根目录选路径 + 已具备 app-server 的 Codex。  
-2. Daemon 发出 starting → owned（原生 store 确认）或 failed / indeterminate。  
-3. owned 后手机导航到正确目录/agent 下线程；PC 侧 CLI 看到同一原生线程。  
-4. 伪造或消失路径被拒绝；重试不双 spawn。
+1. 从 daemon **当前已发现项目目录并集**选择目录与 `spawn=true` 的受支持 agent；PWA 打开仅本地草稿。
+2. 发送前，手机先把草稿与唯一 operation id 持久绑定（sealed 模式还会用设备目录密钥密封整个命令）；刷新不得另造 operation。Daemon 启动所选原生 CLI/app-server，只有首条提示词得到正向确认、且该 agent 原生 store 确认所有权后才发 starting → owned；否则为 failed / indeterminate。
+3. owned 后手机导航到正确目录/agent 下线程；PC 侧 CLI 看到同一原生线程，手机可合成已确认接受的首条提示词。indeterminate 时保留草稿以便恢复。
+4. 伪造或消失路径被拒绝；未决新建不可重试或双 spawn。
 
 ### J4 — 多机
 
@@ -446,7 +446,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
               ├─ 目录
               │     └─ Agent
               │           └─ 线程列表（状态徽章）
-              ├─ 开 Codex 线程（仅已发现目录）
+              ├─ 开 agent 线程（能力门控；仅已发现目录）
               └─ 设备设置 / doctor 摘要 / 撤销
 
 线程
@@ -500,7 +500,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | 领域 | v0.1（上线切片） | v1.0.0 合同 |
 |---|---|---|
 | 主机 OS | 产品仅 Windows | **Windows + Linux**；macOS 更后 |
-| 开线程 | 手机禁止 | **仅 Codex** `start_thread` 进入**当前已发现**目录（app-server）；无通用 `create_session` |
+| 开线程 | 手机禁止 | agent 范围的本地草稿 → 首条提示词 `start_thread`，经已安装/探测通过的原生 starter 进入 daemon **当前已发现目录并集**；无通用 `create_session` |
 | 审批 | 线协议为主；UI 只展示；CLI 常不可用 | **Codex 真桥** + UI；其余诚实不可用 |
 | Steer | 未产品化 | Codex app-server 可用时为 **MUST** |
 | 投递 UX | 多半 `prompt_sent` / failed | 完整生命周期含 not_seen / indeterminate |
@@ -523,14 +523,14 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 
 | 波次 | 焦点 | 退出条件 |
 |---|---|---|
-| **W0 — 合同** | 本文冻结；AGENTS.md 对 Codex start_thread 的例外 | EN/ZH 对等；无未决发版阻塞决策 |
+| **W0 — 合同** | 本文冻结；AGENTS.md 对 agent 范围首条提示词开线程的规则 | EN/ZH 对等；无未决发版阻塞决策 |
 | **W1 — 协议脚手架** | 信封、状态、能力、开线程/steer/配对/密钥消息、major.minor + 模式 | 旧客户端清晰失败；v1 对等体先协商 |
 | **W2 — 服务端迁移 + 手机身份** | schema_meta、migrate-v1、管理员密钥、授权、撤销 | 两手机独立；撤销即时 |
 | **W3 — 密码学 + 配对** | 向量、QR、密钥包、epoch | 中继无法替换密钥；第二部手机可配对 |
 | **W4 — 密封中继耐久** | 不透明载荷、密封附件、通用 attention 推送 | 密封服务端无应用正文明文 |
 | **W5 — 能力 + 控制 UX** | 标志、投递状态、门控控件 | 无能力则无控件 |
 | **W6 — Codex app-server 全控制** | approve/deny/interrupt/steer/附件 | 钉选基线上 J2a–J2c |
-| **W7 — Codex 开线程** | 已发现目录、日志生命周期 | J3；原生所有权 |
+| **W7 — Agent 范围开线程** | 本地草稿、已发现目录并集、日志生命周期 | J3；原生所有权 |
 | **W8 — Windows + Linux 正式化** | 路径、进程组、产物、doctor、systemd | 两 OS 基线上 J1 |
 | **W9 — 发版文档 + 门槛** | 迁移、安全模型、CHANGELOG、smoke | v1.0.0 标签 |
 
@@ -541,14 +541,14 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | # | 主题 | 决议 |
 |---|---|---|
 | 1 | **E2E 默认** | 新窝默认密封。开放中继保留、默认关闭、**仅管理员**启用。一窝一模式；不混用；不自动降级。 |
-| 2 | **开线程 UX** | **仅** daemon **当前发现集合**中的目录（来自原生会话）。禁止任意路径输入；v1 不要求单独运维白名单文件。仅 Codex app-server。 |
+| 2 | **开线程 UX** | 先为仅本地草稿；首条提示词使用所选 agent 已安装并探测通过的原生 starter。目标**仅**为 daemon **当前已发现原生项目目录并集**。禁止任意路径输入；v1 不要求单独运维白名单文件。 |
 | 3 | **鉴权演进** | 管理员引导密钥（`NEKONEST_ADMIN_SECRET`，单版本 `NEKONEST_PHONE_SECRET` 别名）。一般访问：**独立可撤销手机令牌** + 设备授权。多手机密钥按手机包装。 |
 | 4 | **Codex 审批传输** | 规范路径：**`codex app-server` JSON-RPC**。自本地已验证 **0.144.1** 协议面钉选/探测最低兼容 CLI。遗留 `exec resume` 仅降级。Claude Code 等 v1 不承诺审批。 |
 | 5 | **扩展 agent** | v1.0.0 **无**额外要求。无「至少两个」门槛。 |
 | 6 | **消息类型名** | 按计划目录在实现中钉选：`start_thread`、`thread_starting`、`thread_owned`、`thread_failed`、`thread_indeterminate`、`steer`、`pair_request`、`pair_confirm`、`pair_ready`、`pair_failed`、`key_package`、`phone_revoked`、`attention_event`；状态含 `waiting_user`。精确 schema 在 Phase 1 `protocol.json` 落地。 |
 | 7 | **正式 OS** | Windows + Linux MUST；macOS LATER。 |
-| 8 | **Agent 角色** | Codex 全控制；其余四者为兼容续聊。 |
-| 9 | **开线程生命周期** | `starting → owned \| failed \| indeterminate`；无永久幽灵行。 |
+| 8 | **Agent 角色** | Codex 全控制；其余四者为兼容续聊。五者都只可在原生 starter 安装并探测通过后宣告 agent 范围开线程；这不授予其他控制能力。 |
+| 9 | **开线程生命周期** | `starting → owned \| failed \| indeterminate`；首条提示词正向确认且原生所有权确认后才可 owned；无永久幽灵行。 |
 | 10 | **通知** | MUST：waiting_approval、waiting_user、运行失败。SHOULD：成功、设备离线。 |
 | 11 | **协议版本** | 按 §7.0 的 `major.minor`。 |
 | 12 | **迁移 / 密钥丢失 / 元数据** | 按 §7.0 表。 |
@@ -560,7 +560,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | | |
 |---|---|
 | **v1.0.0 权威产品合同** | 本文件 + `v1-product.md` |
-| **现行工程不变量** | [AGENTS.md](../AGENTS.md)（含仅 Codex 的 `start_thread` 例外；禁止通用 `create_session`） |
+| **现行工程不变量** | [AGENTS.md](../AGENTS.md)（含 agent 范围、首条提示词的 `start_thread`；禁止通用 `create_session`） |
 | **v0.1 运维文档** | 发版前仍为 `docs/*.md` — **构建 v1 期间仅参考** |
 | **线上根 README** | 在发版重写前描述**现行 v0.1** 行为 — 不作 v1 合同 |
 | **冻结历史** | `docs/archive/` — 永不当合同 |

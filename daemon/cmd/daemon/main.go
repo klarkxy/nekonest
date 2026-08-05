@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/nekonest/daemon/internal/identity"
 	"github.com/nekonest/daemon/internal/sealed"
 	"github.com/nekonest/daemon/internal/sealedkeys"
+	"github.com/nekonest/daemon/internal/startjournal"
 )
 
 var (
@@ -153,6 +155,13 @@ func main() {
 		log.Fatalf("[daemon] cannot safely load prompt journal: %v", journalErr)
 	}
 	log.Printf("   Prompt journal: %s", commandJournal.path)
+	threadJournalPath := startjournal.Path(activeConfigPath, deviceID)
+	threadJournal, threadJournalErr := startjournal.Load(threadJournalPath, deviceID)
+	if threadJournalErr != nil {
+		// A missing/ambiguous start record can cause a second native thread.
+		log.Fatalf("[daemon] cannot safely load thread start journal: %v", threadJournalErr)
+	}
+	log.Printf("   Thread start journal: %s", threadJournalPath)
 
 	// Initialize the built-in adapter registry.
 	adapterRegistry, err := adapters.NewDefaultRegistry()
@@ -188,11 +197,20 @@ func main() {
 
 	// Session discovery state
 	var (
-		sessionMu    sync.Mutex
-		lastSessions = make(map[string]*adapters.SessionInfo)
+		sessionMu             sync.Mutex
+		lastSessions          = make(map[string]*adapters.SessionInfo)
+		lastStartCapabilities []map[string]interface{}
 	)
 	sessionSends := newSessionLockMap()
 	acceptedPrompts := newPromptAcceptanceCache(maxAcceptedPromptIDs)
+	startCapabilityCache := newAgentStartCapabilityCache(30 * time.Second)
+	threadStarts := &threadStartCoordinator{
+		journal:       threadJournal,
+		lookupAdapter: adapterRegistry.Get,
+		snapshotProjectDirs: func() []string {
+			return snapshotProjectDirs(&sessionMu, lastSessions)
+		},
+	}
 
 	// Handle incoming messages from server
 	client.OnMessage(func(data []byte) {
@@ -517,59 +535,101 @@ func main() {
 			}
 
 		case "start_thread":
-			cwd, _ := payload["cwd"].(string)
-			if cwd == "" {
-				cwd, _ = payload["project_dir"].(string)
+			if sealedObj, ok := msg["sealed_payload"].(map[string]interface{}); ok {
+				if daemonSealedKeys == nil {
+					opID, _ := msg["client_msg_id"].(string)
+					sendThreadResult(client, deviceID, "", opID, "thread_failed", "", false, "sealed thread start is unavailable")
+					return
+				}
+				plain, err := openSealedCommand(deviceID, "", msg, sealedObj, "start_thread")
+				if err != nil {
+					opID, _ := msg["client_msg_id"].(string)
+					sendThreadResult(client, deviceID, "", opID, "thread_failed", "", false, "sealed thread start decrypt failed")
+					return
+				}
+				payload = plain
+			}
+			if payload == nil {
+				payload = map[string]interface{}{}
+			}
+			var agentName string
+			if rawAgent, present := payload["agent_type"]; present {
+				var validType bool
+				agentName, validType = rawAgent.(string)
+				if !validType {
+					opID, _ := payload["operation_id"].(string)
+					if opID == "" {
+						opID, _ = msg["client_msg_id"].(string)
+					}
+					sendThreadResult(client, deviceID, "", opID, "thread_failed", "", false, "invalid agent_type")
+					return
+				}
+			}
+			agentType, validAgent := parseStartAgentType(agentName)
+			if !validAgent {
+				opID, _ := payload["operation_id"].(string)
+				if opID == "" {
+					opID, _ = msg["client_msg_id"].(string)
+				}
+				sendThreadResult(client, deviceID, agentName, opID, "thread_failed", "", false, "invalid agent_type")
+				return
+			}
+			projectDir, _ := payload["project_dir"].(string)
+			legacyCWD, _ := payload["cwd"].(string)
+			projectDir, projectDirErr := coalesceStartProjectDir(projectDir, legacyCWD)
+			if projectDirErr != nil {
+				opID, _ := payload["operation_id"].(string)
+				if opID == "" {
+					opID, _ = msg["client_msg_id"].(string)
+				}
+				sendThreadResult(client, deviceID, string(agentType), opID, "thread_failed", "", false, projectDirErr.Error())
+				return
 			}
 			first, _ := payload["prompt"].(string)
+			if first == "" {
+				first, _ = payload["initial_prompt"].(string)
+			}
 			opID, _ := payload["operation_id"].(string)
 			if opID == "" {
 				opID, _ = msg["client_msg_id"].(string)
 			}
-			codexA, exists := adapterRegistry.Get("codex")
-			codex, _ := codexA.(*adapters.CodexAdapter)
-			if !exists || codex == nil {
-				sendThreadResult(client, deviceID, opID, "thread_failed", "", "codex adapter unavailable")
-				return
+			command := threadStartCommand{
+				OperationID: opID,
+				AgentType:   agentType,
+				ProjectDir:  projectDir,
+				Prompt:      first,
 			}
-			// Restrict to currently discovered project dirs.
-			allowed := false
-			sessionMu.Lock()
-			for _, s := range lastSessions {
-				if s != nil && s.AgentType == adapters.AgentCodex && s.ProjectDir != "" &&
-					filepath.Clean(s.ProjectDir) == filepath.Clean(cwd) {
-					allowed = true
-					break
-				}
-			}
-			sessionMu.Unlock()
-			if !allowed || cwd == "" {
-				sendThreadResult(client, deviceID, opID, "thread_failed", "", "directory not in discovered codex projects")
-				return
-			}
-			sendThreadResult(client, deviceID, opID, "thread_starting", "", "")
-			tid, err := codex.StartThread(cwd, first)
-			if err != nil && tid == "" {
-				sendThreadResult(client, deviceID, opID, "thread_failed", "", err.Error())
-				return
-			}
-			// StartThread already waited briefly for ownership; re-check once more.
-			if tid != "" && (codex.OwnsSession(tid) || codex.WaitOwnsSession(tid, 3*time.Second)) {
-				sendThreadResult(client, deviceID, opID, "thread_owned", tid, "")
-				requestForceDiscover()
-			} else if tid != "" {
-				// Thread likely exists; still navigate phone with the id and force discovery.
-				// Prefer owned over failed so the draft can open the native session.
-				log.Printf("[daemon] start_thread ownership lag id=%s err=%v", tid, err)
-				sendThreadResult(client, deviceID, opID, "thread_owned", tid, "")
-				requestForceDiscover()
-			} else {
-				msg := "no thread id returned"
-				if err != nil {
-					msg = err.Error()
-				}
-				sendThreadResult(client, deviceID, opID, "thread_failed", "", msg)
-			}
+			// Native startup can include an ACP handshake plus an ownership wait.
+			// Keep it off the single WebSocket read loop so other sessions and
+			// interrupt messages remain responsive.
+			go func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						log.Printf("[daemon] PANIC in thread start coordinator: %v", recovered)
+						message := "thread start coordinator panicked; automatic retry is disabled"
+						if record, ok := threadStarts.journal.FailClosed(command.OperationID, message); ok {
+							sendThreadResult(client, deviceID, record.AgentType, record.OperationID, string(record.Status), record.SessionID, record.PromptAccepted, record.Message)
+						} else {
+							sendThreadResult(client, deviceID, string(command.AgentType), command.OperationID, "thread_indeterminate", "", false, message)
+						}
+					}
+				}()
+				threadStarts.Handle(ctx, command, func(event threadStartEvent) {
+					sendThreadResult(
+						client,
+						deviceID,
+						event.AgentType,
+						event.OperationID,
+						string(event.State),
+						event.SessionID,
+						event.PromptAccepted,
+						event.Message,
+					)
+					if event.State == startjournal.StatusOwned || event.State == startjournal.StatusIndeterminate {
+						requestForceDiscover()
+					}
+				})
+			}()
 
 		case "fetch_history":
 			limit := 40
@@ -733,6 +793,7 @@ func main() {
 				}
 			}
 			// Check for changes
+			startCapabilities := startCapabilityCache.Get(ctx, adapterRegistry)
 			changed := force
 			sessionMu.Lock()
 
@@ -759,6 +820,10 @@ func main() {
 
 			lastSessions = newSessions
 			sessionMu.Unlock()
+			if !changed && !reflect.DeepEqual(lastStartCapabilities, startCapabilities) {
+				changed = true
+			}
+			lastStartCapabilities = startCapabilities
 
 			// Always report on force (reconnect) or when local list changed
 			if changed {
@@ -768,7 +833,8 @@ func main() {
 					"timestamp": time.Now().Unix(),
 					"payload": map[string]interface{}{
 						// Convert at the wire boundary: unix last_activity + device_id
-						"sessions": sessionsToWire(deviceID, allSessions),
+						"sessions":           sessionsToWire(deviceID, allSessions),
+						"start_capabilities": startCapabilities,
 					},
 				}
 				if err := client.Send(report); err != nil {
@@ -1384,8 +1450,21 @@ func sendPromptFailure(
 	}
 }
 
-func sendThreadResult(client *connection.Client, deviceID, opID, msgType, threadID, errMsg string) {
-	payload := map[string]interface{}{"operation_id": opID}
+func sendThreadResult(client *connection.Client, deviceID, agentType, opID, msgType, threadID string, promptAccepted bool, errMsg string) {
+	msg := buildThreadResultMessage(deviceID, agentType, opID, msgType, threadID, promptAccepted, errMsg)
+	if err := client.Send(msg); err != nil {
+		log.Printf("[daemon] send %s failed: %v", msgType, err)
+	}
+}
+
+func buildThreadResultMessage(deviceID, agentType, opID, msgType, threadID string, promptAccepted bool, errMsg string) map[string]interface{} {
+	ts := time.Now().Unix()
+	payload := map[string]interface{}{
+		"agent_type":      agentType,
+		"operation_id":    opID,
+		"state":           msgType,
+		"prompt_accepted": promptAccepted,
+	}
 	if threadID != "" {
 		payload["session_id"] = threadID
 		payload["thread_id"] = threadID
@@ -1393,6 +1472,7 @@ func sendThreadResult(client *connection.Client, deviceID, opID, msgType, thread
 	if errMsg != "" {
 		payload["error"] = errMsg
 		payload["message"] = errMsg
+		payload["reason"] = errMsg
 	}
 	msg := map[string]interface{}{
 		"protocol_version": "1.0",
@@ -1401,16 +1481,58 @@ func sendThreadResult(client *connection.Client, deviceID, opID, msgType, thread
 		"device_id":        deviceID,
 		"session_id":       threadID,
 		"client_msg_id":    opID,
-		"timestamp":        time.Now().Unix(),
-		"payload":          payload,
+		"timestamp":        ts,
 	}
-	if err := client.Send(msg); err != nil {
-		log.Printf("[daemon] send %s failed: %v", msgType, err)
+	if daemonTransport == "sealed" {
+		if daemonSealedKeys == nil {
+			log.Printf("[daemon] cannot seal %s: sealed keys unavailable", msgType)
+			degradeSealedThreadResult(msg)
+		} else {
+			plain, err := json.Marshal(payload)
+			if err != nil {
+				log.Printf("[daemon] marshal sealed %s: %v", msgType, err)
+				degradeSealedThreadResult(msg)
+			} else {
+				aad := sealed.AADFields{
+					ProtocolVersion: "1.0",
+					TransportMode:   "sealed",
+					Type:            msgType,
+					DeviceID:        deviceID,
+					SessionID:       threadID,
+					ClientMsgID:     opID,
+					Timestamp:       ts,
+				}
+				wire, err := daemonSealedKeys.SealCatalog(deviceID, "phones", aad, plain)
+				if err != nil {
+					log.Printf("[daemon] seal %s: %v", msgType, err)
+					degradeSealedThreadResult(msg)
+				} else {
+					msg["sealed_payload"] = wire
+				}
+			}
+		}
+	} else {
+		msg["payload"] = payload
 	}
+	return msg
+}
+
+func degradeSealedThreadResult(msg map[string]interface{}) {
+	// A visible outer state is routing metadata, not an authenticated business
+	// result. If sealing fails, expose only the operation correlation and force
+	// the phone down the fail-closed recovery path.
+	msg["type"] = "thread_indeterminate"
+	delete(msg, "session_id")
+	delete(msg, "payload")
+	delete(msg, "sealed_payload")
 }
 
 // openSealedPrompt decrypts a sealed send_prompt body into a payload map.
 func openSealedPrompt(deviceID, sessionID string, msg map[string]interface{}, sealedObj map[string]interface{}) (map[string]interface{}, error) {
+	return openSealedCommand(deviceID, sessionID, msg, sealedObj, "send_prompt")
+}
+
+func openSealedCommand(deviceID, sessionID string, msg map[string]interface{}, sealedObj map[string]interface{}, messageType string) (map[string]interface{}, error) {
 	raw, err := json.Marshal(sealedObj)
 	if err != nil {
 		return nil, err
@@ -1429,7 +1551,7 @@ func openSealedPrompt(deviceID, sessionID string, msg map[string]interface{}, se
 	aad := sealed.AADFields{
 		ProtocolVersion: "1.0",
 		TransportMode:   "sealed",
-		Type:            "send_prompt",
+		Type:            messageType,
 		DeviceID:        deviceID,
 		SessionID:       sessionID,
 		ClientMsgID:     clientMsgID,
@@ -1443,8 +1565,7 @@ func openSealedPrompt(deviceID, sessionID string, msg map[string]interface{}, se
 	if wire.KeyScope == "session" {
 		pt, err = daemonSealedKeys.OpenSession(sessionID, &wire, aad)
 	} else {
-		// Catalog-scoped prompts are not expected; try session key by default.
-		pt, err = daemonSealedKeys.OpenSession(sessionID, &wire, aad)
+		pt, err = daemonSealedKeys.OpenCatalog(&wire, aad)
 	}
 	if err != nil {
 		return nil, err

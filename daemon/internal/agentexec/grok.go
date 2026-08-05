@@ -1,6 +1,7 @@
 package agentexec
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/nekonest/daemon/internal/attach"
 )
 
@@ -92,12 +94,80 @@ func grokResumeArgs(sessionID, prompt, workDir string) []string {
 	return args
 }
 
+func grokStartArgs(sessionID, prompt, workDir string) []string {
+	args := []string{
+		"--session-id", sessionID,
+		"-p", prompt,
+		"--output-format", "streaming-json",
+		"--permission-mode", "auto",
+	}
+	if workDir != "" {
+		args = append(args, "--cwd", workDir)
+	}
+	return args
+}
+
+// ProbeThreadStart verifies Grok's deterministic native session-id path
+// without starting a conversation.
+func (c *GrokCommander) ProbeThreadStart(ctx context.Context) error {
+	return probeCLIHelp(ctx, c.cliPath, "--session-id", "--output-format", "streaming-json")
+}
+
+// StartThread uses Grok's documented --session-id new-conversation flag. The
+// caller must confirm the returned native ID against ~/.grok/sessions.
+func (c *GrokCommander) StartThread(ctx context.Context, workDir, prompt string) (string, bool, bool, error) {
+	if err := c.ProbeThreadStart(ctx); err != nil {
+		return "", false, false, err
+	}
+	sessionID := uuid.NewString()
+	ack := make(chan struct{}, 1)
+	var ackOnce sync.Once
+	if err := c.startPromptInDir(sessionID, grokStartArgs(sessionID, prompt, workDir), workDir, nil, func(source, line string) {
+		if source == "stdout" && grokPromptAcknowledged(line) {
+			ackOnce.Do(func() { ack <- struct{}{} })
+		}
+	}); err != nil {
+		return sessionID, false, false, err
+	}
+	select {
+	case <-ack:
+		return sessionID, true, true, nil
+	case <-ctx.Done():
+		return sessionID, true, false, fmt.Errorf("Grok initial prompt was not confirmed: %w", ctx.Err())
+	}
+}
+
+func grokPromptAcknowledged(line string) bool {
+	var message struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal([]byte(line), &message) != nil {
+		return false
+	}
+	switch message.Type {
+	case "text", "thought", "tool", "tool_call", "tool_use", "end", "done", "complete":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *GrokCommander) SendPromptInDir(
 	sessionID string,
 	prompt string,
 	workDir string,
 	_ []attach.LocalFile,
 	onComplete func(),
+) error {
+	return c.startPromptInDir(sessionID, grokResumeArgs(sessionID, prompt, workDir), workDir, onComplete, nil)
+}
+
+func (c *GrokCommander) startPromptInDir(
+	sessionID string,
+	args []string,
+	workDir string,
+	onComplete func(),
+	onOutput func(source, line string),
 ) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -117,6 +187,9 @@ func (c *GrokCommander) SendPromptInDir(
 	executor := NewAgentExecutor("grok_build", sessionID)
 	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {
+		if onOutput != nil {
+			onOutput(source, line)
+		}
 		if diagnostics.suppress("grok", sessionID, source) {
 			return
 		}
@@ -142,7 +215,7 @@ func (c *GrokCommander) SendPromptInDir(
 		c.mu.Unlock()
 	}
 
-	if err := executor.StartWithDir(c.cliPath, grokResumeArgs(sessionID, prompt, workDir), nil, workDir); err != nil {
+	if err := executor.StartWithDir(c.cliPath, args, nil, workDir); err != nil {
 		delete(c.streams, sessionID)
 		return fmt.Errorf("start grok: %w", err)
 	}

@@ -30,10 +30,10 @@ Pairing trust: QR carries daemon public-key fingerprint; six-digit code alone is
 
 ## Product boundaries that affect security
 
-- The phone primarily **resumes** native threads; Codex-only `start_thread` may spawn into **currently discovered** project directories via app-server.
+- The phone primarily **resumes** native threads. Each supported agent may advertise `start_thread` only after its native starter is installed and positively probed; targets remain limited to the daemon's **currently discovered** project directories.
 - The daemon **never requires inbound** ports on the home PC.
 - Each agent’s **native local store** is authoritative for discovery and history.
-- Codex app-server is the only full-control approval path; other agents advertise honest capability flags.
+- Codex app-server is the only full-control approval path; other agents advertise honest capability flags and native start does not imply approval or steer support.
 
 ## Secrets and credentials
 

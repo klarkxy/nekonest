@@ -27,14 +27,15 @@ type ConnectionManager struct {
 
 // DaemonConn wraps a daemon's WebSocket connection with metadata.
 type DaemonConn struct {
-	Conn       *websocket.Conn
-	DeviceID   string
-	AppVersion string
-	LastPing   time.Time
-	Sessions   map[string]*protocol.AgentSession
-	generation uint64
-	closed     bool
-	mu         sync.RWMutex
+	Conn                   *websocket.Conn
+	DeviceID               string
+	AppVersion             string
+	LastPing               time.Time
+	Sessions               map[string]*protocol.AgentSession
+	AgentStartCapabilities []protocol.AgentStartCapability
+	generation             uint64
+	closed                 bool
+	mu                     sync.RWMutex
 }
 
 type phoneOutbound struct {
@@ -596,6 +597,22 @@ func (cm *ConnectionManager) UpdateSessions(deviceID string, sessions []*protoco
 	cm.UpdateSessionsFrom(dc, sessions)
 }
 
+// UpdateSessionListFrom applies a daemon session_list snapshot, including its
+// optional device-scoped thread-start capability catalog. The catalog belongs
+// to the current daemon generation just like the session cache.
+func (cm *ConnectionManager) UpdateSessionListFrom(
+	dc *DaemonConn,
+	sessions []*protocol.AgentSession,
+	capabilities []protocol.AgentStartCapability,
+) {
+	if dc == nil {
+		return
+	}
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	cm.updateSessionListFromLocked(dc, sessions, capabilities)
+}
+
 // IsLiveDaemon reports whether dc is still the registered connection for its device.
 func (cm *ConnectionManager) IsLiveDaemon(dc *DaemonConn) bool {
 	if dc == nil {
@@ -620,17 +637,16 @@ func (cm *ConnectionManager) isLiveDaemonLocked(dc *DaemonConn) bool {
 // UpdateSessionsFrom applies a session list only if dc is still the live daemon
 // connection for its device (stale reconnect frames must not overwrite the new cache).
 func (cm *ConnectionManager) UpdateSessionsFrom(dc *DaemonConn, sessions []*protocol.AgentSession) {
-	if dc == nil {
-		return
-	}
-	dc.mu.Lock()
-	defer dc.mu.Unlock()
-	cm.updateSessionsFromLocked(dc, sessions)
+	cm.UpdateSessionListFrom(dc, sessions, nil)
 }
 
-// updateSessionsFromLocked requires dc.mu and orders the cache/broadcast before
-// any replacement of this daemon generation.
-func (cm *ConnectionManager) updateSessionsFromLocked(dc *DaemonConn, sessions []*protocol.AgentSession) {
+// updateSessionListFromLocked requires dc.mu and orders the cache/broadcast
+// before any replacement of this daemon generation.
+func (cm *ConnectionManager) updateSessionListFromLocked(
+	dc *DaemonConn,
+	sessions []*protocol.AgentSession,
+	capabilities []protocol.AgentStartCapability,
+) {
 	if dc == nil || dc.closed {
 		return
 	}
@@ -650,39 +666,81 @@ func (cm *ConnectionManager) updateSessionsFromLocked(dc *DaemonConn, sessions [
 		dc.Sessions[s.ID] = s
 		clean = append(clean, s)
 	}
+	dc.AgentStartCapabilities = cleanAgentStartCapabilities(capabilities)
 
 	// Replacement waits on dc.mu, so this final broadcast is ordered before
 	// the old generation is marked closed.
 	msg := protocol.NewMessage(protocol.MsgSessionList, dc.DeviceID)
 	msg.Payload = map[string]any{"sessions": clean}
+	if dc.AgentStartCapabilities != nil {
+		msg.Payload["start_capabilities"] = dc.AgentStartCapabilities
+	}
 	cm.BroadcastToPhones(dc.DeviceID, msg)
+}
+
+func cleanAgentStartCapabilities(in []protocol.AgentStartCapability) []protocol.AgentStartCapability {
+	if in == nil {
+		return nil
+	}
+	if len(in) == 0 {
+		return []protocol.AgentStartCapability{}
+	}
+	known := map[protocol.AgentType]bool{
+		protocol.AgentClaudeCode: true,
+		protocol.AgentCodex:      true,
+		protocol.AgentKilo:       true,
+		protocol.AgentKimiCLI:    true,
+		protocol.AgentGrokBuild:  true,
+	}
+	seen := make(map[protocol.AgentType]bool, len(in))
+	clean := make([]protocol.AgentStartCapability, 0, len(in))
+	for _, capability := range in {
+		if !known[capability.AgentType] || seen[capability.AgentType] {
+			continue
+		}
+		seen[capability.AgentType] = true
+		clean = append(clean, capability)
+	}
+	return clean
 }
 
 // GetDeviceSessions returns the cached sessions for a device.
 func (cm *ConnectionManager) GetDeviceSessions(deviceID string) []*protocol.AgentSession {
+	sessions, _ := cm.GetDeviceSessionSnapshot(deviceID)
+	return sessions
+}
+
+// GetDeviceSessionSnapshot returns the sessions and thread-start capability
+// catalog from one live daemon generation. Absent catalog entries are
+// deliberately not synthesized: consumers must default them to unavailable.
+func (cm *ConnectionManager) GetDeviceSessionSnapshot(deviceID string) ([]*protocol.AgentSession, []protocol.AgentStartCapability) {
 	cm.mu.RLock()
 	dc, ok := cm.daemonConns[deviceID]
 	cm.mu.RUnlock()
 
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	dc.mu.RLock()
 	defer dc.mu.RUnlock()
 	if dc.closed {
-		return nil
+		return nil, nil
 	}
 	cm.mu.RLock()
 	cur, live := cm.daemonConns[deviceID]
 	cm.mu.RUnlock()
 	if !live || cur != dc {
-		return nil
+		return nil, nil
 	}
 
 	sessions := make([]*protocol.AgentSession, 0, len(dc.Sessions))
 	for _, s := range dc.Sessions {
 		sessions = append(sessions, s)
 	}
-	return sessions
+	var capabilities []protocol.AgentStartCapability
+	if dc.AgentStartCapabilities != nil {
+		capabilities = append([]protocol.AgentStartCapability{}, dc.AgentStartCapabilities...)
+	}
+	return sessions, capabilities
 }

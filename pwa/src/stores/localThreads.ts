@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { AgentSession } from '@/types/protocol'
+import type { AgentSession, AgentType } from '@/types/protocol'
 
 const STORAGE_KEY = 'nekonest_local_threads_v1'
 const ID_PREFIX = 'local_draft_'
@@ -8,12 +8,14 @@ const ID_PREFIX = 'local_draft_'
 export type LocalThread = {
   id: string
   deviceId: string
-  agentType: 'codex'
+  agentType: AgentType
   projectDir: string
   project: string
   summary: string
   createdAt: number
   lastActivity: number
+  /** Persisted before start_thread leaves the phone; presence is fail-closed on reload. */
+  startOperationId?: string
 }
 
 function loadAll(): LocalThread[] {
@@ -55,13 +57,18 @@ export const useLocalThreadsStore = defineStore('localThreads', () => {
     return threads.value.find(t => t.id === id)
   }
 
-  /** Create a phone-only draft Codex thread under a discovered project dir. */
-  function createCodexDraft(deviceId: string, projectDir: string, project?: string): LocalThread {
+  /** Create a phone-only draft under a daemon-discovered project directory. */
+  function createDraft(
+    deviceId: string,
+    agentType: AgentType,
+    projectDir: string,
+    project?: string
+  ): LocalThread {
     const now = Math.floor(Date.now() / 1000)
     const t: LocalThread = {
       id: `${ID_PREFIX}${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       deviceId,
-      agentType: 'codex',
+      agentType,
       projectDir,
       project: (project || folderLabel(projectDir)).trim(),
       summary: '',
@@ -71,6 +78,11 @@ export const useLocalThreadsStore = defineStore('localThreads', () => {
     threads.value = [t, ...threads.value.filter(x => x.id !== t.id)]
     persist()
     return t
+  }
+
+  /** @deprecated use createDraft with an explicit agent type. */
+  function createCodexDraft(deviceId: string, projectDir: string, project?: string): LocalThread {
+    return createDraft(deviceId, 'codex', projectDir, project)
   }
 
   function touch(id: string, summary?: string) {
@@ -83,6 +95,34 @@ export const useLocalThreadsStore = defineStore('localThreads', () => {
     copy[idx] = next
     threads.value = copy
     persist()
+  }
+
+  function bindStartOperation(id: string, operationId: string): boolean {
+    const idx = threads.value.findIndex(t => t.id === id)
+    if (idx < 0 || !operationId.trim()) return false
+    const next = [...threads.value]
+    next[idx] = { ...next[idx], startOperationId: operationId.trim(), lastActivity: Math.floor(Date.now() / 1000) }
+    try {
+      saveAll(next)
+      threads.value = next
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function clearStartOperation(id: string) {
+    const idx = threads.value.findIndex(t => t.id === id)
+    if (idx < 0) return
+    const next = [...threads.value]
+    const { startOperationId: _, ...thread } = next[idx]
+    next[idx] = thread
+    try {
+      saveAll(next)
+      threads.value = next
+    } catch {
+      // Keeping the durable binding is fail-closed; reload still forbids retry.
+    }
   }
 
   function remove(id: string) {
@@ -102,12 +142,12 @@ export const useLocalThreadsStore = defineStore('localThreads', () => {
       project_dir: t.projectDir,
       project: t.project,
       capabilities: {
-        control_mode: 'app_server' as const,
-        spawn: true,
+        control_mode: 'compatibility' as const,
+        spawn: false,
         interrupt: false,
         approve: false,
         deny: false,
-        attachment_mode: 'native_image_and_file' as const
+        attachment_mode: 'unsupported' as const
       }
     }))
   }
@@ -119,8 +159,11 @@ export const useLocalThreadsStore = defineStore('localThreads', () => {
     count,
     listForDevice,
     get,
+    createDraft,
     createCodexDraft,
     touch,
+    bindStartOperation,
+    clearStartOperation,
     remove,
     asSessions
   }

@@ -29,11 +29,11 @@ type sessionKey struct {
 }
 
 type diskState struct {
-	CatalogKeyB64   string            `json:"catalog_key_b64"`
-	CatalogEpoch    uint64            `json:"catalog_epoch"`
-	Sessions        map[string]diskSK `json:"sessions"`
-	SeqCatalog      uint64            `json:"seq_catalog"`
-	SeqSession      map[string]uint64 `json:"seq_session"`
+	CatalogKeyB64 string            `json:"catalog_key_b64"`
+	CatalogEpoch  uint64            `json:"catalog_epoch"`
+	Sessions      map[string]diskSK `json:"sessions"`
+	SeqCatalog    uint64            `json:"seq_catalog"`
+	SeqSession    map[string]uint64 `json:"seq_session"`
 }
 
 type diskSK struct {
@@ -217,6 +217,19 @@ func (m *Manager) OpenSession(sessionID string, wire *sealed.WireSealed, aad sea
 	key, _, err := m.SessionKey(sessionID)
 	if err != nil {
 		return nil, err
+	}
+	return sealed.OpenWire(key, wire, aad)
+}
+
+// OpenCatalog decrypts a device-scoped command that does not yet have a
+// native session key, such as start_thread.
+func (m *Manager) OpenCatalog(wire *sealed.WireSealed, aad sealed.AADFields) ([]byte, error) {
+	m.mu.Lock()
+	key := append([]byte(nil), m.catalogKey...)
+	epoch := m.catalogEpoch
+	m.mu.Unlock()
+	if wire == nil || wire.KeyScope != "device_catalog" || wire.Epoch != epoch {
+		return nil, fmt.Errorf("catalog key scope or epoch mismatch")
 	}
 	return sealed.OpenWire(key, wire, aad)
 }

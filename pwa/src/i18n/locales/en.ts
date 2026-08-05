@@ -146,7 +146,11 @@ export default {
     loadNetwork: 'Network issue — thread list not loaded.',
     startCodexStarting: 'Creating Codex thread…',
     startCodexFailed: 'Could not create Codex thread',
-    startCodexNeedProject: 'Missing project directory.'
+    startCodexNeedProject: 'Missing project directory.',
+    startThreadFailed: 'Could not create {agent} thread',
+    startThreadNeedProject: 'Missing project directory.',
+    startThreadUnavailable: 'This agent or project is no longer available for native thread creation.',
+    startPromptUnconfirmed: 'The native thread was created, but the first prompt was not confirmed. It remains in the composer; check native history before resending.'
   },
   threadList: {
     showArchived: 'Show archived',
@@ -174,6 +178,11 @@ export default {
     unarchiveProjectAria: 'Restore every thread in project {project}',
     newCodexTitle: 'New Codex thread in this folder',
     newCodexAria: 'New Codex thread in {project}',
+    newThreadPicker: 'New thread…',
+    newThreadPickerAria: 'Create a new thread in {project}',
+    newThreadForAgent: 'New {agent} thread',
+    newThreadUnavailable: '{agent}: unavailable — {reason}',
+    startUnavailableDefault: 'not available on this device',
     draftBadge: 'Draft',
     draftSummary: 'Unsent new thread'
   },
@@ -187,8 +196,8 @@ export default {
     draftTag: 'New',
     draftEmptyTitle: 'Phone-created thread',
     draftEmptyHint:
-      'No PC history sync for this draft. Write the first message (attachments OK) and send — then Codex creates it on the host.',
-    draftStartingTitle: 'Creating Codex thread…',
+      'No PC history sync for this draft. Write the first message (attachments OK) and send — then {agent} creates it on the host.',
+    draftStartingTitle: 'Creating {agent} thread…',
     draftStartingHint: 'First message sent. You will enter the host thread when ownership is confirmed; on failure, edit and send again.',
     draftIndeterminateTitle: 'Outcome unknown',
     draftIndeterminateHint:
@@ -288,6 +297,7 @@ export default {
     outboxPersist: 'Could not save the outbound message. Keep this page open.',
     agentError: 'The agent reported an error',
     ambiguousNoRetry: 'Outcome unclear; retry disabled to avoid duplicates',
+    sealedKeyMissing: 'Sealed device key unavailable; thread was not started',
     busyRetry: 'Agent still handling the last prompt. Retry when it finishes.',
     promptRejected: 'The agent did not accept this prompt',
     wrongDevice: 'This thread belongs to another PC. Switch nest first.',

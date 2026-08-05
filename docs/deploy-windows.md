@@ -9,7 +9,7 @@ Configuration reference: [configuration.md](./configuration.md).
 ## Prerequisites
 
 - Windows PC where you already use at least one supported agent CLI
-- Existing threads in that agent’s **native** store (phone does not create threads)
+- At least one existing native thread to seed the daemon's discovered project set; an installed/probed starter may then create threads only inside that set
 - Reachable nest URL (`https://…`) and the same `NEKONEST_BOOTSTRAP_TOKEN` as the VPS
 - Go 1.22+ if building from source
 

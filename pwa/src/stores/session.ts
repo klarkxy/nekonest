@@ -1,6 +1,14 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { AgentSession, DeliveryStatus, NekoMessage, SessionMessage } from '@/types/protocol'
+import type {
+  AgentSession,
+  AgentStartCapability,
+  AgentType,
+  DeliveryStatus,
+  NekoMessage,
+  SessionListPayload,
+  SessionMessage
+} from '@/types/protocol'
 import { nestTransportMode } from '@/types/protocol'
 import { nekoWS } from '@/api/websocket'
 import { apiFetch } from '@/api/http'
@@ -16,6 +24,8 @@ export const OUTBOX_STORAGE_KEY_PREFIX = 'nekonest_prompt_outbox:item:'
 
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref<AgentSession[]>([])
+  /** Null means an older daemon did not publish a device-level start catalog. */
+  const startCapabilities = ref<AgentStartCapability[] | null>(null)
   const currentSession = ref<AgentSession | null>(null)
   const messages = ref<SessionMessage[]>([])
   const loading = ref(false)
@@ -462,11 +472,58 @@ export const useSessionStore = defineStore('sessions', () => {
         msg.type === 'thread_failed' ||
         msg.type === 'thread_indeterminate'
       ) {
-        applyStartThreadResult(
-          msg.type,
-          (msg.payload || {}) as Record<string, unknown>,
-          msg.device_id || deviceId
-        )
+        const did = msg.device_id || deviceId
+        const applyAuthenticatedResult = (payload: Record<string, unknown> | undefined) => {
+          applyStartThreadResult(
+            msg.type,
+            {
+              ...(payload || {}),
+              operation_id: payload?.operation_id || msg.client_msg_id,
+              session_id: payload?.session_id || msg.session_id
+            },
+            did
+          )
+        }
+        const applyUnauthenticatedResult = () => {
+          applyStartThreadResult(
+            'thread_indeterminate',
+            { operation_id: msg.client_msg_id },
+            did
+          )
+        }
+        if (nestTransportMode() === 'sealed') {
+          if (!msg.sealed_payload || !msg.device_id) {
+            applyUnauthenticatedResult()
+            return
+          }
+          const sp = msg.sealed_payload
+          void decryptSealedPayload(
+            msg.device_id,
+            msg.session_id,
+            sp,
+            {
+              protocol_version: msg.protocol_version || '1.0',
+              transport_mode: 'sealed',
+              type: msg.type,
+              device_id: msg.device_id,
+              session_id: msg.session_id,
+              client_msg_id: msg.client_msg_id,
+              key_scope: sp.key_scope,
+              key_epoch: sp.epoch,
+              sender_id: sp.sender_id,
+              sequence: sp.sequence,
+              timestamp: msg.timestamp
+            }
+          ).then(plain => {
+            if (!plain || typeof plain !== 'object' || Array.isArray(plain)) {
+              applyUnauthenticatedResult()
+              return
+            }
+            applyAuthenticatedResult(plain as Record<string, unknown>)
+          })
+        } else {
+          applyAuthenticatedResult((msg.payload || {}) as Record<string, unknown>)
+        }
         return
       }
       if (msg.type === 'device_online') {
@@ -474,9 +531,7 @@ export const useSessionStore = defineStore('sessions', () => {
         // even though the phone socket stays connected. Query again on return.
         flushOutbox()
       } else if (msg.type === 'session_list' && msg.device_id === deviceId) {
-        sessions.value = ((msg.payload?.sessions as AgentSession[]) || []).filter(
-          s => !s.device_id || s.device_id === deviceId
-        )
+        applySessionList((msg.payload || {}) as SessionListPayload, deviceId)
         if (currentSession.value) {
           if (currentSession.value.device_id && currentSession.value.device_id !== deviceId) {
             currentSession.value = null
@@ -654,6 +709,16 @@ export const useSessionStore = defineStore('sessions', () => {
         }
       }
     })
+  }
+
+  function applySessionList(payload: SessionListPayload, deviceId: string) {
+    sessions.value = (payload.sessions || []).filter(
+      s => !s.device_id || s.device_id === deviceId
+    )
+    // Keep absent (legacy) distinct from an explicit empty catalog.
+    startCapabilities.value = Array.isArray(payload.start_capabilities)
+      ? payload.start_capabilities
+      : null
   }
 
   function pushInbox(deviceId: string, sessionId: string, msg: SessionMessage) {
@@ -1027,16 +1092,18 @@ export const useSessionStore = defineStore('sessions', () => {
     return ok
   }
 
-  /** Pending Codex start_thread operations keyed by operation_id. */
+  /** Pending native start_thread operations keyed by operation_id. */
   const startOps = ref<
     Record<
       string,
       {
         deviceId: string
+        agentType: AgentType
         cwd: string
         firstPrompt?: string
         status: 'starting' | 'owned' | 'failed' | 'indeterminate'
         sessionId?: string
+        promptAccepted?: boolean
         error?: string
       }
     >
@@ -1044,33 +1111,82 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function startThread(
     deviceId: string,
+    agentType: AgentType,
     cwd: string,
-    firstPrompt = ''
+    firstPrompt = '',
+    boundOperationId = ''
   ): { ok: boolean; operationId: string } {
-    const operationId = `local_start_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const operationId = boundOperationId.trim() || `local_start_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const firstPromptText = firstPrompt.trim()
     startOps.value = {
       ...startOps.value,
-      [operationId]: { deviceId, cwd, firstPrompt: firstPromptText, status: 'starting' }
+      [operationId]: {
+        deviceId, agentType, cwd, firstPrompt: firstPromptText, status: 'starting'
+      }
     }
+    const timestamp = Math.floor(Date.now() / 1000)
+    const payload = {
+      operation_id: operationId,
+      project_dir: cwd,
+      agent_type: agentType,
+      prompt: firstPrompt
+    }
+    if (nestTransportMode() === 'sealed') {
+      void (async () => {
+        let sealed: Awaited<ReturnType<typeof encryptSessionPayload>> = null
+        try {
+          sealed = await encryptSessionPayload(
+            deviceId,
+            '',
+            getPhoneId() || 'phone',
+            'start_thread',
+            payload,
+            operationId,
+            timestamp
+          )
+        } catch {
+          // No ciphertext was produced or sent; this is a definitive local failure.
+        }
+        const sent = sealed
+          ? nekoWS().send({
+              type: 'start_thread',
+              device_id: deviceId,
+              client_msg_id: operationId,
+              timestamp,
+              sealed_payload: sealed
+            })
+          : false
+        if (!sent) {
+          startOps.value = {
+            ...startOps.value,
+            [operationId]: {
+              deviceId,
+              agentType,
+              cwd,
+              firstPrompt: firstPromptText,
+              status: 'failed',
+              error: sealed ? tGlobal('errors.channelDropped') : tGlobal('errors.sealedKeyMissing')
+            }
+          }
+          lastError.value = sealed ? tGlobal('errors.channelDropped') : tGlobal('errors.sealedKeyMissing')
+        }
+      })()
+      return { ok: true, operationId }
+    }
+
     const ok = nekoWS().send({
       type: 'start_thread',
       device_id: deviceId,
       client_msg_id: operationId,
-      timestamp: Math.floor(Date.now() / 1000),
-      payload: {
-        operation_id: operationId,
-        cwd,
-        project_dir: cwd,
-        agent_type: 'codex',
-        prompt: firstPrompt
-      }
+      timestamp,
+      payload
     })
     if (!ok) {
       startOps.value = {
         ...startOps.value,
         [operationId]: {
           deviceId,
+          agentType,
           cwd,
           firstPrompt: firstPromptText,
           status: 'failed',
@@ -1094,10 +1210,18 @@ export const useSessionStore = defineStore('sessions', () => {
       // Still record if we initiated from this phone earlier this session.
       if (!prev) return
     }
-    const sessionId = String(payload?.session_id || payload?.thread_id || '').trim()
-    const error = String(payload?.error || payload?.message || '').trim()
+    const ownedSession = payload?.session as Partial<AgentSession> | undefined
+    const sessionId = String(
+      payload?.session_id || payload?.thread_id || ownedSession?.id || ''
+    ).trim()
+    const error = String(payload?.error || payload?.message || payload?.reason || '').trim()
+    const promptAccepted = payload?.prompt_accepted === true
     let status: 'starting' | 'owned' | 'failed' | 'indeterminate' = 'starting'
-    if (type === 'thread_owned') status = 'owned'
+    if (type === 'thread_owned') {
+      // Enforce the v1 invariant even when an older daemon emits an invalid
+      // owned result without both required pieces of positive evidence.
+      status = promptAccepted && sessionId ? 'owned' : 'indeterminate'
+    }
     else if (type === 'thread_failed') status = 'failed'
     else if (type === 'thread_indeterminate') status = 'indeterminate'
     else if (type === 'thread_starting') status = 'starting'
@@ -1105,16 +1229,18 @@ export const useSessionStore = defineStore('sessions', () => {
       ...startOps.value,
       [opId]: {
         deviceId,
+        agentType: prev?.agentType || String(payload?.agent_type || ownedSession?.agent_type || 'unknown'),
         cwd: prev?.cwd || String(payload?.cwd || ''),
         firstPrompt: prev?.firstPrompt,
         status,
         sessionId: sessionId || undefined,
+        promptAccepted,
         error: error || undefined
       }
     }
     // Only thread_owned may surface the first prompt as owned-thread history.
     // thread_indeterminate must not synthesize a native session bubble/inbox row.
-    if (status === 'owned' && sessionId && prev?.firstPrompt) {
+    if (status === 'owned' && promptAccepted && sessionId && prev?.firstPrompt) {
       const message: SessionMessage = {
         id: `msg_${opId}`,
         role: 'user',
@@ -1150,9 +1276,9 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   return {
-    sessions, currentSession, messages, loading, importing, streaming, lastError, wsStatus,
+    sessions, startCapabilities, currentSession, messages, loading, importing, streaming, lastError, wsStatus,
     startOps,
-    subscribeDevice, setCurrentSession, clearMessages, requestNativeHistory,
+    subscribeDevice, applySessionList, setCurrentSession, clearMessages, requestNativeHistory,
     sendPrompt, retryPrompt, approve, deny, interrupt, steer, startThread, clearStartOp,
     isPending, cleanup
   }

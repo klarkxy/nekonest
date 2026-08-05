@@ -1,6 +1,7 @@
 package agentexec
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/nekonest/daemon/internal/attach"
 )
 
@@ -57,6 +59,52 @@ func claudeResumeArgs(
 	)
 }
 
+func claudeStartArgs(sessionID, prompt string) []string {
+	return []string{
+		"--session-id", sessionID,
+		"-p", prompt,
+		"--output-format", "stream-json",
+		"--verbose",
+	}
+}
+
+// ProbeThreadStart checks the CLI surface without creating a native session.
+func (c *ClaudeCommander) ProbeThreadStart(ctx context.Context) error {
+	return probeCLIHelp(ctx, c.cliPath, "--session-id", "--output-format", "stream-json")
+}
+
+// StartThread creates a Claude-native thread using a caller-generated UUID and
+// the documented print-mode session-id path. The result must be verified in
+// ~/.claude/projects by the adapter coordinator before it is considered owned.
+func (c *ClaudeCommander) StartThread(ctx context.Context, workDir, prompt string) (string, bool, bool, error) {
+	if err := c.ProbeThreadStart(ctx); err != nil {
+		return "", false, false, err
+	}
+	sessionID := uuid.NewString()
+	ack := make(chan struct{}, 1)
+	var ackOnce sync.Once
+	if err := c.startPromptInDir(sessionID, claudeStartArgs(sessionID, prompt), workDir, nil, func(source, line string) {
+		if source == "stdout" && claudePromptAcknowledged(line) {
+			ackOnce.Do(func() { ack <- struct{}{} })
+		}
+	}); err != nil {
+		return sessionID, false, false, err
+	}
+	select {
+	case <-ack:
+		return sessionID, true, true, nil
+	case <-ctx.Done():
+		return sessionID, true, false, fmt.Errorf("Claude initial prompt was not confirmed: %w", ctx.Err())
+	}
+}
+
+func claudePromptAcknowledged(line string) bool {
+	var message struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal([]byte(line), &message) == nil && (message.Type == "assistant" || message.Type == "result")
+}
+
 // SendPrompt resumes a Claude Code session with a new prompt.
 // Uses: claude --resume <session-id> -p "<prompt>" --output-format stream-json
 // sessionID must be a real Claude session id (from Discover / JSONL basename).
@@ -77,6 +125,18 @@ func (c *ClaudeCommander) SendPromptInDir(
 	attachments []attach.LocalFile,
 	onComplete func(),
 ) error {
+	// Claude's --file expects remote Files API ids, not local paths. Grant
+	// Read access only to the materialized attachment directories instead.
+	return c.startPromptInDir(sessionID, claudeResumeArgs(sessionID, prompt, attachments), workDir, onComplete, nil)
+}
+
+func (c *ClaudeCommander) startPromptInDir(
+	sessionID string,
+	args []string,
+	workDir string,
+	onComplete func(),
+	onOutput func(source, line string),
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -90,13 +150,12 @@ func (c *ClaudeCommander) SendPromptInDir(
 		return fmt.Errorf("invalid session id %q — use a session discovered from the PC", sessionID)
 	}
 
-	// Claude's --file expects remote Files API ids, not local paths. Grant
-	// Read access only to the materialized attachment directories instead.
-	args := claudeResumeArgs(sessionID, prompt, attachments)
-
 	executor := NewAgentExecutor("claude_code", sessionID)
 	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {
+		if onOutput != nil {
+			onOutput(source, line)
+		}
 		if diagnostics.suppress("claude", sessionID, source) {
 			return
 		}

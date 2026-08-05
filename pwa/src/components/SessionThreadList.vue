@@ -91,6 +91,31 @@
         >
           {{ isProjectArchived(project) ? t('threadList.unarchive') : t('threadList.archive') }}
         </button>
+        <label
+          v-if="projectStartOptions(project).length"
+          class="project-start-picker"
+        >
+          <span class="sr-only">{{ t('threadList.newThreadPickerAria', { project: project.label }) }}</span>
+          <select
+            :aria-label="t('threadList.newThreadPickerAria', { project: project.label })"
+            :disabled="!deviceOnline"
+            @change="onNewThread(project, $event)"
+          >
+            <option value="">{{ t('threadList.newThreadPicker') }}</option>
+            <option
+              v-for="option in projectStartOptions(project)"
+              :key="option.agentType"
+              :value="option.agentType"
+              :disabled="!option.enabled"
+            >{{ option.enabled
+              ? t('threadList.newThreadForAgent', { agent: option.label })
+              : t('threadList.newThreadUnavailable', {
+                agent: option.label,
+                reason: option.reason || t('threadList.startUnavailableDefault')
+              })
+            }}</option>
+          </select>
+        </label>
       </div>
 
       <div
@@ -130,15 +155,6 @@
                 {{ prefs.isCollapsed(agentNodeKey(project.key, agent.type)) ? '▸' : '▾' }}
               </span>
             </button>
-            <button
-              v-if="canSpawnCodex(agent, project)"
-              type="button"
-              class="agent-add-btn"
-              :title="t('threadList.newCodexTitle')"
-              :aria-label="t('threadList.newCodexAria', { project: project.label })"
-              :disabled="!deviceOnline"
-              @click.stop="onNewCodex(project)"
-            >+</button>
           </div>
 
           <div
@@ -210,8 +226,9 @@ import { UNKNOWN_AGENT_META } from '@/config/agents'
 import { sessionDetailLocation } from '@/router/navigation'
 import { useSessionPrefsStore } from '@/stores/sessionPrefs'
 import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
-import type { AgentSession, AgentType } from '@/types/protocol'
+import type { AgentSession, AgentStartCapability, AgentType } from '@/types/protocol'
 import { agentLabel, sessionActivityPresentation, shortSummary } from '@/utils/agent'
+import { projectStartOptions as startOptionsForProject } from '@/utils/startCapabilities'
 import {
   buildSessionTree,
   projectKeyFromDir,
@@ -224,6 +241,8 @@ const props = defineProps<{
   sessions: AgentSession[]
   deviceId: string
   deviceOnline?: boolean
+  /** Null = legacy daemon without a device-level start catalog. */
+  startCapabilities?: AgentStartCapability[] | null
 }>()
 
 const { t } = useI18n()
@@ -283,17 +302,29 @@ const visibleProjects = computed(() => {
   return buildSessionTree(filtered, list => sortSessionsByMode(list, 'recent'))
 })
 
-function canSpawnCodex(agent: SessionTreeAgent, project: SessionTreeProject): boolean {
-  if (agent.type !== 'codex') return false
-  // Need a real project path (not 未分类 without path).
+type ProjectStartOption = { agentType: AgentType; label: string; enabled: boolean; reason?: string }
+
+function projectStartOptions(project: SessionTreeProject): ProjectStartOption[] {
+  // A new native thread may only target a path already discovered by the daemon.
   const path = (project.path || '').trim()
-  return !!path && !project.uncategorized
+  if (!path || project.uncategorized) return []
+  if (!props.sessions.some(session => projectKeyFromDir(session.project_dir) === project.key)) {
+    return []
+  }
+
+  return startOptionsForProject(project, props.startCapabilities)
+    .map(option => ({ ...option, label: agentLabel(option.agentType) }))
 }
 
-function onNewCodex(project: SessionTreeProject) {
+function onNewThread(project: SessionTreeProject, event: Event) {
+  const select = event.target as HTMLSelectElement
+  const agentType = select.value as AgentType
+  select.value = ''
   const path = (project.path || '').trim()
-  if (!path || !deviceOnline.value) return
-  const draft = localThreads.createCodexDraft(props.deviceId, path, project.label)
+  if (!path || !deviceOnline.value || !projectStartOptions(project).some(
+    option => option.agentType === agentType && option.enabled
+  )) return
+  const draft = localThreads.createDraft(props.deviceId, agentType, path, project.label)
   void router.push(sessionDetailLocation(props.deviceId, draft.id))
 }
 
@@ -470,7 +501,7 @@ function shortPath(path: string, max = 36): string {
 
 .project-header-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   background:
     radial-gradient(circle at 4% 0%, var(--neko-rose-soft), transparent 42%),
@@ -494,7 +525,23 @@ function shortPath(path: string, max = 36): string {
 }
 
 .project-archive-btn {
-  margin-right: 12px;
+  margin-right: 6px;
+}
+
+.project-start-picker select {
+  min-height: 44px;
+  max-width: 142px;
+  border: 1px solid var(--neko-border);
+  border-radius: 9px;
+  background: var(--neko-surface);
+  color: var(--neko-text);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.project-start-picker select:disabled {
+  opacity: 0.55;
 }
 
 .project-header:focus-visible,
@@ -746,6 +793,20 @@ function shortPath(path: string, max = 36): string {
 }
 
 @media (max-width: 390px) {
+  .project-header-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .project-start-picker {
+    grid-column: 1 / -1;
+    padding: 0 12px 10px;
+  }
+
+  .project-start-picker select {
+    width: 100%;
+    max-width: none;
+  }
+
   .session-status {
     padding-inline: 6px;
   }

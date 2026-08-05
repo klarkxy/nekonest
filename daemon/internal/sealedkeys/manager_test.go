@@ -56,4 +56,25 @@ func TestManagerCatalogAndSession(t *testing.T) {
 	if err != nil || string(pt) != `{"hi":1}` {
 		t.Fatalf("%q %v", pt, err)
 	}
+
+	catalogAAD := sealed.AADFields{
+		ProtocolVersion: "1.0",
+		TransportMode:   "sealed",
+		Type:            "start_thread",
+		DeviceID:        "dev",
+		ClientMsgID:     "start-1",
+		Timestamp:       2,
+	}
+	catalogWire, err := m2.SealCatalog("phone", "dev", catalogAAD, []byte(`{"prompt":"secret"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogAAD.KeyScope = "device_catalog"
+	catalogAAD.KeyEpoch = catalogWire.Epoch
+	catalogAAD.SenderID = catalogWire.SenderID
+	catalogAAD.Sequence = catalogWire.Sequence
+	catalogPlain, err := m2.OpenCatalog(catalogWire, catalogAAD)
+	if err != nil || string(catalogPlain) != `{"prompt":"secret"}` {
+		t.Fatalf("catalog open = %q, %v", catalogPlain, err)
+	}
 }

@@ -932,3 +932,103 @@ func TestFailedResubscribeCannotRouteCommandsToOldDevice(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+func TestSessionSnapshotIncludesAgentStartCapabilitiesAndRelaysStartAgent(t *testing.T) {
+	oldLimiter := wsRateLimiter
+	wsRateLimiter = newRateLimiter(100, time.Minute)
+	t.Cleanup(func() { wsRateLimiter = oldLimiter })
+
+	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	daemon := connectDaemonReady(t, server, httpServer, token)
+	if err := daemon.WriteJSON(v1Envelope(protocol.MsgSessionList, "dev1", map[string]any{
+		"sessions": []any{map[string]any{
+			"id":         "native-session",
+			"agent_type": "codex",
+			"status":     "idle",
+		}},
+		"start_capabilities": []any{
+			map[string]any{"agent_type": "codex", "available": true, "spawn": true},
+			map[string]any{"agent_type": "kimi_cli", "available": false, "spawn": false, "reason": "native start not verified"},
+			map[string]any{"agent_type": "not_a_wire_agent", "available": true, "spawn": true},
+		},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		sessions, capabilities := server.connMgr.GetDeviceSessionSnapshot("dev1")
+		if len(sessions) == 1 && len(capabilities) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("daemon session snapshot not cached: sessions=%#v capabilities=%#v", sessions, capabilities)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	header := http.Header{"Origin": []string{httpServer.URL}}
+	phone, _, err := websocket.DefaultDialer.Dial(
+		websocketURL(httpServer.URL, "/ws/phone?secret=phone-secret"),
+		header,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer phone.Close()
+	if err := phone.WriteJSON(v1Envelope(protocol.MsgSubscribe, "dev1", map[string]any{
+		"subscription_id": "catalog-test",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var ack, snapshot, deviceList protocol.NekoMessage
+	if err := phone.ReadJSON(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.ReadJSON(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.ReadJSON(&deviceList); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Type != protocol.MsgSubscribeAck || snapshot.Type != protocol.MsgSessionList || deviceList.Type != protocol.MsgDeviceList {
+		t.Fatalf("subscribe frames: ack=%#v snapshot=%#v device_list=%#v", ack, snapshot, deviceList)
+	}
+	rawSessions, _ := json.Marshal(snapshot.Payload["sessions"])
+	var sessions []*protocol.AgentSession
+	if err := json.Unmarshal(rawSessions, &sessions); err != nil {
+		t.Fatal(err)
+	}
+	rawCapabilities, _ := json.Marshal(snapshot.Payload["start_capabilities"])
+	var capabilities []protocol.AgentStartCapability
+	if err := json.Unmarshal(rawCapabilities, &capabilities); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != "native-session" || len(capabilities) != 2 ||
+		capabilities[0].AgentType != protocol.AgentCodex || !capabilities[0].Available ||
+		capabilities[1].Reason != "native start not verified" {
+		t.Fatalf("snapshot sessions=%#v capabilities=%#v", sessions, capabilities)
+	}
+
+	if err := phone.WriteJSON(&protocol.NekoMessage{
+		Type:        protocol.MsgStartThread,
+		DeviceID:    "dev1",
+		ClientMsgID: "local_start_kimi_1",
+		Payload: map[string]any{
+			"agent_type":     "kimi_cli",
+			"project_dir":    "D:/work/project",
+			"initial_prompt": "start from this draft",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = daemon.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var forwarded protocol.NekoMessage
+	if err := daemon.ReadJSON(&forwarded); err != nil {
+		t.Fatal(err)
+	}
+	if forwarded.Type != protocol.MsgStartThread || forwarded.DeviceID != "dev1" || forwarded.SessionID != "" ||
+		stringPayload(forwarded.Payload, "agent_type") != "kimi_cli" ||
+		forwarded.ClientMsgID != "local_start_kimi_1" || stringPayload(forwarded.Payload, "operation_id") != "local_start_kimi_1" {
+		t.Fatalf("forwarded start_thread=%#v", forwarded)
+	}
+}

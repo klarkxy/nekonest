@@ -25,26 +25,32 @@ Keep these product boundaries intact unless the user explicitly changes them
 - The phone primarily resumes sessions that already exist on the host from
   each agent's **native** local store.
 - Each agent's native local store is authoritative for session discovery and
-  transcript history (and for ownership after a successful Codex thread start).
+  transcript history (and for ownership after a successful agent-scoped thread
+  start).
 - The daemon initiates the connection to the server. Do not require an inbound
   connection to the home host.
 - Sessions are presented as `directory -> agent -> thread`; sessions without a
   directory belong to `未分类`.
 - **Thread creation:** do **not** reintroduce generic `create_session`,
-  nest-only / ghost threads, arbitrary filesystem browsing, or phone-side
-  creation for non-Codex agents. The **only** allowed phone-side creation path
-  (v1) is Codex-only `start_thread` via native `codex app-server`, and only
-  into directories that are in the daemon's **currently discovered** project
-  set from native sessions. Lifecycle must be
-  `thread_starting → thread_owned | thread_failed | thread_indeterminate`
-  with fail-closed journaling; never persist a permanent nest-only row.
-  Navigate the phone to the session only after `thread_owned`.
+  nest-only / ghost threads, or arbitrary filesystem browsing. Phone-side
+  creation is an **agent-scoped** `start_thread` path for any supported agent
+  whose installed/probed native starter advertises `spawn=true`. The phone first
+  opens a local-only draft; the daemon creates the native thread only when its
+  first prompt is sent. A starter may target only a directory in the daemon's
+  **current union of discovered native project directories**, never an arbitrary
+  path. Lifecycle must be `thread_starting → thread_owned | thread_failed |
+  thread_indeterminate` with fail-closed journaling; never persist a permanent
+  nest-only row. `thread_owned` requires both positive initial-prompt
+  acknowledgement and ownership in that agent's native store; otherwise report
+  `thread_indeterminate`. Navigate the phone to
+  the session only after `thread_owned`.
 - **Agent roles (v1):** Codex is the only full-control agent (send, approve/deny,
-  interrupt, steer, full image+file attachments, start_thread when app-server
-  is healthy). Claude Code, Kilo, Kimi CLI, and Grok Build are
-  compatibility-resume adapters (discover, ownership, history, send/stream,
-  interrupt, attachments per advertised capability) with no approval / start /
-  steer / queue promise unless truly implemented and advertised.
+  interrupt, steer, full image+file attachments). Claude Code, Kilo, Kimi CLI,
+  and Grok Build are compatibility-resume adapters (discover, ownership,
+  history, send/stream, interrupt, attachments per advertised capability). All
+  five may advertise agent-scoped `spawn` only after their native starter is
+  installed and probed; this does **not** imply approval, steer, queue, or any
+  other full-control capability.
 - **Transport (v1):** sealed E2E is the default for new nests; open relay is
   admin-only, one mode per nest, no automatic sealed→open downgrade.
 - **Formal host OS (v1):** Windows and Linux. macOS is later.
@@ -129,9 +135,12 @@ registry/adapter, server types, PWA type/catalog/assets, schema, tests, and
 documentation to agree.
 
 Do not reintroduce generic `create_session` or nest-only phone-created
-sessions. The sole product exception is Codex-only `start_thread` (native
-app-server, currently discovered project directories only), as specified in
-`docs/v1-product.md`. Capability flags are authoritative and default
+sessions. The sole product exception is agent-scoped `start_thread`, which
+begins as a phone-local draft and creates a native thread only with its first
+prompt. It is available only when that agent's native starter has been
+installed/probed and advertises `spawn=true`, and only for a directory in the
+daemon's current union of native-discovered project directories, as specified
+in `docs/v1-product.md`. Capability flags are authoritative and default
 false/unsupported when absent. Protocol versioning is `major.minor`: reject
 major mismatch; minor is backward compatible for unknown optional fields.
 
@@ -180,8 +189,9 @@ major mismatch; minor is backward compatible for unknown optional fields.
   agent/app-server signal. Unsupported adapters remain running/idle/error
   instead of guessing.
 - Advertise per-session capabilities honestly. Non-Codex adapters must not
-  imply approval, steer, spawn/start_thread, queue, or stronger attachment
-  tiers than implemented.
+  imply approval, steer, queue, or stronger attachment tiers than implemented;
+  `spawn/start_thread` is true only after their native starter is installed,
+  probed, and available for the selected discovered directory.
 
 ### Server security and durability
 

@@ -20,7 +20,7 @@
 NekoNest is a self-hosted bridge: the VPS handles authentication, pairing, relay, and durability; a Windows/Linux daemon dials out to the VPS and discovers threads from each agent’s **native** local store; the phone PWA shows history, sends prompts and attachments, streams output, and fully controls Codex through its native app-server.
 
 > [!IMPORTANT]
-> NekoNest primarily **resumes** threads that already exist on the host. The only phone-side creation path is Codex `start_thread`, through native app-server and only inside currently discovered project directories. Each agent’s native store remains authoritative for discovery and transcript history.
+> NekoNest primarily **resumes** threads that already exist on the host. A phone may open an agent-scoped local draft; its first prompt may create a native thread only when that agent’s starter is installed, probed, and advertises `spawn=true`, and only in the daemon’s current union of native-discovered project directories. Arbitrary paths and generic `create_session` remain forbidden. A created thread is shown as owned only after both positive first-prompt acknowledgement and ownership in that agent's authoritative native store.
 
 ## How it works
 
@@ -51,7 +51,7 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 - **Reliable resume** — independent accepted / committed / failed delivery states; transport success is not agent acceptance.
 - **History + streaming** — merge native history, server durability, and live output with stable message ids; CLI stderr stays diagnostic.
 - **Attachments** — phone upload → daemon per-run temp dir → agent-specific wiring (max 5 files, 4 MB each).
-- **Codex full control** — native app-server send/start, approve/deny, steer, interrupt, and image/file attachments; honest `exec resume` fallback when unhealthy.
+- **Codex full control** — native app-server send, approve/deny, steer, interrupt, and image/file attachments; honest `exec resume` fallback when unhealthy. All five agents may expose an agent-scoped native start only after their own starter probe succeeds.
 - **Transport negotiation** — one fixed `open` or `sealed` mode per nest; v0.2 defaults to open while sealed remains an explicit v1 preview.
 - **Mobile UX** — installable PWA, drafts, per-thread or whole-project phone-local archive, sanitized Markdown, reconnect outbox, optional Web Push.
 - **Version diagnostics** — compare the loaded PWA with the live server at page level; each machine reports its own daemon release and update state on its device card.
@@ -223,8 +223,8 @@ Details: [docs/development.md](docs/development.md).
 
 These are stable product limits, not a todo list:
 
-- Phone primarily resumes native threads; only Codex may `start_thread`, and only in currently discovered project directories.
-- Codex is the only full-control agent (send, approve/deny, interrupt, steer, native attachments, start); the other four are compatibility-resume adapters.
+- Phone primarily resumes native threads. Any supported agent may expose agent-scoped `start_thread` only after its native starter is installed/probed; the phone keeps a local draft until its first prompt creates the native thread in the daemon's current union of discovered project directories.
+- Codex is the only full-control agent (send, approve/deny, interrupt, steer, and full native attachments); the other four remain compatibility-resume adapters even when they advertise native thread start.
 - v0.2 defaults every peer to `open` transport. Sealed transport is opt-in preview; one nest has one fixed mode and never downgrades automatically.
 - Kimi CLI and Grok Build receive attachment **paths** in the prompt; reads depend on CLI permissions.
 - Web Push needs VAPID; without it, no real push is sent.

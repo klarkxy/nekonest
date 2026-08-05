@@ -105,8 +105,39 @@ Adding an agent requires adapter + registry, server types, PWA catalog/assets, s
 | Field | Notes |
 |---|---|
 | `control_mode` | `app_server` \| `exec_resume` \| `compatibility` |
-| `approve`, `deny`, `interrupt`, `steer`, `queue`, `spawn` | bool; default false |
+| `approve`, `deny`, `interrupt`, `steer`, `queue`, `spawn` | bool; default false. `spawn` may be true only for an installed/probed native starter and a permitted discovered directory; it does not imply any other control capability. |
 | `attachment_mode` | `native_image_and_file` \| `native_image` \| `path_best_effort` \| `unsupported` |
+
+### `session_list` start capability catalog
+
+`session_list.payload.start_capabilities` is an optional device-level catalog.
+Its absence disables device-level creation; during the minor-version transition,
+an older daemon may still expose Codex creation only through an explicit
+per-session `capabilities.spawn=true`. Each
+entry has `agent_type`, `available`, `spawn`, an optional display `reason`, and
+optional `control_path` / `control_version`. The PWA may offer a local draft
+only for `available=true` and `spawn=true`; it must use the daemon's current
+union of native-discovered project directories, never an arbitrary path.
+
+### Native thread-start payloads
+
+`start_thread.payload` uses `agent_type`, `operation_id`, `project_dir`, and
+`prompt`; `cwd` and `initial_prompt` remain optional legacy aliases. The
+prompt is the native thread's first prompt, not a prior phone-created session.
+In sealed mode this entire body is encrypted with the device-catalog key; the
+relay sees only routing metadata and the stable operation id. Before sending,
+the PWA durably binds the local draft to that operation id; a reload must never
+mint a replacement operation or retry an unresolved start.
+`thread_*` payloads retain `operation_id`, `session_id`, `thread_id`, `error`,
+and `message` for compatibility. In sealed mode those result payloads are also
+device-catalog encrypted; the outer state, operation id, and native session id
+remain routing metadata. Visible routing metadata is not an authenticated
+business result: a missing or invalid sealed result must resolve locally as
+`thread_indeterminate`, never as outer `thread_owned` or `thread_failed`.
+`thread_owned` is valid only after both native-store ownership and positive
+first-prompt acknowledgement are established, so its `prompt_accepted` field
+must be `true`. If either fact is missing, use `thread_indeterminate` and retain
+the first prompt in the local draft instead of navigating or synthesizing it.
 
 ### SessionMessage
 
@@ -169,7 +200,7 @@ Grouped by role. Payload shapes for critical flows are implemented in Go/TS—wh
 | `approve` / `deny` | Tool approval (Codex app-server when capable) |
 | `interrupt` | Stop running work |
 | `steer` | Mid-turn correction (Codex) |
-| `start_thread` / `thread_*` | Codex-only phone start into discovered dirs |
+| `start_thread` / `thread_*` | Agent-scoped phone-local draft, first-prompt native start into permitted discovered dirs |
 | `pair_*` / `key_package` / `phone_revoked` | Pairing and E2E key distribution |
 | `attention_event` | Generic push-driving event class (sealed-safe) |
 
@@ -204,7 +235,8 @@ Grouped by role. Payload shapes for critical flows are implemented in Go/TS—wh
 ## Explicit non-goals on the wire
 
 - **No generic phone-side `create_session`** or nest-only ghost threads.
-- The **only** allowed phone creation path is Codex-only `start_thread` via native `codex app-server`, into **currently discovered** project directories, with lifecycle `thread_starting → thread_owned | thread_failed | thread_indeterminate`.
+- The **only** allowed phone creation path is agent-scoped `start_thread`: first open a phone-local draft, then create natively with its first prompt only when the selected agent's starter is installed/probed and advertises `spawn=true`. Its directory must be in the daemon's **current union of native-discovered project directories**.
+- The lifecycle is `thread_starting → thread_owned | thread_failed | thread_indeterminate`; set `thread_owned` only after positive first-prompt acknowledgement and ownership from the selected agent's native store, otherwise report `thread_indeterminate`.
 - Do not invent permanent nest-only session rows.
 
 ## REST companion APIs

@@ -835,6 +835,38 @@ func (a *CodexAdapter) StartThread(cwd, firstPrompt string) (threadID string, er
 	return wire, nil
 }
 
+// ProbeThreadStart reports whether this adapter can create a native thread
+// right now. It deliberately requires the app-server handshake rather than
+// merely finding a codex executable: start_thread is not safe on the degraded
+// exec-resume path.
+func (a *CodexAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapability {
+	select {
+	case <-ctx.Done():
+		return ThreadStartCapability{Reason: ctx.Err().Error()}
+	default:
+	}
+	if a.appServer == nil || !a.AppServerHealthy() {
+		return ThreadStartCapability{Reason: "codex app-server unavailable"}
+	}
+	return ThreadStartCapability{Available: true}
+}
+
+// StartNativeThread starts the native Codex app-server path without treating a
+// returned identifier as ownership. The daemon coordinator is responsible for
+// the mandatory positive native-store ownership check.
+func (a *CodexAdapter) StartNativeThread(ctx context.Context, request ThreadStartRequest) (ThreadStartResult, error) {
+	if a.appServer == nil || !a.AppServerHealthy() {
+		return ThreadStartResult{}, fmt.Errorf("codex app-server unavailable for start_thread")
+	}
+	// Once the RPC begins, a timeout or malformed reply cannot prove that no
+	// native thread was created. Fail closed by marking the attempt as started.
+	result := ThreadStartResult{Created: true}
+	started, err := a.appServer.StartThread(ctx, request.ProjectDir, request.Prompt)
+	result.SessionID = started.WireID()
+	result.PromptAccepted = strings.TrimSpace(request.Prompt) == "" || (started.TurnID != "" && err == nil)
+	return result, err
+}
+
 // --- Codex-specific helpers ---
 
 func extractCodexContent(msg map[string]interface{}) string {
@@ -870,6 +902,7 @@ func extractCodexContent(msg map[string]interface{}) string {
 // ensure CodexAdapter implements ClosableAdapter
 var _ ClosableAdapter = (*CodexAdapter)(nil)
 var _ OutputAdapter = (*CodexAdapter)(nil)
+var _ NativeThreadStarter = (*CodexAdapter)(nil)
 
 // GetCommander returns the underlying CodexCommander for direct access.
 func (a *CodexAdapter) GetCommander() *agentexec.CodexCommander {

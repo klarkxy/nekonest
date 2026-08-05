@@ -126,7 +126,7 @@ pnpm test:visual:update
 pnpm test:visual:report
 ```
 
-Golden screenshots live beside `e2e/visual/visual.spec.ts`; `test-results/` and `playwright-report/` are local artifacts and are ignored. The primary matrix is `390×844`, Simplified Chinese, and light theme. Narrow mobile, desktop, dark-theme, and English samples protect responsive and overflow behavior. A visual run also checks expected page state, console/page errors, horizontal overflow, primary touch targets, delivery states, and the first Codex `start_thread` prompt handoff.
+Golden screenshots live beside `e2e/visual/visual.spec.ts`; `test-results/` and `playwright-report/` are local artifacts and are ignored. The primary matrix is `390×844`, Simplified Chinese, and light theme. Narrow mobile, desktop, dark-theme, and English samples protect responsive and overflow behavior. A visual run also checks expected page state, console/page errors, horizontal overflow, primary touch targets, delivery states, and the agent-scoped first-prompt `start_thread` handoff.
 
 For a read-only screenshot smoke against an already running local PWA/server/daemon stack, provide the base URL and optional device/session identifiers. Supply either a phone token or admin secret without writing it to a file:
 

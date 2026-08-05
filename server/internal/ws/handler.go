@@ -258,7 +258,23 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 			}
 			sess.DeviceID = dc.DeviceID
 		}
-		s.connMgr.updateSessionsFromLocked(dc, sessions)
+		var startCapabilities []protocol.AgentStartCapability
+		capabilityData, exists := msg.Payload["start_capabilities"]
+		if !exists {
+			// Temporary input compatibility; all outgoing snapshots use the canonical key.
+			capabilityData, exists = msg.Payload["agent_start_capabilities"]
+		}
+		if exists {
+			raw, _ := json.Marshal(capabilityData)
+			if err := json.Unmarshal(raw, &startCapabilities); err != nil {
+				// A malformed or unknown catalog must fail closed as unavailable.
+				startCapabilities = []protocol.AgentStartCapability{}
+			} else if startCapabilities == nil {
+				// A present null catalog is malformed, not a legacy omission.
+				startCapabilities = []protocol.AgentStartCapability{}
+			}
+		}
+		s.connMgr.updateSessionListFromLocked(dc, sessions, startCapabilities)
 
 		// Also persist to database for offline querying
 		n := 0
@@ -650,12 +666,15 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 
 // pushPhoneSnapshot sends session_list + device_list for the subscribed device.
 func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
-	sessions := s.connMgr.GetDeviceSessions(deviceID)
+	sessions, startCapabilities := s.connMgr.GetDeviceSessionSnapshot(deviceID)
 	if sessions == nil {
 		sessions = []*protocol.AgentSession{}
 	}
 	sessionMsg := protocol.NewMessage(protocol.MsgSessionList, deviceID)
 	sessionMsg.Payload = map[string]any{"sessions": sessions}
+	if startCapabilities != nil {
+		sessionMsg.Payload["start_capabilities"] = startCapabilities
+	}
 	s.connMgr.SafeWritePhone(conn, sessionMsg)
 
 	devices, _ := s.db.ListDevices()
@@ -1040,12 +1059,18 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 		}
 
 	case protocol.MsgStartThread:
-		// Codex-only spawn into discovered project dirs (daemon enforces policy).
+		// The daemon validates the selected agent's capability catalog and
+		// discovered project policy. The server only relays the requested
+		// agent_type; it never creates a session row.
 		msg.DeviceID = deviceID
-		if msg.Payload == nil {
-			msg.Payload = map[string]any{}
+		sealedStart := msg.SealedPayload != nil
+		opID := ""
+		if !sealedStart {
+			if msg.Payload == nil {
+				msg.Payload = map[string]any{}
+			}
+			opID = stringPayload(msg.Payload, "operation_id")
 		}
-		opID := stringPayload(msg.Payload, "operation_id")
 		if opID == "" {
 			opID = sanitizeClientMsgID(msg.ClientMsgID)
 		}
@@ -1054,14 +1079,24 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 				opID = "local_start_" + id
 			}
 		}
-		msg.Payload["operation_id"] = opID
+		if !sealedStart {
+			msg.Payload["operation_id"] = opID
+		}
 		msg.ClientMsgID = opID
 		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
-			fail := s.stampEnvelope(protocol.NewMessage(protocol.MsgThreadFailed, deviceID))
+			resultType, resultText := threadStartRelayFailure(err)
+			fail := s.stampEnvelope(protocol.NewMessage(resultType, deviceID))
 			fail.Payload = map[string]any{
 				"operation_id": opID,
-				"error":        "device offline",
-				"message":      "device offline",
+				"state":        string(resultType),
+				"error":        resultText,
+				"message":      resultText,
+				"reason":       resultText,
+			}
+			if !sealedStart {
+				if agentType := stringPayload(msg.Payload, "agent_type"); agentType != "" {
+					fail.Payload["agent_type"] = agentType
+				}
 			}
 			s.connMgr.BroadcastToPhones(deviceID, fail)
 		}
@@ -1069,6 +1104,15 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 	default:
 		log.Printf("[ws] unexpected message type from phone: %s", msg.Type)
 	}
+}
+
+func threadStartRelayFailure(err error) (protocol.MessageType, string) {
+	if errors.Is(err, ErrDeviceOffline) {
+		return protocol.MsgThreadFailed, "device offline"
+	}
+	// A WebSocket write error cannot prove that the daemon did not receive the
+	// complete frame. Preserve the durable phone binding and forbid retry.
+	return protocol.MsgThreadIndeterminate, "thread start delivery outcome is indeterminate; automatic retry is disabled"
 }
 
 func historyLimit(payload map[string]any) int {

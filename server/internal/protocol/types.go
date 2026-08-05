@@ -159,6 +159,25 @@ const (
 	AgentGrokBuild  AgentType = "grok_build"
 )
 
+// AgentStartCapability is a device-scoped native thread-creation capability.
+// A missing entry, an unknown agent, or Available=false must be treated as
+// unavailable by consumers.
+type AgentStartCapability struct {
+	AgentType      AgentType `json:"agent_type"`
+	Available      bool      `json:"available"`
+	Spawn          bool      `json:"spawn"`
+	Reason         string    `json:"reason,omitempty"`
+	ControlPath    string    `json:"control_path,omitempty"`
+	ControlVersion string    `json:"control_version,omitempty"`
+}
+
+// SessionListPayload is the optional structured payload for session_list.
+// A missing StartCapabilities catalog means phone-side creation is unsupported.
+type SessionListPayload struct {
+	Sessions          []AgentSession         `json:"sessions,omitempty"`
+	StartCapabilities []AgentStartCapability `json:"start_capabilities,omitempty"`
+}
+
 // SessionCapabilities advertises per-session control surface.
 // Absent / zero values mean unsupported (false).
 type SessionCapabilities struct {
@@ -213,6 +232,54 @@ type PendingApproval struct {
 	ToolName    string         `json:"tool_name"`
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+// AttachmentRef identifies a phone-uploaded attachment for a first prompt.
+type AttachmentRef struct {
+	ID   string `json:"id,omitempty"`
+	URL  string `json:"url"`
+	Name string `json:"name,omitempty"`
+	MIME string `json:"mime,omitempty"`
+	Size int64  `json:"size,omitempty"`
+	Key  string `json:"key,omitempty"`
+}
+
+// StartThreadPayload creates a native agent thread from a phone-local draft.
+// Prompt and ProjectDir are canonical; CWD and InitialPrompt are legacy
+// aliases accepted by receivers during the minor-version transition.
+type StartThreadPayload struct {
+	AgentType     AgentType       `json:"agent_type"`
+	OperationID   string          `json:"operation_id"`
+	ProjectDir    string          `json:"project_dir"`
+	CWD           string          `json:"cwd,omitempty"`
+	Prompt        string          `json:"prompt"`
+	InitialPrompt string          `json:"initial_prompt,omitempty"`
+	Attachments   []AttachmentRef `json:"attachments,omitempty"`
+}
+
+// ThreadStartState is the fail-closed native thread-start lifecycle.
+type ThreadStartState string
+
+const (
+	ThreadStartStarting      ThreadStartState = "thread_starting"
+	ThreadStartOwned         ThreadStartState = "thread_owned"
+	ThreadStartFailed        ThreadStartState = "thread_failed"
+	ThreadStartIndeterminate ThreadStartState = "thread_indeterminate"
+)
+
+// ThreadStartResult is the structured payload for thread_* lifecycle messages.
+// ThreadOwned is only emitted after positive native-store ownership.
+type ThreadStartResult struct {
+	AgentType      AgentType        `json:"agent_type"`
+	OperationID    string           `json:"operation_id"`
+	State          ThreadStartState `json:"state"`
+	Session        *AgentSession    `json:"session,omitempty"`
+	SessionID      string           `json:"session_id,omitempty"`
+	ThreadID       string           `json:"thread_id,omitempty"`
+	PromptAccepted bool             `json:"prompt_accepted,omitempty"`
+	Reason         string           `json:"reason,omitempty"`
+	Error          string           `json:"error,omitempty"`
+	Message        string           `json:"message,omitempty"`
 }
 
 // SessionMessage represents a message in an agent conversation.

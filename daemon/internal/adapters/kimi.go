@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"bufio"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -68,6 +69,24 @@ func (a *KimiCLIAdapter) Name() string { return string(AgentKimiCLI) }
 
 func (a *KimiCLIAdapter) IsAvailable() bool {
 	return a.commander != nil && a.commander.IsAvailable()
+}
+
+func (a *KimiCLIAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapability {
+	if a.commander == nil {
+		return ThreadStartCapability{Reason: "Kimi commander is unavailable"}
+	}
+	if err := a.commander.ProbeThreadStart(ctx); err != nil {
+		return ThreadStartCapability{Reason: err.Error()}
+	}
+	return ThreadStartCapability{Available: true}
+}
+
+func (a *KimiCLIAdapter) StartNativeThread(ctx context.Context, request ThreadStartRequest) (ThreadStartResult, error) {
+	if a.commander == nil {
+		return ThreadStartResult{}, fmt.Errorf("Kimi commander is unavailable")
+	}
+	nativeID, created, promptAccepted, err := a.commander.StartThread(ctx, request.ProjectDir, request.Prompt)
+	return ThreadStartResult{SessionID: publicSessionID(AgentKimiCLI, nativeID), Created: created, PromptAccepted: promptAccepted}, err
 }
 
 func (a *KimiCLIAdapter) Close() error {
@@ -854,3 +873,4 @@ func uniquePaths(paths ...string) []string {
 
 var _ ClosableAdapter = (*KimiCLIAdapter)(nil)
 var _ OutputAdapter = (*KimiCLIAdapter)(nil)
+var _ NativeThreadStarter = (*KimiCLIAdapter)(nil)

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -207,6 +208,38 @@ func TestSupportedAgentTypes(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("agent[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestAgentStartCapabilityAndThreadStartPayloadJSON(t *testing.T) {
+	catalog := SessionListPayload{StartCapabilities: []AgentStartCapability{{
+		AgentType:      AgentKimiCLI,
+		Available:      true,
+		Spawn:          true,
+		ControlPath:    "acp",
+		ControlVersion: "1",
+	}}}
+	b, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"start_capabilities"`) || !strings.Contains(string(b), `"spawn":true`) {
+		t.Fatalf("catalog JSON=%s", b)
+	}
+	var out SessionListPayload
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.StartCapabilities) != 1 || out.StartCapabilities[0].AgentType != AgentKimiCLI || !out.StartCapabilities[0].Spawn {
+		t.Fatalf("catalog=%#v", out)
+	}
+
+	start := StartThreadPayload{AgentType: AgentKimiCLI, OperationID: "op-1", ProjectDir: "D:/project", Prompt: "hello"}
+	result := ThreadStartResult{AgentType: AgentKimiCLI, OperationID: "op-1", State: ThreadStartIndeterminate, SessionID: "native-1", ThreadID: "thread-1", Error: "ownership pending", Message: "try discovery later"}
+	for _, value := range []any{start, result} {
+		if _, err := json.Marshal(value); err != nil {
+			t.Fatalf("marshal %T: %v", value, err)
 		}
 	}
 }

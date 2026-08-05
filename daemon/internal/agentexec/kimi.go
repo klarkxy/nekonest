@@ -21,6 +21,10 @@ type KimiCommander struct {
 	mu        sync.Mutex
 	cliPath   string
 	executors map[string]*AgentExecutor
+	acpRuns   map[string]*ACPProcess
+	acpChunks map[string]map[string]string // sessionID -> messageID -> cumulative content
+	acpIDs    map[string]string            // sessionID -> fallback messageID for an ID-less first turn
+	nextACP   uint64
 	sequences map[string]uint64
 	runIDs    map[string]string
 	nextRun   uint64
@@ -36,9 +40,76 @@ func NewKimiCommander() *KimiCommander {
 	return &KimiCommander{
 		cliPath:   findKimiCLI(),
 		executors: make(map[string]*AgentExecutor),
+		acpRuns:   make(map[string]*ACPProcess),
+		acpChunks: make(map[string]map[string]string),
+		acpIDs:    make(map[string]string),
 		sequences: make(map[string]uint64),
 		runIDs:    make(map[string]string),
 	}
+}
+
+// ProbeThreadStart verifies Kimi's ACP endpoint without creating a session.
+func (c *KimiCommander) ProbeThreadStart(ctx context.Context) error {
+	if !c.IsAvailable() {
+		return fmt.Errorf("kimi CLI not found")
+	}
+	if err := probeCLIHelp(ctx, c.cliPath, "acp"); err != nil {
+		return err
+	}
+	return ProbeACPStart(ctx, c.cliPath, []string{"acp"}, "")
+}
+
+// StartThread creates a Kimi-native session with ACP. The ACP ID is native;
+// callers must namespace it at the adapter boundary and confirm store ownership.
+func (c *KimiCommander) StartThread(ctx context.Context, workDir, prompt string) (string, bool, bool, error) {
+	if err := c.ProbeThreadStart(ctx); err != nil {
+		return "", false, false, err
+	}
+	var stateMu sync.Mutex
+	var createdID string
+	exited := false
+	started, err := StartACPThread(ctx, ACPStartOptions{
+		Command: c.cliPath,
+		Args:    []string{"acp"},
+		Dir:     workDir,
+		OnSessionCreated: func(sessionID string) {
+			c.beginACPStream(sessionID)
+			stateMu.Lock()
+			createdID = sessionID
+			stateMu.Unlock()
+		},
+		OnUpdate: func(sessionID string, update map[string]any) {
+			c.handleACPUpdate(sessionID, update)
+		},
+		OnPromptResult: func(sessionID string, promptErr error) {
+			if promptErr != nil {
+				c.emit(sessionID, "error", promptErr.Error(), fmt.Sprintf("kimi_acp_prompt_error_%d", time.Now().UnixNano()))
+			}
+		},
+		OnExit: func(exitCode int) {
+			stateMu.Lock()
+			exited = true
+			id := createdID
+			stateMu.Unlock()
+			c.mu.Lock()
+			delete(c.acpRuns, id)
+			delete(c.acpChunks, id)
+			delete(c.acpIDs, id)
+			c.mu.Unlock()
+			_ = exitCode
+		},
+	})
+	if err != nil {
+		return started.SessionID, started.NativeCreatePossible, started.PromptAccepted, err
+	}
+	stateMu.Lock()
+	if !exited {
+		c.mu.Lock()
+		c.acpRuns[started.SessionID] = started.Process
+		c.mu.Unlock()
+	}
+	stateMu.Unlock()
+	return started.SessionID, started.NativeCreatePossible, started.PromptAccepted, nil
 }
 
 func findKimiCLI() string {
@@ -273,6 +344,41 @@ func (c *KimiCommander) parseAndForwardOutput(sessionID, line string) {
 	}
 }
 
+func (c *KimiCommander) handleACPUpdate(sessionID string, update map[string]any) {
+	if updateType, _ := update["sessionUpdate"].(string); updateType != "agent_message_chunk" {
+		return
+	}
+	content, _ := update["content"].(map[string]any)
+	text, _ := content["text"].(string)
+	messageID, _ := update["messageId"].(string)
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	c.mu.Lock()
+	if messageID == "" {
+		messageID = c.acpIDs[sessionID]
+		if messageID == "" {
+			c.nextACP++
+			messageID = fmt.Sprintf("kimi_acp_%s_%d", sessionID, c.nextACP)
+			c.acpIDs[sessionID] = messageID
+		}
+	}
+	if c.acpChunks[sessionID] == nil {
+		c.acpChunks[sessionID] = make(map[string]string)
+	}
+	c.acpChunks[sessionID][messageID] += text
+	cumulative := c.acpChunks[sessionID][messageID]
+	c.mu.Unlock()
+	c.emit(sessionID, "assistant", cumulative, messageID)
+}
+
+func (c *KimiCommander) beginACPStream(sessionID string) {
+	c.mu.Lock()
+	c.acpChunks[sessionID] = make(map[string]string)
+	delete(c.acpIDs, sessionID)
+	c.mu.Unlock()
+}
+
 func (c *KimiCommander) emit(sessionID, msgType, content, msgID string) {
 	content = strings.TrimSpace(content)
 	if content == "" || c.OnAgentOutput == nil {
@@ -349,11 +455,18 @@ func (c *KimiCommander) Deny(sessionID, approvalID string) error {
 func (c *KimiCommander) Interrupt(sessionID string) error {
 	c.mu.Lock()
 	executor, ok := c.executors[sessionID]
+	acp := c.acpRuns[sessionID]
 	c.mu.Unlock()
+	if ok {
+		return executor.Interrupt()
+	}
+	if acp != nil {
+		return acp.Cancel()
+	}
 	if !ok {
 		return fmt.Errorf("no running executor for session %s", sessionID)
 	}
-	return executor.Interrupt()
+	return nil
 }
 
 func (c *KimiCommander) StopAll() {
@@ -363,10 +476,20 @@ func (c *KimiCommander) StopAll() {
 		list = append(list, executor)
 	}
 	c.executors = make(map[string]*AgentExecutor)
+	acpList := make([]*ACPProcess, 0, len(c.acpRuns))
+	for _, process := range c.acpRuns {
+		acpList = append(acpList, process)
+	}
+	c.acpRuns = make(map[string]*ACPProcess)
+	c.acpChunks = make(map[string]map[string]string)
+	c.acpIDs = make(map[string]string)
 	c.sequences = make(map[string]uint64)
 	c.runIDs = make(map[string]string)
 	c.mu.Unlock()
 	for _, executor := range list {
 		_ = executor.Stop()
+	}
+	for _, process := range acpList {
+		_ = process.Stop()
 	}
 }
