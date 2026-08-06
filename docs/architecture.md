@@ -45,6 +45,9 @@ directory (project path)  →  agent type  →  thread (native session id)
 - Empty agent groups under a directory are omitted.
 - Wire agent IDs: `claude_code`, `codex`, `kilo`, `kimi_cli`, `grok_build`.
 
+Per-harness **live** capability matrix (control flags, attachments, start probes, live vs v1):
+[agent-capability-matrix.md](./agent-capability-matrix.md).
+
 ## Discovery and ownership
 
 1. Daemon periodically **Discovers** sessions from each registered adapter.
@@ -150,6 +153,7 @@ Go module paths are `github.com/nekonest/server` and `github.com/nekonest/daemon
 
 ## Related docs
 
+- [Agent capability matrix](./agent-capability-matrix.md)
 - [Protocol overview](./protocol.md)
 - [Security model](./security.md)
 - [Configuration](./configuration.md)

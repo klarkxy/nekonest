@@ -99,6 +99,8 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 | `approve`、`deny`、`interrupt`、`steer`、`queue`、`spawn` | 布尔值；缺省为 false。只有已安装并探测通过的原生 starter、且目录获准时 `spawn` 才可为 true；它不代表任何其他控制能力。 |
 | `attachment_mode` | `native_image_and_file` \| `native_image` \| `path_best_effort` \| `unsupported` |
 
+各 harness 现行盖章值：[agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)。
+
 ### `session_list` 开线程能力目录
 
 `session_list.payload.start_capabilities` 是可选的设备级目录。缺省时禁用设备级新建；在 minor 版本迁移期间，旧 daemon 仅可通过会话中明确的 `capabilities.spawn=true` 保留 Codex 新建入口。每项含 `agent_type`、`available`、`spawn`，以及可选的展示 `reason`、`control_path` / `control_version`。仅当 `available=true` 且 `spawn=true` 时，PWA 才可提供本地草稿；目录必须来自 daemon 当前原生发现项目目录的并集，绝不可输入任意路径。

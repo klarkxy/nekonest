@@ -131,3 +131,7 @@ Self-hosters sometimes add path/process exclusions (see [deploy-windows.md](./de
 4. For contributors, trace PWA → server → daemon → adapter end-to-end ([architecture.md](./architecture.md)).
 
 Never paste device tokens, phone secrets, or bootstrap tokens into public issues.
+
+## Related
+
+- [Agent capability matrix](./agent-capability-matrix.md)

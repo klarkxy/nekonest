@@ -70,7 +70,7 @@ Local baseline used in development: **codex-cli 0.144.1** with `codex app-server
 
 - Sealed default is the **product target**; operators may run open until sealed e2e is signed off  
 - Codex app-server JSON-RPC method names vary by CLI version — doctor/probe may show available while a specific method alias fails  
-- Non-Codex agents: compatibility resume only (no approval/start/steer promise)  
+- Non-Codex agents: compatibility resume only (no approval/steer/queue promise; `start_thread` only when `start_capabilities.spawn=true`) — see [agent-capability-matrix.md](./agent-capability-matrix.md)
 - Max 5 attachments, 4 MB each (open path)  
 - Web Push needs VAPID; sealed push bodies stay generic  
 - Formal hosts: Windows + Linux; macOS later  

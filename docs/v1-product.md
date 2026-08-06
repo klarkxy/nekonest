@@ -202,6 +202,8 @@ Priority tags:
 
 Wire ids remain stable; adding an agent is a full-stack change (schema, server, daemon, PWA, tests, docs).
 
+Detailed **live** vs target cards for each harness: [agent-capability-matrix.md](./agent-capability-matrix.md). This §7.3 remains the frozen v1 release bar.
+
 #### 7.3.1 Full-control agent (MUST)
 
 | Wire id | Product | Role | Guarantees |

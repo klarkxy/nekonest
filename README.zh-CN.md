@@ -62,13 +62,15 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 |---|---|---|---|
 | Claude Code | `~/.claude/projects` | `claude --resume` 兼容续写 | 授权本次临时目录，并在提示词中提供本地路径 |
 | Codex | `~/.codex/sessions` | 通过 `codex app-server` **全控制**；`exec resume` 降级 | app-server 健康时原生图片与文件 |
-| Kilo | Kilo / OpenCode 本地数据库 | `kilo run --session` 兼容续写 | 使用原生 `--file` 参数 |
+| Kilo | Kilo / OpenCode 本地数据库 | `kilo run --session` 兼容续写 | 原生 `--file`（广告为 `path_best_effort`） |
 | Kimi CLI | `.kimi-code`，兼容 `.kimi` 旧布局 | `kimi --session` 兼容续写 | 在提示词中提供本地路径，能否读取取决于 CLI 文件权限 |
 | Grok Build | `~/.grok/sessions` | `grok --resume` 兼容续写 | 在提示词中提供本地路径；非交互安全模式 |
 
 未安装某个 CLI，或本机没有该智能体的有效主线程时，不会影响其他智能体。
 
 线协议标识：`claude_code`、`codex`、`kilo`、`kimi_cli`、`grok_build`。
+
+**完整分 harness 能力矩阵**（现行标志、建线探测、附件接线、现行 vs v1）：[docs/agent-capability-matrix.zh-CN.md](docs/agent-capability-matrix.zh-CN.md) · [English](docs/agent-capability-matrix.md)。
 
 ## 快速开始
 

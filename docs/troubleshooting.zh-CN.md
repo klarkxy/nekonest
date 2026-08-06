@@ -131,3 +131,7 @@ Daemon 启动后，手机列表应在短重连窗口内变为 online。
 4. 贡献者按 PWA → server → daemon → 适配器端到端追踪（[architecture.zh-CN.md](./architecture.zh-CN.md)）。  
 
 切勿把设备令牌、手机密钥或 bootstrap 粘贴到公开 issue。
+
+## 相关文档
+
+- [智能体能力矩阵](./agent-capability-matrix.zh-CN.md)

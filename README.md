@@ -63,13 +63,15 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 |---|---|---|---|
 | Claude Code | `~/.claude/projects` | Compatibility resume via `claude --resume` | Authorize run temp dir; paths in prompt |
 | Codex | `~/.codex/sessions` | **Full control** via `codex app-server`; `exec resume` fallback | Native images and files when app-server is healthy |
-| Kilo | Kilo / OpenCode local DB | Compatibility resume via `kilo run --session` | Native `--file` |
+| Kilo | Kilo / OpenCode local DB | Compatibility resume via `kilo run --session` | Native `--file` (advertised `path_best_effort`) |
 | Kimi CLI | `.kimi-code` (legacy `.kimi`) | Compatibility resume via `kimi --session` | Paths in prompt; CLI file permissions apply |
 | Grok Build | `~/.grok/sessions` | Compatibility resume via `grok --resume` | Paths in prompt; non-interactive safe mode |
 
 A missing CLI or empty store for one agent does not disable the others.
 
 Wire ids: `claude_code`, `codex`, `kilo`, `kimi_cli`, `grok_build`.
+
+**Full per-harness matrix** (live flags, start probes, attachment wiring, live vs v1): [docs/agent-capability-matrix.md](docs/agent-capability-matrix.md) · [中文](docs/agent-capability-matrix.zh-CN.md).
 
 ## Quick start
 

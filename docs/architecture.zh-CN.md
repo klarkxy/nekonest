@@ -45,6 +45,9 @@ NekoNest 三个运行时如何协作，使手机能够续写编码智能体线�
 - 某目录下无某类智能体线程时不显示该分组。
 - 线协议 agent id：`claude_code`、`codex`、`kilo`、`kimi_cli`、`grok_build`。
 
+分 harness **现行**能力矩阵（控制标志、附件、建线探测、现行 vs v1）：
+[agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)。
+
 ## 发现与所有权
 
 1. Daemon 周期性对各已注册适配器做 **Discover**。
@@ -150,6 +153,7 @@ Go module 路径为 `github.com/nekonest/server` 与 `github.com/nekonest/daemon
 
 ## 相关文档
 
+- [智能体能力矩阵](./agent-capability-matrix.zh-CN.md)
 - [协议概览](./protocol.zh-CN.md)
 - [安全模型](./security.zh-CN.md)
 - [配置](./configuration.zh-CN.md)

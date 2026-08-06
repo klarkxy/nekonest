@@ -108,6 +108,8 @@ Adding an agent requires adapter + registry, server types, PWA catalog/assets, s
 | `approve`, `deny`, `interrupt`, `steer`, `queue`, `spawn` | bool; default false. `spawn` may be true only for an installed/probed native starter and a permitted discovered directory; it does not imply any other control capability. |
 | `attachment_mode` | `native_image_and_file` \| `native_image` \| `path_best_effort` \| `unsupported` |
 
+Live values per harness (what the daemon actually stamps today): [agent-capability-matrix.md](./agent-capability-matrix.md).
+
 ### `session_list` start capability catalog
 
 `session_list.payload.start_capabilities` is an optional device-level catalog.

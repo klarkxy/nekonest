@@ -173,6 +173,10 @@ major mismatch; minor is backward compatible for unknown optional fields.
 
 ### Agent adapters
 
+Live per-harness capability matrix (control flags, attachments, start probes):
+`docs/agent-capability-matrix.md` (+ `.zh-CN.md`). Prefer advertised
+`session.capabilities` / `start_capabilities` over README short tables when debugging.
+
 - Route a session only after positive ownership against that adapter's native
   store. An empty transcript is not proof of ownership.
 - Exclude subagents, sidechains, primers, and synthetic/system-only records

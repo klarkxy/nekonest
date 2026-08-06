@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Document a per-harness live capability matrix for Claude Code, Codex, Kilo, Kimi CLI, and Grok Build.
 - Add capability-gated native thread creation for Claude Code, Codex, Kilo,
   Kimi CLI, and Grok Build in directories discovered from native sessions.
 

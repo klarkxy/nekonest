@@ -69,7 +69,7 @@
 
 - 密封默认是**产品目标**；验收前可用 open  
 - Codex app-server 方法名随 CLI 版本变化 — doctor 显示可用时个别 method 仍可能失败  
-- 非 Codex：仅兼容续接（不承诺审批/开线程/steer）  
+- 非 Codex：仅兼容续接（不承诺审批/steer/队列；仅当 `start_capabilities.spawn=true` 时可 `start_thread`）— 见 [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)
 - 附件上限 5 个、各 4 MB（开放路径）  
 - Web Push 需 VAPID；密封推送正文保持通用  
 - 正式主机：Windows + Linux；macOS 更后  

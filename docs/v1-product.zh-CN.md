@@ -200,6 +200,8 @@ v1.0.0 = **单人运维自托管窝**可日常在路上使用的功能完备版�
 
 Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemon、PWA、测试、文档）。
 
+各 harness **现行**与目标对照卡片：[agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)。本节 §7.3 仍是冻结的 v1 发版门槛。
+
 #### 7.3.1 全控制 agent（MUST）
 
 | Wire id | 产品 | 角色 | 保证 |
