@@ -4,7 +4,7 @@
 
 Maintainer note: production brand and agent assets already ship under `pwa/public`. Rebuild only when replacing source art.
 
-The production mascot and agent portraits are original `gpt-image-2` outputs generated through a user-approved DragTokens image endpoint (2026-07-28). **No API key is stored in this repository.**
+The production mascot and agent portraits are original hard-cel anime catgirl assets. The current shipped set was regenerated with Grok CLI Imagine (`image_edit`, 2026-08-06) against the established NekoNest house style. Earlier gpt-image-2/DragTokens sources remain historical only. **No API key is stored in this repository.**
 
 ## Art direction
 

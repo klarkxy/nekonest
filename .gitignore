@@ -50,3 +50,6 @@ Thumbs.db
 _archive/
 
 .pnpm-store/
+
+# Local brand generation workspace (source PNGs / grok run logs)
+.brand-src/
