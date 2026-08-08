@@ -9,7 +9,8 @@ export default async function globalSetup() {
       configFile: 'vite.config.ts',
       server: {
         host: '127.0.0.1',
-        port: 5173,
+        // Windows has reserved the default Vite 5173 range on this host.
+        port: 4173,
         strictPort: true
       }
     })

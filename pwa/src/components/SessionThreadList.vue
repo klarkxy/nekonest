@@ -1,7 +1,17 @@
 <template>
   <div class="thread-list">
     <div class="list-controls">
-      <div class="list-controls-row">
+      <label class="control-field control-field--search">
+        <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
+        <input
+          v-model="searchQuery"
+          type="search"
+          class="control-input"
+          :placeholder="t('threadList.searchPlaceholder')"
+          autocomplete="off"
+        />
+      </label>
+      <div class="control-utility-row">
         <label class="control-field control-field--filter">
           <span class="sr-only">{{ t('threadList.filterAgent') }}</span>
           <select
@@ -18,23 +28,10 @@
             >{{ opt.label }} ({{ opt.count }})</option>
           </select>
         </label>
-        <label class="control-field control-field--search">
-          <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
-          <input
-            v-model="searchQuery"
-            type="search"
-            class="control-input"
-            :placeholder="t('threadList.searchPlaceholder')"
-            autocomplete="off"
-          />
-        </label>
-      </div>
-      <div class="control-meta">
-        <label class="archive-toggle" :aria-describedby="archiveHintId">
+        <label class="archive-toggle">
           <input v-model="prefs.showArchived" type="checkbox" class="archive-checkbox" />
           {{ t('threadList.showArchived') }}
         </label>
-        <p :id="archiveHintId" class="hint">{{ t('threadList.hint') }}</p>
       </div>
     </div>
 
@@ -65,57 +62,24 @@
           @click="prefs.toggleCollapse(projectNodeKey(project.key))"
         >
           <span class="folder-icon" aria-hidden="true">
-            {{ project.uncategorized ? '🧺' : '📁' }}
+            <svg v-if="project.uncategorized" viewBox="0 0 24 24">
+              <path d="M4 9h16l-1.35 9.45a2 2 0 0 1-1.98 1.72H7.33a2 2 0 0 1-1.98-1.72L4 9Z" />
+              <path d="m8 9 1.5-5h5L16 9M9 13v3m3-3v3m3-3v3" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24">
+              <path d="M3.5 6.75A1.75 1.75 0 0 1 5.25 5h4l2 2h7.5a1.75 1.75 0 0 1 1.75 1.75v8.5A1.75 1.75 0 0 1 18.75 19H5.25a1.75 1.75 0 0 1-1.75-1.75V6.75Z" />
+            </svg>
           </span>
-          <span class="project-copy">
-            <span class="project-title">{{ project.label }}</span>
-            <span v-if="project.path" class="project-path" :title="project.path">
-              {{ shortPath(project.path, 54) }}
+            <span class="project-copy" :title="project.path || undefined">
+              <span class="project-title">{{ project.label }}</span>
             </span>
-            <span v-else class="project-path">{{ t('threadList.noPath') }}</span>
-          </span>
-          <span class="project-count">{{ project.sessionCount }}</span>
+            <span class="project-count">{{ project.sessionCount }}</span>
           <span class="chevron" aria-hidden="true">
-            {{ prefs.isCollapsed(projectNodeKey(project.key)) ? '▸' : '▾' }}
+            <svg viewBox="0 0 20 20">
+              <path d="m6.5 8 3.5 3.5L13.5 8" />
+            </svg>
           </span>
         </button>
-        <button
-          type="button"
-          class="archive-btn project-archive-btn"
-          :class="{ on: isProjectArchived(project) }"
-          :title="isProjectArchived(project) ? t('threadList.unarchiveProjectTitle') : t('threadList.archiveProjectTitle')"
-          :aria-label="isProjectArchived(project)
-            ? t('threadList.unarchiveProjectAria', { project: project.label })
-            : t('threadList.archiveProjectAria', { project: project.label })"
-          @click.stop="toggleProjectArchive(project)"
-        >
-          {{ isProjectArchived(project) ? t('threadList.unarchive') : t('threadList.archive') }}
-        </button>
-        <label
-          v-if="projectStartOptions(project).length"
-          class="project-start-picker"
-        >
-          <span class="sr-only">{{ t('threadList.newThreadPickerAria', { project: project.label }) }}</span>
-          <select
-            :aria-label="t('threadList.newThreadPickerAria', { project: project.label })"
-            :disabled="!deviceOnline"
-            @change="onNewThread(project, $event)"
-          >
-            <option value="">{{ t('threadList.newThreadPicker') }}</option>
-            <option
-              v-for="option in projectStartOptions(project)"
-              :key="option.agentType"
-              :value="option.agentType"
-              :disabled="!option.enabled"
-            >{{ option.enabled
-              ? t('threadList.newThreadForAgent', { agent: option.label })
-              : t('threadList.newThreadUnavailable', {
-                agent: option.label,
-                reason: option.reason || t('threadList.startUnavailableDefault')
-              })
-            }}</option>
-          </select>
-        </label>
       </div>
 
       <div
@@ -123,7 +87,54 @@
         :id="projectPanelId(project.key)"
         class="project-body"
       >
-        <section
+        <div class="project-tools">
+          <button
+            type="button"
+            class="archive-btn project-archive-btn"
+            :class="{ on: isProjectArchived(project) }"
+            :title="isProjectArchived(project) ? t('threadList.unarchiveProjectTitle') : t('threadList.archiveProjectTitle')"
+            :aria-label="isProjectArchived(project)
+              ? t('threadList.unarchiveProjectAria', { project: project.label })
+              : t('threadList.archiveProjectAria', { project: project.label })"
+            @click.stop="toggleProjectArchive(project)"
+          >
+            <svg v-if="isProjectArchived(project)" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 9H4.5V5.5M4.8 9A7.5 7.5 0 1 1 6.7 17.4" />
+              <path d="m4.8 9 3-3" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4.5 8.5h15v10a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-10Z" />
+              <path d="M8 8.5V5h8v3.5M9 13h6" />
+            </svg>
+            <span class="sr-only">{{ isProjectArchived(project) ? t('threadList.unarchive') : t('threadList.archive') }}</span>
+          </button>
+          <label
+            v-if="projectStartOptions(project).length"
+            class="project-start-picker"
+          >
+            <span class="sr-only">{{ t('threadList.newThreadPickerAria', { project: project.label }) }}</span>
+            <select
+              :aria-label="t('threadList.newThreadPickerAria', { project: project.label })"
+              :disabled="!deviceOnline"
+              @change="onNewThread(project, $event)"
+            >
+              <option value="">{{ t('threadList.newThreadPicker') }}</option>
+              <option
+                v-for="option in projectStartOptions(project)"
+                :key="option.agentType"
+                :value="option.agentType"
+                :disabled="!option.enabled"
+              >{{ option.enabled
+                ? t('threadList.newThreadForAgent', { agent: option.label })
+                : t('threadList.newThreadUnavailable', {
+                  agent: option.label,
+                  reason: option.reason || t('threadList.startUnavailableDefault')
+                })
+              }}</option>
+            </select>
+          </label>
+        </div>
+          <section
           v-for="agent in project.agents"
           :key="agent.key"
           class="agent-group"
@@ -139,18 +150,11 @@
               :aria-controls="agentPanelId(agent.key)"
               @click="prefs.toggleCollapse(agentNodeKey(project.key, agent.type))"
             >
-              <img
-                class="agent-avatar"
-                :src="agent.avatar"
-                alt=""
-                width="36"
-                height="36"
-                @error="onAvatarError"
-              />
+              <span class="agent-mark" aria-hidden="true"></span>
               <span class="agent-copy">
                 <span class="agent-title">{{ agent.label }}</span>
-                <span class="agent-subtitle">{{ t('threadList.agentThreads', { n: agent.sessions.length }) }}</span>
               </span>
+              <span class="agent-count">{{ agent.sessions.length }}</span>
               <span class="agent-chevron" aria-hidden="true">
                 {{ prefs.isCollapsed(agentNodeKey(project.key, agent.type)) ? '▸' : '▾' }}
               </span>
@@ -188,13 +192,16 @@
                 </span>
                 <span
                   class="session-status"
-                  :class="`session-status--${sessionActivityPresentation(session.status).tone}`"
+                  :class="[
+                    `session-status--${sessionActivityPresentation(session.status).tone}`,
+                    { 'session-status--attention': needsAttention(session.status) }
+                  ]"
                   :title="sessionActivityPresentation(session.status).detail"
+                  :aria-label="sessionActivityPresentation(session.status).label"
                 >
-                  <span class="session-status-icon" aria-hidden="true">
-                    {{ sessionActivityPresentation(session.status).icon }}
+                  <span v-if="needsAttention(session.status)">
+                    {{ sessionActivityPresentation(session.status).label }}
                   </span>
-                  <span>{{ sessionActivityPresentation(session.status).label }}</span>
                 </span>
               </RouterLink>
 
@@ -207,7 +214,15 @@
                   :aria-label="prefs.isArchived(session.id) ? t('threadList.unarchiveAria') : t('threadList.archiveAria')"
                   @click.stop="prefs.toggleArchive(session.id)"
                 >
-                  {{ prefs.isArchived(session.id) ? t('threadList.unarchive') : t('threadList.archive') }}
+                  <svg v-if="prefs.isArchived(session.id)" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7 9H4.5V5.5M4.8 9A7.5 7.5 0 1 1 6.7 17.4" />
+                    <path d="m4.8 9 3-3" />
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4.5 8.5h15v10a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-10Z" />
+                    <path d="M8 8.5V5h8v3.5M9 13h6" />
+                  </svg>
+                  <span class="sr-only">{{ prefs.isArchived(session.id) ? t('threadList.unarchive') : t('threadList.archive') }}</span>
                 </button>
               </div>
             </div>
@@ -222,7 +237,6 @@
 import { computed, ref, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink, useRouter } from 'vue-router'
-import { UNKNOWN_AGENT_META } from '@/config/agents'
 import { sessionDetailLocation } from '@/router/navigation'
 import { useSessionPrefsStore } from '@/stores/sessionPrefs'
 import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
@@ -253,7 +267,6 @@ const searchQuery = ref('')
 /** Empty string = all agents. */
 const agentFilter = ref('')
 /** Stable id for archive semantics describedby. */
-const archiveHintId = 'thread-list-archive-hint'
 const deviceOnline = computed(() => props.deviceOnline !== false)
 
 const mergedSessions = computed(() => {
@@ -328,6 +341,10 @@ function onNewThread(project: SessionTreeProject, event: Event) {
   void router.push(sessionDetailLocation(props.deviceId, draft.id))
 }
 
+function needsAttention(status: AgentSession['status']): boolean {
+  return status === 'waiting_approval' || status === 'waiting_user' || status === 'error'
+}
+
 function projectSessionIds(project: SessionTreeProject): string[] {
   return mergedSessions.value
     .filter(session => projectKeyFromDir(session.project_dir) === project.key)
@@ -379,35 +396,20 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
   } as CSSProperties
 }
 
-function onAvatarError(event: Event) {
-  const image = event.currentTarget as HTMLImageElement
-  if (image.dataset.fallbackApplied === '1') {
-    image.hidden = true
-    return
-  }
-  image.dataset.fallbackApplied = '1'
-  image.src = UNKNOWN_AGENT_META.avatar
-}
-
-function shortPath(path: string, max = 36): string {
-  const normalized = path.replace(/\\/g, '/')
-  if (normalized.length <= max) return normalized
-  return `…${normalized.slice(-(max - 1))}`
-}
 </script>
 
 <style scoped>
 .list-controls {
   display: grid;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
-.list-controls-row {
+.control-utility-row {
   display: grid;
-  grid-template-columns: minmax(7.5rem, 0.42fr) minmax(0, 1fr);
-  gap: 8px;
-  align-items: stretch;
+  grid-template-columns: minmax(8.5rem, 1fr) auto;
+  align-items: center;
+  gap: 12px;
 }
 
 .control-field {
@@ -421,26 +423,25 @@ function shortPath(path: string, max = 36): string {
   min-height: 44px;
   padding: 0 12px;
   border: 1px solid var(--neko-line);
-  border-radius: 12px;
+  border-radius: 13px;
   color: var(--neko-ink);
   background: var(--neko-surface-solid);
   font: inherit;
+}
+
+.control-input {
+  padding-inline: 14px;
+}
+
+.control-select {
+  color: var(--neko-ink-soft);
+  background-color: var(--neko-surface-muted);
 }
 
 .control-select:focus-visible,
 .control-input:focus-visible {
   outline: 2px solid var(--neko-primary);
   outline-offset: 2px;
-}
-
-.control-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 12px;
-  min-height: 36px;
-  padding-inline: 2px;
 }
 
 .archive-toggle {
@@ -462,19 +463,10 @@ function shortPath(path: string, max = 36): string {
   accent-color: var(--neko-primary);
 }
 
-/* Compact, always-visible archive semantics (not hover/title-only). */
-.hint {
-  margin: 0;
-  flex: 1 1 10rem;
-  color: var(--neko-ink-faint);
-  font-size: 11px;
-  line-height: 1.4;
-  text-align: end;
-}
-
-@media (max-width: 360px) {
-  .list-controls-row {
+@media (max-width: 340px) {
+  .control-utility-row {
     grid-template-columns: 1fr;
+    gap: 2px;
   }
 }
 
@@ -486,12 +478,12 @@ function shortPath(path: string, max = 36): string {
 }
 
 .project-group {
-  margin-bottom: 14px;
+  margin-bottom: 8px;
   overflow: hidden;
   border: 1px solid var(--neko-line);
-  border-radius: 18px;
+  border-radius: 14px;
   background: var(--neko-surface-solid);
-  box-shadow: var(--neko-shadow-soft);
+  box-shadow: none;
 }
 
 .project-group.uncategorized {
@@ -500,12 +492,7 @@ function shortPath(path: string, max = 36): string {
 }
 
 .project-header-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  background:
-    radial-gradient(circle at 4% 0%, var(--neko-rose-soft), transparent 42%),
-    var(--neko-surface);
+  background: var(--neko-surface-solid);
 }
 
 .project-header {
@@ -514,28 +501,42 @@ function shortPath(path: string, max = 36): string {
   width: 100%;
   align-items: center;
   gap: 10px;
-  padding: 13px 14px;
+  min-height: 54px;
+  padding: 9px 12px;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
   font: inherit;
   text-align: left;
-  transition: background-color 180ms ease;
+  transition: background-color 180ms ease, transform 160ms ease;
 }
 
-.project-archive-btn {
-  margin-right: 6px;
+.project-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--neko-line);
+}
+
+.project-tools .project-archive-btn {
+  flex: 0 0 auto;
+}
+
+.project-start-picker {
+  min-width: 0;
+  flex: 1;
 }
 
 .project-start-picker select {
+  width: 100%;
   min-height: 44px;
-  max-width: 142px;
-  border: 1px solid var(--neko-border);
+  border: 1px solid var(--neko-line);
   border-radius: 9px;
-  background: var(--neko-surface);
-  color: var(--neko-text);
-  padding: 0 8px;
+  background: var(--neko-surface-muted);
+  color: var(--neko-ink-soft);
+  padding: 0 10px;
   font: inherit;
   font-size: 12px;
 }
@@ -553,8 +554,24 @@ function shortPath(path: string, max = 36): string {
 }
 
 .folder-icon {
-  font-size: 21px;
-  line-height: 1;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--neko-primary-deep);
+  background: var(--neko-primary-soft);
+}
+
+.folder-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .project-copy,
@@ -563,47 +580,60 @@ function shortPath(path: string, max = 36): string {
 }
 
 .project-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  overflow: hidden;
 }
 
 .project-title {
   overflow: hidden;
   color: var(--neko-ink);
-  font-size: 15px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-path {
-  overflow: hidden;
-  color: var(--neko-ink-faint);
-  font-size: 10px;
+  font-size: 14px;
+  font-weight: 680;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .project-count {
-  min-width: 22px;
-  padding: 2px 7px;
-  border-radius: 8px;
-  background: rgba(126, 103, 146, 0.1);
-  color: var(--neko-primary-deep);
-  font-size: 11px;
+  min-width: 25px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--neko-surface-muted);
+  color: var(--neko-ink-soft);
+  font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
-.chevron,
+.chevron {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  color: var(--neko-ink-faint);
+  transition: transform 180ms ease;
+}
+
+.project-header[aria-expanded='false'] .chevron {
+  transform: rotate(-90deg);
+}
+
+.chevron svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
 .agent-chevron {
   color: var(--neko-ink-faint);
   font-size: 12px;
 }
 
 .project-body {
-  padding: 2px 13px 10px;
+  padding: 0 12px 8px;
+  border-top: 1px solid var(--neko-line);
 }
 
 .agent-group + .agent-group {
@@ -622,34 +652,15 @@ function shortPath(path: string, max = 36): string {
   width: 100%;
   min-width: 0;
   align-items: center;
-  gap: 10px;
-  padding: 11px 2px 9px;
+  gap: 8px;
+  min-height: 42px;
+  padding: 7px 2px;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
   font: inherit;
   text-align: left;
-}
-
-.agent-add-btn {
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
-  margin-right: 2px;
-  border: 1px solid var(--neko-line);
-  border-radius: 12px;
-  color: var(--neko-primary-deep);
-  background: var(--neko-primary-soft);
-  font-size: 22px;
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.agent-add-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .session-item.draft {
@@ -668,23 +679,15 @@ function shortPath(path: string, max = 36): string {
   vertical-align: middle;
 }
 
-.agent-avatar {
-  display: block;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
-  border: 2px solid color-mix(in srgb, var(--agent-color) 58%, var(--neko-surface-solid));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--agent-color) 18%, var(--neko-surface-solid));
-  box-shadow: 0 4px 10px color-mix(in srgb, var(--agent-color) 22%, transparent);
-  object-fit: cover;
+.agent-mark {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--agent-color);
 }
 
-.agent-copy {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-}
+.agent-copy { flex: 1; }
 
 .agent-title {
   color: var(--neko-ink);
@@ -692,24 +695,29 @@ function shortPath(path: string, max = 36): string {
   font-weight: 650;
 }
 
-.agent-subtitle {
-  margin-top: 1px;
-  color: color-mix(in srgb, var(--agent-color) 45%, var(--neko-ink-soft));
+.agent-count {
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: var(--neko-ink-faint);
+  background: var(--neko-surface-muted);
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .agent-body {
-  margin: 0 0 3px 18px;
-  padding-left: 12px;
-  border-left: 2px solid color-mix(in srgb, var(--agent-color) 40%, transparent);
+  margin: 0 0 2px 10px;
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in srgb, var(--agent-color) 48%, transparent);
 }
 
 .session-item {
   display: flex;
   align-items: stretch;
-  gap: 8px;
-  min-height: 52px;
-  padding: 8px 0;
+  gap: 4px;
+  min-height: 44px;
+  padding: 4px 0;
   border-top: 1px solid rgba(228, 222, 230, 0.72);
 }
 
@@ -749,40 +757,43 @@ function shortPath(path: string, max = 36): string {
 }
 
 .session-status {
-  display: inline-flex;
-  min-height: 24px;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--neko-neutral-line);
-  border-radius: 999px;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
   background: var(--neko-neutral-soft);
-  color: var(--neko-neutral-ink);
+}
+
+.session-status--active {
+  background: var(--neko-success-soft);
+  box-shadow: inset 0 0 0 2px var(--neko-success-ink);
+}
+
+.session-status--waiting {
+  background: var(--neko-warning);
+}
+
+.session-status--unknown {
+  box-shadow: inset 0 0 0 2px var(--neko-neutral-ink);
+}
+
+.session-status--attention {
+  width: auto;
+  min-height: 22px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: var(--neko-warning-ink);
+  background: var(--neko-warning-soft);
   font-size: 10px;
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
 }
 
-.session-status--active {
-  border-color: var(--neko-success-line);
-  background: var(--neko-success-soft);
-  color: var(--neko-success-ink);
-}
-
-.session-status--waiting {
-  border-color: var(--neko-warning-line);
-  background: var(--neko-warning-soft);
-  color: var(--neko-warning-ink);
-}
-
-.session-status--unknown {
-  border-style: dashed;
-}
-
-.session-status-icon {
-  line-height: 1;
+.session-status--attention.session-status--unknown {
+  color: var(--neko-danger-ink);
+  background: var(--neko-danger-soft);
+  box-shadow: none;
 }
 
 .session-actions {
@@ -792,45 +803,29 @@ function shortPath(path: string, max = 36): string {
   gap: 4px;
 }
 
-@media (max-width: 390px) {
-  .project-header-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .project-start-picker {
-    grid-column: 1 / -1;
-    padding: 0 12px 10px;
-  }
-
-  .project-start-picker select {
-    width: 100%;
-    max-width: none;
-  }
-
-  .session-status {
-    padding-inline: 6px;
-  }
-
-  .session-status > span:last-child {
-    max-width: 64px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-}
-
 .archive-btn {
-  min-width: 52px;
+  display: grid;
+  width: 38px;
+  min-width: 38px;
   min-height: 44px;
-  padding: 0 10px;
+  padding: 0;
+  place-items: center;
   border: 1px solid var(--neko-line);
   border-radius: 8px;
   background: var(--neko-primary-soft);
   color: var(--neko-primary-deep);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
   cursor: pointer;
   transition: transform 160ms ease, background-color 160ms ease;
+}
+
+.archive-btn svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .archive-btn.on {
@@ -859,7 +854,8 @@ function shortPath(path: string, max = 36): string {
 
 @media (prefers-reduced-motion: reduce) {
   .project-header,
-  .archive-btn {
+  .archive-btn,
+  .chevron {
     transition: none;
   }
 

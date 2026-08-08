@@ -6,7 +6,6 @@
         {{ t('deviceDetail.backNest') }}
       </RouterLink>
       <div class="device-title">
-        <p>{{ t('deviceDetail.currentPc') }}</p>
         <h1>{{ device?.name || deviceId }}</h1>
       </div>
       <span
@@ -64,21 +63,6 @@
         <div>
           <h2 id="sessions-title">{{ t('deviceDetail.sectionTitle') }}</h2>
         </div>
-        <div class="session-overview" role="status" aria-live="polite">
-          <span v-if="runningSessionCount" class="session-count-badge session-count-badge--active">
-            {{ t('deviceDetail.runningBadge', { n: runningSessionCount }) }}
-          </span>
-          <span v-if="waitingApprovalCount" class="session-count-badge session-count-badge--waiting">
-            {{ t('deviceDetail.waitingBadge', { n: waitingApprovalCount }) }}
-          </span>
-          <!-- Offline/empty keep the welcome + stats strip; total only when the tree is primary. -->
-          <span
-            v-if="isOnline && hasThreads"
-            class="session-count-badge session-count-badge--total"
-          >
-            {{ t('deviceDetail.threadTotalBadge', { n: sessionStore.sessions.length + localThreadCount }) }}
-          </span>
-        </div>
       </div>
 
       <div v-if="loadError" class="load-error" role="alert">
@@ -131,12 +115,6 @@ const localThreads = useLocalThreadsStore()
 
 const deviceId = computed(() => String(route.params.deviceId || ''))
 const device = computed(() => deviceStore.devices.find(d => d.id === deviceId.value))
-const runningSessionCount = computed(
-  () => sessionStore.sessions.filter(session => session.status === 'running').length
-)
-const waitingApprovalCount = computed(
-  () => sessionStore.sessions.filter(session => session.status === 'waiting_approval').length
-)
 const loadError = ref('')
 const loadingSessions = ref(false)
 const localThreadCount = computed(() => localThreads.listForDevice(deviceId.value).length)
@@ -256,7 +234,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
 }
 
 .back-link {
@@ -283,7 +261,6 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   min-width: 0;
 }
 
-.device-title p,
 .speaker {
   margin: 0;
   color: var(--neko-primary-deep);
@@ -295,10 +272,10 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 
 .device-title h1 {
   overflow: hidden;
-  margin: 1px 0 0;
+  margin: 0;
   color: var(--neko-ink);
   font-family: var(--neko-display);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 720;
   letter-spacing: -0.035em;
   line-height: 1.25;
@@ -342,7 +319,8 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   inset: -13px;
   z-index: -1;
   border-radius: 50%;
-  background: radial-gradient(circle, var(--neko-primary-soft), transparent 67%);
+  background: var(--neko-primary-soft);
+  opacity: 0.45;
 }
 
 .scene-portrait img {
@@ -362,9 +340,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   border: 1px solid var(--neko-line);
   border-radius: 18px 18px 25px 12px;
   color: var(--neko-ink);
-  background:
-    radial-gradient(circle at 96% 4%, var(--neko-primary-soft), transparent 8rem),
-    var(--neko-surface-solid);
+  background: var(--neko-surface-solid);
   box-shadow: var(--neko-shadow-soft);
 }
 
@@ -438,10 +414,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 
 .section-heading {
   display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   padding-inline: 2px;
 }
 
@@ -452,48 +425,6 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   font-size: 19px;
   font-weight: 720;
   letter-spacing: -0.035em;
-}
-
-.session-overview {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 5px;
-}
-
-.session-count-badge {
-  padding: 4px 7px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  color: var(--neko-primary-deep);
-  background: var(--neko-primary-soft);
-  font-size: 10px;
-  font-weight: 680;
-  font-variant-numeric: tabular-nums;
-}
-
-.session-count-badge--total {
-  border-color: var(--neko-line);
-  color: var(--neko-ink-soft);
-  background: var(--neko-surface-muted);
-}
-
-.session-count-badge--active {
-  border-color: var(--neko-success-line);
-  background: var(--neko-success-soft);
-  color: var(--neko-success-ink);
-}
-
-.session-count-badge--waiting {
-  border-color: var(--neko-warning-line);
-  background: var(--neko-warning-soft);
-  color: var(--neko-warning-ink);
-}
-
-.session-count-badge--offline {
-  border-color: var(--neko-neutral-line);
-  background: var(--neko-neutral-soft);
-  color: var(--neko-neutral-ink);
 }
 
 .load-error,

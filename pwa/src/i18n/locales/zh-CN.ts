@@ -49,11 +49,11 @@ export default {
   },
   setup: {
     title: '猫娘窝',
-    desc: '从手机继续家里电脑上已打开的 AI 编程会话。进窝前，请输入与部署时相同的手机钥匙。',
+    desc: '继续电脑上的 AI 会话。输入手机钥匙。',
     secretLabel: '手机钥匙',
     placeholder: '粘贴手机钥匙…',
     enter: '进入猫窝',
-    hint: '手机钥匙 = 部署时记下的访问口令（NEKONEST_PHONE_SECRET）。仅在家里调试、未设置钥匙时，可随便填一个字符进入。'
+    hint: '手机钥匙由部署时设置。'
   },
   deviceList: {
     eyebrow: '猫娘值守中',
@@ -138,8 +138,8 @@ export default {
     welcomeOfflineTitle: '这台电脑现在没有回应。',
     welcomeEmptyTitle: '还没有可续写的线团。',
     welcomeBackTitle: '欢迎回来。',
-    welcomeOfflineBody: '请确认家里的猫窝服务还在跑；恢复在线后，线团会自己出现。',
-    welcomeEmptyBody: '请先在电脑上打开或新建会话，这里只续写家里已有的线团。',
+    welcomeOfflineBody: '确认电脑上的守护服务正在运行。',
+    welcomeEmptyBody: '先在电脑上打开或新建会话。',
     welcomeBackBody: '从工作目录走进对应猫娘，继续家里已有的线团。',
     loadError: '线团清单没读到，稍后再试。',
     loadNetwork: '网络不顺，线团清单没拿到。',
@@ -177,7 +177,7 @@ export default {
     unarchiveProjectAria: '放回项目 {project} 下的所有线团',
     newCodexTitle: '在此目录新建 Codex 线团',
     newCodexAria: '在 {project} 新建 Codex 线团',
-    newThreadPicker: '新建线团…',
+    newThreadPicker: '＋ 新建',
     newThreadPickerAria: '在 {project} 新建线团',
     newThreadForAgent: '新建 {agent} 线团',
     newThreadUnavailable: '{agent}：不可用 — {reason}',

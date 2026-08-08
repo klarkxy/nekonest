@@ -6,14 +6,6 @@
     <n-message-provider>
       <div class="nekonest-app">
         <a class="skip-link" href="#main-content">{{ t('brand.skipToContent') }}</a>
-        <div class="neko-atmosphere" aria-hidden="true">
-          <span class="ambient-orb ambient-orb--rose"></span>
-          <span class="ambient-orb ambient-orb--violet"></span>
-          <span class="ambient-ribbon"></span>
-          <span class="ambient-spark ambient-spark--one">✦</span>
-          <span class="ambient-spark ambient-spark--two">✧</span>
-          <span class="ambient-spark ambient-spark--three">✦</span>
-        </div>
         <main id="main-content" class="main-content" tabindex="-1">
           <router-view />
         </main>

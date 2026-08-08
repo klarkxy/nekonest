@@ -297,7 +297,7 @@ async function copyCommand(command: string) {
   object-fit: cover;
   box-shadow: 0 12px 28px rgba(104, 74, 105, 0.2);
   border: 3px solid var(--neko-panel-border);
-  background: linear-gradient(135deg, #F3EEFF, #FFE8F0);
+  background: var(--neko-primary-soft);
 }
 
 .pair-desc {

@@ -23,7 +23,7 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report', open: 'never' }]
   ],
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: 'http://127.0.0.1:4173',
     browserName: 'chromium',
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 1,

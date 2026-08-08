@@ -1099,10 +1099,7 @@ function handleInterrupt() {
   min-height: 0;
   overflow: hidden;
   padding: 0;
-  background:
-    radial-gradient(ellipse 80% 50% at 10% 0%, rgba(201, 137, 152, 0.12), transparent 50%),
-    radial-gradient(ellipse 70% 40% at 90% 100%, rgba(114, 91, 157, 0.12), transparent 55%),
-    var(--neko-bg);
+  background: var(--neko-bg);
 }
 
 .page-header {
@@ -1111,8 +1108,7 @@ function handleInterrupt() {
   gap: 4px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--neko-line);
-  background: var(--neko-surface);
-  backdrop-filter: blur(10px);
+  background: var(--neko-surface-solid);
 }
 
 .header-row {
@@ -1484,7 +1480,6 @@ function handleInterrupt() {
 }
 .neko-mascot {
   filter: drop-shadow(0 4px 12px rgba(114, 91, 157, 0.2));
-  animation: neko-float 2.4s ease-in-out infinite;
 }
 .neko-mascot img {
   width: 72px;
@@ -1520,11 +1515,6 @@ function handleInterrupt() {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
-}
-
-@keyframes neko-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
 }
 
 .pending-atts {
@@ -1629,7 +1619,6 @@ function handleInterrupt() {
   padding: 12px 16px;
   border-top: 1px solid var(--neko-line);
   background: var(--neko-panel);
-  backdrop-filter: blur(10px);
   display: flex;
   gap: 8px;
   align-items: flex-end;
@@ -1692,9 +1681,4 @@ function handleInterrupt() {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .neko-mascot {
-    animation: none;
-  }
-}
 </style>

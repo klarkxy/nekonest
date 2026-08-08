@@ -2,33 +2,33 @@
 :root,
 html[data-theme="light"] {
   color-scheme: light;
-  --neko-bg: #f8f1ed;
-  --neko-bg-deep: #efe4e5;
-  --neko-surface: rgba(255, 252, 250, 0.92);
-  --neko-surface-solid: #fffaf8;
-  --neko-surface-muted: #f4ecee;
-  --neko-ink: #463b48;
-  --neko-ink-soft: #5f5460;
-  --neko-ink-faint: #6e6270;
-  --neko-primary: #725b9d;
-  --neko-primary-deep: #5f477f;
-  --neko-primary-soft: #ece5f5;
-  --neko-rose: #c98998;
-  --neko-rose-soft: #f4dfe3;
-  --neko-mint: #70a98e;
+  --neko-bg: #f7f7f8;
+  --neko-bg-deep: #f1f1f3;
+  --neko-surface: #ffffff;
+  --neko-surface-solid: #ffffff;
+  --neko-surface-muted: #f3f2f5;
+  --neko-ink: #25232a;
+  --neko-ink-soft: #5b5863;
+  --neko-ink-faint: #77737f;
+  --neko-primary: #68518e;
+  --neko-primary-deep: #513b74;
+  --neko-primary-soft: #eee9f5;
+  --neko-rose: #68518e;
+  --neko-rose-soft: #eee9f5;
+  --neko-mint: #519175;
   --neko-warning: #bc8448;
   --neko-danger: #bf6874;
-  --neko-line: rgba(110, 89, 119, 0.15);
-  --neko-shadow: 0 18px 46px rgba(92, 67, 92, 0.12);
-  --neko-shadow-soft: 0 8px 24px rgba(92, 67, 92, 0.09);
-  --neko-page-bg: #e8dcdf;
-  --neko-page-glow-a: rgba(255, 249, 246, 0.55);
-  --neko-page-glow-b: rgba(193, 166, 204, 0.2);
-  --neko-shell-glow-a: rgba(255, 255, 255, 0.55);
-  --neko-shell-glow-b: rgba(218, 197, 226, 0.28);
-  --neko-panel: rgba(255, 252, 250, 0.96);
-  --neko-panel-border: rgba(255, 255, 255, 0.78);
-  --neko-bubble-assistant: rgba(255, 251, 249, 0.96);
+  --neko-line: #e3e1e6;
+  --neko-shadow: 0 12px 28px rgba(37, 35, 42, 0.1);
+  --neko-shadow-soft: 0 4px 12px rgba(37, 35, 42, 0.06);
+  --neko-page-bg: #ececef;
+  --neko-page-glow-a: transparent;
+  --neko-page-glow-b: transparent;
+  --neko-shell-glow-a: transparent;
+  --neko-shell-glow-b: transparent;
+  --neko-panel: #ffffff;
+  --neko-panel-border: #ffffff;
+  --neko-bubble-assistant: #ffffff;
   --neko-bubble-tool-bg: #fbf2e5;
   --neko-bubble-tool-ink: #685947;
   --neko-bubble-tool-line: rgba(188, 132, 72, 0.26);
@@ -58,33 +58,33 @@ html[data-theme="light"] {
 /* Warm charcoal + soft violet — high contrast surfaces, no light-wash cards */
 html[data-theme="dark"] {
   color-scheme: dark;
-  --neko-bg: #16131c;
-  --neko-bg-deep: #100e16;
-  --neko-surface: rgba(36, 31, 46, 0.97);
-  --neko-surface-solid: #262131;
-  --neko-surface-muted: #312b3d;
-  --neko-ink: #f4f0f8;
-  --neko-ink-soft: #c7bfd4;
-  --neko-ink-faint: #9b93ab;
-  --neko-primary: #cbb8ef;
-  --neko-primary-deep: #e4daf8;
-  --neko-primary-soft: rgba(203, 184, 239, 0.18);
-  --neko-rose: #e6b0bc;
-  --neko-rose-soft: rgba(230, 176, 188, 0.16);
-  --neko-mint: #86d0ac;
+  --neko-bg: #17161a;
+  --neko-bg-deep: #111014;
+  --neko-surface: #201f24;
+  --neko-surface-solid: #201f24;
+  --neko-surface-muted: #2b2930;
+  --neko-ink: #f3f2f5;
+  --neko-ink-soft: #c9c6d0;
+  --neko-ink-faint: #9d99a5;
+  --neko-primary: #c8b6e7;
+  --neko-primary-deep: #dfd3f5;
+  --neko-primary-soft: rgba(200, 182, 231, 0.16);
+  --neko-rose: #c8b6e7;
+  --neko-rose-soft: rgba(200, 182, 231, 0.16);
+  --neko-mint: #82c5a3;
   --neko-warning: #e0b176;
   --neko-danger: #e898a2;
-  --neko-line: rgba(203, 184, 239, 0.2);
-  --neko-shadow: 0 18px 46px rgba(0, 0, 0, 0.55);
-  --neko-shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.42);
-  --neko-page-bg: #0c0a10;
-  --neko-page-glow-a: rgba(110, 88, 160, 0.16);
-  --neko-page-glow-b: rgba(150, 90, 130, 0.1);
-  --neko-shell-glow-a: rgba(110, 88, 160, 0.14);
-  --neko-shell-glow-b: rgba(130, 90, 150, 0.1);
-  --neko-panel: rgba(36, 31, 46, 0.98);
-  --neko-panel-border: rgba(203, 184, 239, 0.18);
-  --neko-bubble-assistant: #2e2838;
+  --neko-line: #3b3941;
+  --neko-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+  --neko-shadow-soft: 0 4px 12px rgba(0, 0, 0, 0.18);
+  --neko-page-bg: #0f0e12;
+  --neko-page-glow-a: transparent;
+  --neko-page-glow-b: transparent;
+  --neko-shell-glow-a: transparent;
+  --neko-shell-glow-b: transparent;
+  --neko-panel: #201f24;
+  --neko-panel-border: #201f24;
+  --neko-bubble-assistant: #2b2930;
   --neko-bubble-tool-bg: #3a3024;
   --neko-bubble-tool-ink: #edd2a8;
   --neko-bubble-tool-line: rgba(224, 177, 118, 0.32);
@@ -134,10 +134,7 @@ body {
   min-height: 100%;
   margin: 0;
   color: var(--neko-ink);
-  background:
-    radial-gradient(circle at 16% 4%, var(--neko-page-glow-a), transparent 34rem),
-    radial-gradient(circle at 86% 84%, var(--neko-page-glow-b), transparent 38rem),
-    var(--neko-page-bg, #e8dcdf);
+  background: var(--neko-page-bg, #ececef);
   font-family: var(--neko-font);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -182,11 +179,8 @@ textarea:focus-visible {
   padding-top: var(--neko-safe-top);
   padding-bottom: var(--neko-safe-bottom);
   overflow-x: clip;
-  background:
-    radial-gradient(circle at 12% 4%, var(--neko-shell-glow-a), transparent 18rem),
-    radial-gradient(circle at 103% 30%, var(--neko-shell-glow-b), transparent 19rem),
-    linear-gradient(180deg, var(--neko-surface-solid) 0%, var(--neko-bg) 42%, var(--neko-bg-deep) 100%);
-  box-shadow: 0 0 64px rgba(0, 0, 0, 0.22);
+  background: var(--neko-bg);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.12);
   isolation: isolate;
 }
 
@@ -213,79 +207,6 @@ textarea:focus-visible {
 
 .skip-link:focus {
   transform: translate(-50%, 0);
-}
-
-.neko-atmosphere {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  width: min(100%, 540px);
-  margin: 0 auto;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.ambient-orb,
-.ambient-ribbon,
-.ambient-spark {
-  position: absolute;
-}
-
-.ambient-orb {
-  border-radius: 50%;
-  filter: blur(1px);
-}
-
-.ambient-orb--rose {
-  top: -5rem;
-  left: -5rem;
-  width: 15rem;
-  height: 15rem;
-  background: radial-gradient(circle, var(--neko-page-glow-b), transparent 68%);
-}
-
-.ambient-orb--violet {
-  top: 38%;
-  right: -7rem;
-  width: 17rem;
-  height: 17rem;
-  background: radial-gradient(circle, var(--neko-page-glow-a), transparent 69%);
-}
-
-.ambient-ribbon {
-  top: 15rem;
-  right: -2.8rem;
-  width: 8rem;
-  height: 2.4rem;
-  border: 1px solid rgba(141, 117, 184, 0.1);
-  border-radius: 70% 0 0 70%;
-  transform: rotate(-14deg);
-}
-
-.ambient-spark {
-  color: rgba(141, 117, 184, 0.16);
-  font-family: serif;
-}
-
-.ambient-spark--one {
-  top: 8rem;
-  right: 8%;
-  font-size: 1.4rem;
-  transform: rotate(12deg);
-}
-
-.ambient-spark--two {
-  top: 54%;
-  left: 5%;
-  color: rgba(201, 137, 152, 0.15);
-  font-size: 2rem;
-  transform: rotate(-18deg);
-}
-
-.ambient-spark--three {
-  right: 11%;
-  bottom: 7rem;
-  font-size: 1rem;
 }
 
 .sr-only {
@@ -318,31 +239,13 @@ textarea:focus-visible {
   background: #aaa0a8;
 }
 
-.status-dot.waiting {
-  background: var(--neko-warning);
-  box-shadow: 0 0 0 4px rgba(188, 132, 72, 0.12);
-  animation: status-breathe 2s ease-in-out infinite;
-}
-
-@keyframes status-breathe {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.62;
-    transform: scale(0.84);
-  }
-}
+.status-dot.waiting { background: var(--neko-warning); }
 
 .neko-card {
   border: 1px solid var(--neko-panel-border);
   border-radius: 18px;
   background: var(--neko-surface);
   box-shadow: var(--neko-shadow-soft);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .message-bubble {
@@ -367,12 +270,12 @@ textarea:focus-visible {
   margin-left: auto;
   border-bottom-right-radius: 5px;
   color: #fff;
-  background: linear-gradient(145deg, #7d66a8 0%, #65508f 100%);
+  background: var(--neko-primary);
 }
 
 html[data-theme="dark"] .message-bubble.user {
   color: #1a1422;
-  background: linear-gradient(145deg, #d2c2f0 0%, #b8a3e0 100%);
+  background: var(--neko-primary);
 }
 
 .message-bubble.thinking {
@@ -399,28 +302,6 @@ html[data-theme="dark"] .message-bubble.user {
   height: 9px;
   border-radius: 50%;
   background: var(--neko-primary);
-  animation: paw-bounce 1.2s ease-in-out infinite;
-}
-
-.neko-loading .paw:nth-child(2) {
-  animation-delay: 0.16s;
-}
-
-.neko-loading .paw:nth-child(3) {
-  animation-delay: 0.32s;
-}
-
-@keyframes paw-bounce {
-  0%,
-  80%,
-  100% {
-    opacity: 0.42;
-    transform: translateY(0);
-  }
-  40% {
-    opacity: 1;
-    transform: translateY(-7px);
-  }
 }
 
 .page-header {
@@ -453,12 +334,6 @@ html[data-theme="dark"] .message-bubble.user {
     border-radius: 28px;
   }
 
-  .neko-atmosphere {
-    inset-block: 16px;
-    height: calc(100dvh - 32px);
-    border-radius: 28px;
-  }
-
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -475,8 +350,4 @@ html[data-theme="dark"] .message-bubble.user {
     transition-duration: 0.01ms !important;
   }
 
-  .status-dot.waiting,
-  .neko-loading .paw {
-    animation: none;
-  }
 }

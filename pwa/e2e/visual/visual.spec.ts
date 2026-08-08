@@ -100,6 +100,24 @@ test.describe('390px primary visual matrix', () => {
     await capture(page, 'device-full-tree.png')
   })
 
+  test('device project tools survive collapse and start a local draft', async ({ page, request }) => {
+    await openScenario(page, request, 'device-full', devicePath)
+    const project = page.locator('.project-group').filter({ hasText: 'nekonest' }).first()
+    const projectHeader = project.locator('.project-header')
+    const startPicker = project.getByLabel('在 nekonest 新建线团')
+
+    await expect(startPicker).toBeVisible()
+    await projectHeader.click()
+    await expect(projectHeader).toHaveAttribute('aria-expanded', 'false')
+    await expect(startPicker).toBeHidden()
+    await projectHeader.click()
+    await expect(projectHeader).toHaveAttribute('aria-expanded', 'true')
+    await expect(startPicker).toBeVisible()
+
+    await startPicker.selectOption('codex')
+    await expect(page).toHaveURL(/\/session\/local_draft_/)
+  })
+
   test('device offline', async ({ page, request }) => {
     await openScenario(page, request, 'device-offline', devicePath)
     await expect(page.getByText('这台电脑现在没有回应。')).toBeVisible()
@@ -138,8 +156,13 @@ test.describe('390px primary visual matrix', () => {
       archivedProject.getByRole('button', { name: '放回项目 nekonest 下的所有线团' })
     ).toBeVisible()
     await capture(page, 'device-archived.png')
-    await page.locator('.project-header').first().click()
-    await expect(page.locator('.project-header').first()).toHaveAttribute('aria-expanded', 'false')
+    const projectHeader = archivedProject.locator('.project-header')
+    const projectAction = archivedProject.getByRole('button', {
+      name: '放回项目 nekonest 下的所有线团'
+    })
+    await projectHeader.click()
+    await expect(projectHeader).toHaveAttribute('aria-expanded', 'false')
+    await expect(projectAction).toBeHidden()
     await capture(page, 'device-collapsed.png')
   })
 

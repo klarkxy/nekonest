@@ -3,11 +3,7 @@
     <header class="brand-hero">
       <div class="brand-copy">
         <p class="eyebrow">{{ t('deviceList.eyebrow') }}</p>
-        <h1>
-          {{ t('brand.name') }}
-          <span>{{ t('brand.nameEn') }}</span>
-        </h1>
-        <p class="brand-intro">{{ t('deviceList.intro') }}</p>
+        <h1>{{ t('brand.name') }}</h1>
       </div>
 
       <figure class="mascot-stage">
@@ -15,8 +11,8 @@
         <img
           src="/brand/nekonest-duo.webp"
           :alt="t('brand.duoAlt')"
-          width="132"
-          height="132"
+          width="88"
+          height="88"
         />
       </figure>
     </header>
@@ -98,10 +94,8 @@
     <section class="device-section" aria-labelledby="device-section-title">
       <div class="section-heading">
         <div>
-          <p class="section-kicker">{{ t('deviceList.sectionKicker') }}</p>
           <h2 id="device-section-title">{{ t('deviceList.sectionTitle') }}</h2>
         </div>
-        <span class="device-total">{{ t('deviceList.deviceCount', { n: visibleDevices.length }) }}</span>
       </div>
 
       <div v-if="deviceStore.loading && visibleDevices.length === 0" class="device-skeletons" role="status">
@@ -146,20 +140,14 @@
                 <span class="device-name">{{ device.name }}</span>
                 <span class="device-os">{{ osLabel(device.os) }}</span>
               </span>
-              <span class="device-entry__meta">
-                <span class="status-dot" :class="device.status" aria-hidden="true"></span>
-                <span>{{ device.status === 'online' ? t('common.online') : t('common.offline') }}</span>
-                <span class="meta-divider" aria-hidden="true"></span>
-                <span class="agent-count">{{ t('deviceList.threadCount', { n: device.active_agents }) }}</span>
-                <span class="meta-divider" aria-hidden="true"></span>
-                <span class="daemon-version">
-                  {{ device.daemon_version
-                    ? t('deviceList.daemonVersionShort', { version: device.daemon_version })
-                    : t('deviceList.daemonVersionUnknown') }}
-                </span>
-                <span
-                  v-if="daemonNeedsUpdate(device)"
-                  class="daemon-update-badge"
+                <span class="device-entry__meta">
+                  <span class="status-dot" :class="device.status" aria-hidden="true"></span>
+                  <span>{{ device.status === 'online' ? t('common.online') : t('common.offline') }}</span>
+                  <span class="meta-divider" aria-hidden="true"></span>
+                  <span class="agent-count">{{ t('deviceList.threadCount', { n: device.active_agents }) }}</span>
+                  <span
+                    v-if="daemonNeedsUpdate(device)"
+                    class="daemon-update-badge"
                 >{{ t('deviceList.daemonUpdateNeeded') }}</span>
               </span>
             </span>
@@ -318,22 +306,22 @@ function osLabel(os: string): string {
 <style scoped>
 .device-list-page {
   min-height: var(--neko-content-block-size, 100dvh);
-  padding: 26px 20px calc(104px + var(--neko-safe-bottom, 0px));
+  padding: 20px 20px calc(104px + var(--neko-safe-bottom, 0px));
 }
 
 .brand-hero {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px;
+  grid-template-columns: minmax(0, 1fr) 88px;
   align-items: center;
-  min-height: 172px;
+  min-height: 106px;
   margin-bottom: 12px;
 }
 
 .brand-copy {
   position: relative;
   z-index: 1;
-  padding: 10px 0 18px;
+  padding: 4px 0;
 }
 
 .eyebrow,
@@ -351,39 +339,20 @@ function osLabel(os: string): string {
 }
 
 .brand-copy h1 {
-  margin: 5px 0 0;
+  margin: 3px 0 0;
   color: var(--neko-ink);
   font-family: var(--neko-display);
-  font-size: clamp(2.1rem, 10vw, 3rem);
+  font-size: clamp(2rem, 9vw, 2.6rem);
   font-weight: 760;
   letter-spacing: -0.075em;
   line-height: 0.96;
 }
 
-.brand-copy h1 span {
-  display: block;
-  margin-top: 9px;
-  color: var(--neko-primary);
-  font-size: 0.35em;
-  font-weight: 720;
-  letter-spacing: 0.08em;
-  line-height: 1;
-}
-
-.brand-intro {
-  max-width: 19rem;
-  margin: 15px 0 0;
-  color: var(--neko-ink-soft);
-  font-size: 12px;
-  line-height: 1.65;
-  text-wrap: pretty;
-}
-
 .mascot-stage {
   position: relative;
   align-self: start;
-  width: 132px;
-  margin: 7px -7px 0 0;
+  width: 88px;
+  margin: 0;
 }
 
 .mascot-stage::before {
@@ -391,8 +360,8 @@ function osLabel(os: string): string {
   right: 8px;
   bottom: 8px;
   z-index: -1;
-  width: 104px;
-  height: 38px;
+  width: 72px;
+  height: 24px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--neko-primary) 22%, transparent);
   filter: blur(13px);
@@ -405,18 +374,19 @@ function osLabel(os: string): string {
   inset: -14px;
   z-index: -1;
   border-radius: 50%;
-  background: radial-gradient(circle, var(--neko-shell-glow-a), transparent 68%);
+  background: var(--neko-primary-soft);
+  opacity: 0.35;
 }
 
 .mascot-stage img {
   display: block;
-  width: 132px;
-  height: 132px;
-  border: 4px solid var(--neko-panel-border);
-  border-radius: 31px 31px 40px 22px;
+  width: 88px;
+  height: 88px;
+  border: 3px solid var(--neko-panel-border);
+  border-radius: 22px 22px 28px 16px;
   box-shadow: var(--neko-shadow-soft);
   object-fit: cover;
-  transform: rotate(2deg);
+  transform: none;
 }
 
 .connection-panel {
@@ -625,7 +595,7 @@ function osLabel(os: string): string {
 }
 
 .device-section {
-  margin-top: 24px;
+  margin-top: 20px;
 }
 
 .section-heading {
@@ -638,18 +608,12 @@ function osLabel(os: string): string {
 }
 
 .section-heading h2 {
-  margin: 3px 0 0;
+  margin: 0;
   color: var(--neko-ink);
   font-family: var(--neko-display);
   font-size: 19px;
   font-weight: 710;
   letter-spacing: -0.035em;
-}
-
-.device-total {
-  color: var(--neko-ink-faint);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
 }
 
 .device-cards,
@@ -733,9 +697,7 @@ function osLabel(os: string): string {
   border: 1px solid var(--neko-line);
   border-radius: 17px 17px 22px 12px;
   color: var(--neko-ink);
-  background:
-    radial-gradient(circle at 90% -30%, var(--neko-primary-soft), transparent 9rem),
-    var(--neko-surface-solid);
+  background: var(--neko-surface-solid);
   box-shadow: var(--neko-shadow-soft);
   cursor: pointer;
   text-align: left;
@@ -746,7 +708,7 @@ function osLabel(os: string): string {
 .device-entry__accent {
   align-self: stretch;
   border-radius: 0 8px 8px 0;
-  background: linear-gradient(180deg, var(--neko-rose), var(--neko-primary));
+  background: var(--neko-primary);
 }
 
 .device-entry--offline {
@@ -825,14 +787,6 @@ function osLabel(os: string): string {
   white-space: nowrap;
 }
 
-.daemon-version {
-  overflow: hidden;
-  flex: 0 1 auto;
-  min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .daemon-update-badge {
   flex: 0 0 auto;
   padding: 2px 5px;
@@ -888,15 +842,7 @@ function osLabel(os: string): string {
   display: block;
   height: 11px;
   border-radius: 5px;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--neko-ink-faint) 28%, transparent) 20%,
-      color-mix(in srgb, var(--neko-ink-faint) 14%, transparent) 45%,
-      color-mix(in srgb, var(--neko-ink-faint) 28%, transparent) 70%
-    );
-  background-size: 220% 100%;
-  animation: skeleton-sheen 1.5s ease-in-out infinite;
+  background: var(--neko-surface-muted);
 }
 
 .skeleton-line--title {
@@ -906,15 +852,6 @@ function osLabel(os: string): string {
 .skeleton-line--meta {
   width: 68%;
   height: 8px;
-}
-
-@keyframes skeleton-sheen {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: -100% 0;
-  }
 }
 
 .empty-state {
@@ -977,10 +914,8 @@ html[data-theme='dark'] .dock-pair {
   margin: 0 auto;
   padding: 12px 20px calc(12px + var(--neko-safe-bottom, 0px));
   border-top: 1px solid var(--neko-line);
-  background: color-mix(in srgb, var(--neko-surface-solid) 92%, transparent);
+  background: var(--neko-surface-solid);
   box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.18);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
 }
 
 .dock-pair {
@@ -1012,27 +947,6 @@ html[data-theme='dark'] .dock-pair {
 @media (max-width: 370px) {
   .device-list-page {
     padding-inline: 16px;
-  }
-
-  .brand-hero {
-    grid-template-columns: minmax(0, 1fr) 108px;
-  }
-
-  .mascot-stage,
-  .mascot-stage img {
-    width: 108px;
-  }
-
-  .mascot-stage img {
-    height: 108px;
-  }
-
-  .brand-copy h1 {
-    font-size: 2rem;
-  }
-
-  .brand-intro {
-    font-size: 11px;
   }
 
   .bottom-dock {

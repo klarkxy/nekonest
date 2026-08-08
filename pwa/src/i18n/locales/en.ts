@@ -49,11 +49,11 @@ export default {
   },
   setup: {
     title: 'NekoNest',
-    desc: 'Resume AI coding sessions already open on your home PC. Enter the same phone key used at deploy.',
+    desc: 'Continue AI sessions from your PC. Enter your phone key.',
     secretLabel: 'Phone key',
     placeholder: 'Paste phone key…',
     enter: 'Enter nest',
-    hint: 'Phone key = the access secret from deploy (NEKONEST_PHONE_SECRET). For local debug with no secret set, any single character works.'
+    hint: 'Your phone key was set at deploy.'
   },
   deviceList: {
     eyebrow: 'Agents on watch',
@@ -139,8 +139,8 @@ export default {
     welcomeOfflineTitle: 'This PC is not responding.',
     welcomeEmptyTitle: 'No threads to resume yet.',
     welcomeBackTitle: 'Welcome back.',
-    welcomeOfflineBody: 'Confirm the home nest daemon is running. Threads appear when it is back online.',
-    welcomeEmptyBody: 'Open or create sessions on the PC first. The phone only resumes existing threads.',
+    welcomeOfflineBody: 'Confirm the home daemon is running.',
+    welcomeEmptyBody: 'Open or create a session on the PC first.',
     welcomeBackBody: 'Pick a workspace and agent to continue a thread already on this PC.',
     loadError: 'Could not load the thread list. Try again shortly.',
     loadNetwork: 'Network issue — thread list not loaded.',
@@ -178,7 +178,7 @@ export default {
     unarchiveProjectAria: 'Restore every thread in project {project}',
     newCodexTitle: 'New Codex thread in this folder',
     newCodexAria: 'New Codex thread in {project}',
-    newThreadPicker: 'New thread…',
+    newThreadPicker: '+ New',
     newThreadPickerAria: 'Create a new thread in {project}',
     newThreadForAgent: 'New {agent} thread',
     newThreadUnavailable: '{agent}: unavailable — {reason}',
