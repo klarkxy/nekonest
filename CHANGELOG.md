@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add GitHub Actions checks for Server, Daemon, PWA, and all supported release
+  packages, plus tag-driven publication of five prebuilt archives and SHA-256
+  checksums.
+- Document direct installation from GitHub Release archives in both READMEs;
+  Server packages include the matching PWA build.
+
 ## [0.2.4] - 2026-08-09
 
 ### Added

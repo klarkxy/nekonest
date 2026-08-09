@@ -43,7 +43,7 @@ git diff --check
    用 `nekonest-server -version`、`nekonest-daemon -version`、PWA/Server 版本面板及每台机器卡片上的 Daemon 版本核验。
 3. 若环境变量、支持的智能体、部署步骤或验收路径有变，同步更新**中英**文档（`README.md` / `README.zh-CN.md`，`docs/*.md` / `docs/*.zh-CN.md`）  
 
-## 3. 提交、标签与 GitHub Release
+## 3. 提交、打标签并发布
 
 ```powershell
 git status --short --branch
@@ -53,18 +53,34 @@ git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin main
 git push origin vX.Y.Z
 
-# 将 CHANGELOG 对应版本正文写入临时 notes 后：
-gh release create vX.Y.Z --title "vX.Y.Z" --notes-file release-notes.md
+# tag 会启动 .github/workflows/release.yml；等待并检查产物：
+$runId = gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId'
+gh run watch $runId --exit-status --repo klarkxy/nekonest
+gh release view vX.Y.Z --repo klarkxy/nekonest
 ```
 
-v0.x 默认只发布**源码与构建说明**；预编译二进制可选、不强制。Release 说明应链接 README 快速开始与部署文档（中英）。
+发布工作流会重新执行全部模块门禁，确认 tag 与三处版本号一致，然后创建或
+更新 GitHub Release，包含：
+
+- Server + 同版本 PWA：Linux amd64、Linux arm64
+- Daemon：Windows amd64、Linux amd64、Linux arm64
+- 覆盖以上五个压缩包的 `checksums.txt`
+
+Release 附件名不含版本号，因此 README 可以使用
+`releases/latest/download` 稳定链接；不可变 tag 与每个压缩包内的
+`VERSION` 文件记录版本。Server 压缩包内含 `pwa-dist`。Release 说明应链接
+README 快速开始与中英文部署文档。
+
+若要补齐既有不可变 tag 缺失的附件，可手动运行 **Release binaries** 并填写
+该 tag。工作流会检出该 tag 的源码，同时使用所选工作流版本中的发布自动化，
+不会移动 tag。
 
 ## 4. 生产更新与线上验收
 
 标签不等于已部署。
 
-纯源码发布仍可有意不更新生产环境。但对于当前配置线上猫窝的运行时维护，只要任务
-没有明确限定 local-only，本地测试就不算最终验收。
+发布附件本身不会更新生产环境。但对于当前配置线上猫窝的运行时维护，只要任务没有
+明确限定 local-only，本地测试就不算最终验收。
 
 1. 合并并推送已批准提交；从这个确切提交重新构建 Server、PWA 与 daemon。
 2. 改文件前先读取线上 systemd unit 与 daemon 进程/启动器；部署文档示例值不代表

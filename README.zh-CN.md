@@ -13,6 +13,9 @@
     <a href="#文档">文档</a> ·
     <a href="#许可证">许可证</a>
   </p>
+  <p>
+    <a href="https://github.com/klarkxy/nekonest/actions/workflows/ci.yml"><img src="https://github.com/klarkxy/nekonest/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  </p>
 </div>
 
 ---
@@ -94,21 +97,41 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 
 ## 快速开始
 
-### 1. 在 VPS 构建并启动 Server
+### 1. 在 VPS 安装并启动 Server
 
-需要 Go 1.22+、Node.js 和 pnpm。公网部署还需要启用 HTTPS 的域名与 Caddy/Nginx。
+[GitHub Releases](https://github.com/klarkxy/nekonest/releases/latest) 提供
+Linux amd64 与 arm64 的 Server 压缩包。包内已经包含同版本的
+`pwa-dist`、中英文 README、许可证和版本标记；使用预编译包不需要安装
+Node.js 或 Go 工具链。
+
+```bash
+# ARM VPS 请把 amd64 换成 arm64。
+asset=nekonest-server-linux-amd64.tar.gz
+base=https://github.com/klarkxy/nekonest/releases/latest/download
+curl -fLO "$base/$asset"
+curl -fLO "$base/checksums.txt"
+grep "  $asset$" checksums.txt | sha256sum -c -
+
+mkdir -p nekonest-server
+tar -xzf "$asset" -C nekonest-server
+cd nekonest-server
+./nekonest-server -version
+
+export NEKONEST_ADMIN_SECRET='换成足够长的随机串'
+export NEKONEST_BOOTSTRAP_TOKEN='换成另一段足够长的随机串'
+./nekonest-server -port 8080 -data ./data -pwa ./pwa-dist
+```
+
+如果要从源码构建，先安装 Go 1.22+、Node.js 和 pnpm：
 
 ```bash
 git clone https://github.com/klarkxy/nekonest.git
-cd nekonest
-
-cd pwa
+cd nekonest/pwa
 pnpm install --frozen-lockfile
 pnpm build
 
 cd ../server
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/server
-
 export NEKONEST_ADMIN_SECRET='换成足够长的随机串'
 export NEKONEST_BOOTSTRAP_TOKEN='换成另一段足够长的随机串'
 ./nekonest-server -port 8080 -data ./data -pwa ../pwa/dist
@@ -118,16 +141,28 @@ export NEKONEST_BOOTSTRAP_TOKEN='换成另一段足够长的随机串'
 
 用 Caddy 或 Nginx 把公网 HTTPS/WSS 反向代理到 `127.0.0.1:8080`。完整示例见 [docs/deploy-vps.zh-CN.md](docs/deploy-vps.zh-CN.md)。
 
-### 2. 在 Windows/Linux 注册并运行 Daemon
+### 2. 在 Windows/Linux 安装、注册并运行 Daemon
 
 先安装并正常使用至少一个受支持的智能体 CLI，使其本地存储中存在可续写线程。
 
-```powershell
-git clone https://github.com/klarkxy/nekonest.git
-Set-Location nekonest\daemon
+Windows 使用 `nekonest-daemon-windows-amd64.zip`；Linux 使用
+`nekonest-daemon-linux-amd64.tar.gz` 或
+`nekonest-daemon-linux-arm64.tar.gz`。
 
-$env:CGO_ENABLED = "0"
-go build -trimpath -ldflags="-s -w" -o nekonest-daemon.exe ./cmd/daemon
+```powershell
+$asset = "nekonest-daemon-windows-amd64.zip"
+$base = "https://github.com/klarkxy/nekonest/releases/latest/download"
+Invoke-WebRequest "$base/$asset" -OutFile $asset
+Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
+
+$line = Get-Content .\checksums.txt | Where-Object { $_.EndsWith("  $asset") }
+$expected = ($line -split '\s+')[0].ToLowerInvariant()
+$actual = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 校验失败" }
+
+Expand-Archive $asset -DestinationPath .\nekonest-daemon -Force
+Set-Location .\nekonest-daemon
+.\nekonest-daemon.exe -version
 
 $env:NEKONEST_SERVER = "https://nekonest.example.com"
 $env:NEKONEST_BOOTSTRAP_TOKEN = "与 VPS 相同的注册令牌"
@@ -135,7 +170,32 @@ $env:NEKONEST_BOOTSTRAP_TOKEN = "与 VPS 相同的注册令牌"
 .\nekonest-daemon.exe
 ```
 
-注册成功后会写入主机配置并打印 6 位配对码。需要新码时：`.\nekonest-daemon.exe -pair gen`。常驻运行见 [Windows](docs/deploy-windows.zh-CN.md) · [Linux](docs/deploy-linux.zh-CN.md)。
+Linux 使用相同的校验文件和目录结构：
+
+```bash
+# ARM 主机请把 amd64 换成 arm64。
+asset=nekonest-daemon-linux-amd64.tar.gz
+base=https://github.com/klarkxy/nekonest/releases/latest/download
+curl -fLO "$base/$asset"
+curl -fLO "$base/checksums.txt"
+grep "  $asset$" checksums.txt | sha256sum -c -
+mkdir -p nekonest-daemon
+tar -xzf "$asset" -C nekonest-daemon
+cd nekonest-daemon
+./nekonest-daemon -version
+export NEKONEST_SERVER='https://nekonest.example.com'
+export NEKONEST_BOOTSTRAP_TOKEN='与 VPS 相同的注册令牌'
+./nekonest-daemon -register -name '书房电脑'
+./nekonest-daemon
+```
+
+若要从源码构建，请克隆仓库，在 `daemon/` 下运行
+`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-daemon ./cmd/daemon`。
+
+注册成功后会写入主机配置并打印 6 位配对码。需要新码时，Windows 运行
+`.\nekonest-daemon.exe -pair gen`，Linux 运行
+`./nekonest-daemon -pair gen`。常驻运行见
+[Windows](docs/deploy-windows.zh-CN.md) · [Linux](docs/deploy-linux.zh-CN.md)。
 
 ### 3. 在手机上配对
 

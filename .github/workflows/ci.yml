@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - server
+          - daemon
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Test
+        working-directory: ${{ matrix.module }}
+        run: go test -count=1 ./...
+
+      - name: Vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+  pwa:
+    name: PWA
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: "10.29.2"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pwa/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: pwa
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        working-directory: pwa
+        run: pnpm test
+
+      - name: Type-check
+        working-directory: pwa
+        run: pnpm type-check
+
+      - name: Build
+        working-directory: pwa
+        run: pnpm build
+
+      - name: Upload PWA build
+        uses: actions/upload-artifact@v7
+        with:
+          name: pwa-dist
+          path: pwa/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  packages:
+    name: Release package smoke
+    needs:
+      - go
+      - pwa
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.22.x"
+          cache: false
+
+      - name: Download PWA build
+        uses: actions/download-artifact@v7
+        with:
+          name: pwa-dist
+          path: pwa/dist
+
+      - name: Build supported packages
+        shell: pwsh
+        run: |
+          ./tools/package-release.ps1 -Component server -TargetOS linux -TargetArch amd64 -Version 0.0.0-ci -PwaDirectory pwa/dist -OutputDirectory .release-ci
+          ./tools/package-release.ps1 -Component server -TargetOS linux -TargetArch arm64 -Version 0.0.0-ci -PwaDirectory pwa/dist -OutputDirectory .release-ci
+          ./tools/package-release.ps1 -Component daemon -TargetOS linux -TargetArch amd64 -Version 0.0.0-ci -OutputDirectory .release-ci
+          ./tools/package-release.ps1 -Component daemon -TargetOS linux -TargetArch arm64 -Version 0.0.0-ci -OutputDirectory .release-ci
+          ./tools/package-release.ps1 -Component daemon -TargetOS windows -TargetArch amd64 -Version 0.0.0-ci -OutputDirectory .release-ci
+          $assets = Get-ChildItem .release-ci -File
+          if ($assets.Count -ne 5) {
+            throw "Expected 5 release packages, found $($assets.Count)."
+          }

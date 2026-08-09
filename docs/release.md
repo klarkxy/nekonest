@@ -43,7 +43,7 @@ If behavior or deploy paths changed, run [e2e-smoke.md](./e2e-smoke.md) on a rea
    Verify with `nekonest-server -version`, `nekonest-daemon -version`, the PWA/Server version panel, and each machine's Daemon version on its device card.
 3. If env vars, agents, deploy steps, or acceptance paths changed, update **both** English and Chinese docs (`README.md` / `README.zh-CN.md`, `docs/*.md` / `docs/*.zh-CN.md`)
 
-## 3. Commit, tag, GitHub Release
+## 3. Commit, tag, and publish
 
 ```powershell
 git status --short --branch
@@ -53,19 +53,35 @@ git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin main
 git push origin vX.Y.Z
 
-# write CHANGELOG section body to a temp notes file, then:
-gh release create vX.Y.Z --title "vX.Y.Z" --notes-file release-notes.md
+# The tag starts .github/workflows/release.yml. Watch it, then inspect assets:
+$runId = gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId'
+gh run watch $runId --exit-status --repo klarkxy/nekonest
+gh release view vX.Y.Z --repo klarkxy/nekonest
 ```
 
-v0.x defaults to **source + build instructions**; prebuilt binaries are optional, not required. Release notes should link README quick start and deploy docs (EN + ZH).
+The release workflow re-runs all module gates, verifies that the tag matches all
+three version surfaces, then creates or updates the GitHub Release with:
+
+- Server + matching PWA: Linux amd64 and arm64
+- Daemon: Windows amd64, Linux amd64, and Linux arm64
+- `checksums.txt` covering all five archives
+
+Release asset names stay version-independent so README installation links may
+use `releases/latest/download`; the immutable tag and each archive's `VERSION`
+file carry the version. Server archives include `pwa-dist`. Release notes
+should link the README quick start and deploy docs (EN + ZH).
+
+To repair missing assets on an existing immutable tag, run **Release binaries**
+manually with the exact tag. The workflow checks out that tag's source but uses
+the automation from the selected workflow revision; it never moves the tag.
 
 ## 4. Production update and live acceptance
 
 A tag is not a deploy.
 
-For source-only releases, production deployment may still be omitted deliberately.
-For runtime-affecting maintenance of the configured live nest, however, local
-tests are not final acceptance unless the task was explicitly scoped local-only.
+Publishing release assets does not by itself update production. For
+runtime-affecting maintenance of the configured live nest, local tests are not
+final acceptance unless the task was explicitly scoped local-only.
 
 1. Merge and push the approved commit; rebuild Server, PWA, and daemon from that
    exact commit.

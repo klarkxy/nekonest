@@ -13,6 +13,9 @@
     <a href="#documentation">Docs</a> ·
     <a href="#license">License</a>
   </p>
+  <p>
+    <a href="https://github.com/klarkxy/nekonest/actions/workflows/ci.yml"><img src="https://github.com/klarkxy/nekonest/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  </p>
 </div>
 
 ---
@@ -95,21 +98,41 @@ Active wire ids: `claude_code`, `codex`, `kimi_cli`, `grok_build`. Protocol 1.x 
 
 ## Quick start
 
-### 1. Build and run the server (VPS)
+### 1. Install and run the server (VPS)
 
-Needs Go 1.22+, Node.js, pnpm. Public deploy also needs a TLS domain and Caddy/Nginx.
+[GitHub Releases](https://github.com/klarkxy/nekonest/releases/latest) provide
+Linux amd64 and arm64 Server archives. Each archive includes the matching
+`pwa-dist`, English/Chinese READMEs, licenses, and the version marker; no
+Node.js or Go toolchain is needed for the prebuilt path.
+
+```bash
+# Replace amd64 with arm64 on an ARM VPS.
+asset=nekonest-server-linux-amd64.tar.gz
+base=https://github.com/klarkxy/nekonest/releases/latest/download
+curl -fLO "$base/$asset"
+curl -fLO "$base/checksums.txt"
+grep "  $asset$" checksums.txt | sha256sum -c -
+
+mkdir -p nekonest-server
+tar -xzf "$asset" -C nekonest-server
+cd nekonest-server
+./nekonest-server -version
+
+export NEKONEST_ADMIN_SECRET='long-random-string'
+export NEKONEST_BOOTSTRAP_TOKEN='another-long-random-string'
+./nekonest-server -port 8080 -data ./data -pwa ./pwa-dist
+```
+
+To build from source instead, install Go 1.22+, Node.js, and pnpm:
 
 ```bash
 git clone https://github.com/klarkxy/nekonest.git
-cd nekonest
-
-cd pwa
+cd nekonest/pwa
 pnpm install --frozen-lockfile
 pnpm build
 
 cd ../server
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/server
-
 export NEKONEST_ADMIN_SECRET='long-random-string'
 export NEKONEST_BOOTSTRAP_TOKEN='another-long-random-string'
 ./nekonest-server -port 8080 -data ./data -pwa ../pwa/dist
@@ -119,16 +142,28 @@ A new data directory is initialized as `sealed`. Set `NEKONEST_TRANSPORT_MODE=op
 
 Terminate public HTTPS/WSS at the reverse proxy to `127.0.0.1:8080`. Full systemd/Caddy/Nginx notes: [docs/deploy-vps.md](docs/deploy-vps.md).
 
-### 2. Register and run the daemon (Windows/Linux)
+### 2. Install, register, and run the daemon (Windows/Linux)
 
 Install and use at least one supported agent CLI so native threads exist.
 
-```powershell
-git clone https://github.com/klarkxy/nekonest.git
-Set-Location nekonest\daemon
+`nekonest-daemon-windows-amd64.zip` is the Windows package. Linux hosts use
+`nekonest-daemon-linux-amd64.tar.gz` or
+`nekonest-daemon-linux-arm64.tar.gz`.
 
-$env:CGO_ENABLED = "0"
-go build -trimpath -ldflags="-s -w" -o nekonest-daemon.exe ./cmd/daemon
+```powershell
+$asset = "nekonest-daemon-windows-amd64.zip"
+$base = "https://github.com/klarkxy/nekonest/releases/latest/download"
+Invoke-WebRequest "$base/$asset" -OutFile $asset
+Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
+
+$line = Get-Content .\checksums.txt | Where-Object { $_.EndsWith("  $asset") }
+$expected = ($line -split '\s+')[0].ToLowerInvariant()
+$actual = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 checksum mismatch" }
+
+Expand-Archive $asset -DestinationPath .\nekonest-daemon -Force
+Set-Location .\nekonest-daemon
+.\nekonest-daemon.exe -version
 
 $env:NEKONEST_SERVER = "https://nekonest.example.com"
 $env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
@@ -136,7 +171,33 @@ $env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
 .\nekonest-daemon.exe
 ```
 
-Registration writes the host config and prints a 6-digit pair code. New code: `.\nekonest-daemon.exe -pair gen`. Autostart: [Windows](docs/deploy-windows.md) · [Linux](docs/deploy-linux.md).
+Linux installation uses the same checksum file and archive layout:
+
+```bash
+# Replace amd64 with arm64 on an ARM host.
+asset=nekonest-daemon-linux-amd64.tar.gz
+base=https://github.com/klarkxy/nekonest/releases/latest/download
+curl -fLO "$base/$asset"
+curl -fLO "$base/checksums.txt"
+grep "  $asset$" checksums.txt | sha256sum -c -
+mkdir -p nekonest-daemon
+tar -xzf "$asset" -C nekonest-daemon
+cd nekonest-daemon
+./nekonest-daemon -version
+export NEKONEST_SERVER='https://nekonest.example.com'
+export NEKONEST_BOOTSTRAP_TOKEN='same-bootstrap-token-as-vps'
+./nekonest-daemon -register -name 'Study PC'
+./nekonest-daemon
+```
+
+For a source build, clone the repository and run
+`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-daemon ./cmd/daemon`
+from `daemon/`.
+
+Registration writes the host config and prints a 6-digit pair code. Generate a
+new code with `.\nekonest-daemon.exe -pair gen` on Windows or
+`./nekonest-daemon -pair gen` on Linux. Autostart:
+[Windows](docs/deploy-windows.md) · [Linux](docs/deploy-linux.md).
 
 ### 3. Pair the phone
 
