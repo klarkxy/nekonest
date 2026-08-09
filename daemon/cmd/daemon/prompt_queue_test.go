@@ -2,12 +2,55 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/nekonest/daemon/internal/adapters"
+	"github.com/nekonest/daemon/internal/attach"
 )
+
+func TestPromptQueueMigratesV1RunningAndPausedFailClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "queue.json")
+	disk := promptQueueDisk{Version: promptQueueLegacyVersion, Items: []promptQueueItem{
+		{SessionID: "session", ClientMsgID: "running", AgentType: "codex", Prompt: "one", CreatedAt: 1, Order: 1, Status: "running"},
+		{SessionID: "session", ClientMsgID: "paused", AgentType: "codex", Prompt: "two", CreatedAt: 2, Order: 2, Status: "paused"},
+	}}
+	data, err := json.Marshal(disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	queue, err := loadPromptQueue(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := queue.list("session")
+	if len(items) != 2 || items[0].Status != promptQueueBlockedIndeterminate || items[1].Status != promptQueueBlockedIndeterminate {
+		t.Fatalf("migrated v1 queue = %#v", items)
+	}
+	if _, ok, err := queue.claimNext("session"); err != nil || ok {
+		t.Fatalf("migrated blocker dispatched: ok=%v err=%v", ok, err)
+	}
+	var persisted promptQueueDisk
+	updated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(updated, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Version != promptQueueVersion {
+		t.Fatalf("persisted version = %d", persisted.Version)
+	}
+}
 
 func queueItem(sessionID, clientMsgID, prompt string) promptQueueItem {
 	return promptQueueItem{SessionID: sessionID, ClientMsgID: clientMsgID, AgentType: "codex", Prompt: prompt}
@@ -59,9 +102,6 @@ func TestPromptQueueCancelAndTransitions(t *testing.T) {
 	} else if got[0].Prompt != "" || len(got[0].Attachments) != 0 || len(got[0].SealedEnvelope) != 0 {
 		t.Fatalf("cancelled item retained application payload: %#v", got[0])
 	}
-	if err := queue.resume("session", "queued"); err == nil {
-		t.Fatal("cancelled item resumed")
-	}
 	if _, _, err := queue.enqueue(queueItem("session", "running", "two")); err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +111,8 @@ func TestPromptQueueCancelAndTransitions(t *testing.T) {
 	if err := queue.cancel("session", "running"); err == nil {
 		t.Fatal("running item was cancelled")
 	}
-	if err := queue.pause("session", "running"); err != nil {
-		t.Fatalf("pause running: %v", err)
+	if err := queue.block("session", "running", promptQueueBlockedInterrupted); err != nil {
+		t.Fatalf("block running: %v", err)
 	}
 	if err := queue.cancel("session", "running"); err != nil {
 		t.Fatalf("cancel paused: %v", err)
@@ -86,10 +126,9 @@ func TestPromptQueueCancelAndTransitions(t *testing.T) {
 	if err := queue.complete("session", "complete"); err != nil {
 		t.Fatalf("complete running: %v", err)
 	}
-	for _, item := range queue.list("session") {
-		if item.ClientMsgID == "complete" {
-			t.Fatal("completed item remained in the queue")
-		}
+	completed, ok := queue.item("session", "complete")
+	if !ok || completed.Status != promptQueueCompleted || completed.Prompt != "" {
+		t.Fatalf("completed tombstone = %#v, ok=%v", completed, ok)
 	}
 }
 
@@ -121,23 +160,23 @@ func TestPromptQueueReloadsPayloadFreeCancelledTombstone(t *testing.T) {
 	}
 }
 
-func TestPromptQueueFailsClosedAtCancelledTombstoneLimit(t *testing.T) {
+func TestPromptQueueCompactsTerminalTombstones(t *testing.T) {
 	queue, err := loadPromptQueue(filepath.Join(t.TempDir(), "queue.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < maxCancelledQueuePerSession; i++ {
+	for i := 0; i < compactQueueTombstonesAt; i++ {
 		item := promptQueueItem{
 			SessionID: "session", ClientMsgID: fmt.Sprintf("cancelled-%d", i), AgentType: "codex",
 			CreatedAt: int64(i + 1), Order: uint64(i + 1), Status: promptQueueCancelled,
 		}
 		queue.items[promptQueueKey(item.SessionID, item.ClientMsgID)] = item
 	}
-	if _, _, err := queue.enqueue(queueItem("session", "blocked", "must not bypass tombstone cap")); err == nil {
-		t.Fatal("enqueue bypassed cancelled tombstone limit")
+	if _, added, err := queue.enqueue(queueItem("session", "next", "continue after compaction")); err != nil || !added {
+		t.Fatalf("enqueue after compaction = added=%v err=%v", added, err)
 	}
-	if got := queue.list("session"); len(got) != maxCancelledQueuePerSession {
-		t.Fatalf("failed enqueue changed tombstones: %d", len(got))
+	if got := queue.list("session"); len(got) != retainQueueTombstones+1 {
+		t.Fatalf("compacted queue size = %d", len(got))
 	}
 }
 
@@ -155,7 +194,7 @@ func TestPromptQueueFailedWriteDoesNotChangeMemory(t *testing.T) {
 	}
 }
 
-func TestPromptQueueRestartPausesRunningItem(t *testing.T) {
+func TestPromptQueueRestartBlocksRunningItemIndeterminate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "queue.json")
 	queue, err := loadPromptQueue(path)
 	if err != nil {
@@ -167,19 +206,28 @@ func TestPromptQueueRestartPausesRunningItem(t *testing.T) {
 	if err := queue.markRunning("session", "message"); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := queue.enqueue(queueItem("session", "later", "later prompt")); err != nil {
+		t.Fatal(err)
+	}
 	restarted, err := loadPromptQueue(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	items := restarted.list("session")
-	if len(items) != 1 || items[0].Status != promptQueuePaused {
+	if len(items) != 2 || items[0].Status != promptQueueBlockedIndeterminate {
 		t.Fatalf("restart item = %#v", items)
 	}
-	if err := restarted.resume("session", "message"); err != nil {
-		t.Fatalf("resume paused item: %v", err)
+	if err := restarted.resumeSession("session"); err != nil {
+		t.Fatalf("resume indeterminate queue: %v", err)
 	}
-	if next, ok := restarted.next("session"); !ok || next.ClientMsgID != "message" {
-		t.Fatalf("resumed next = %#v, %v", next, ok)
+	if _, ok, err := restarted.claimNext("session"); err != nil || ok {
+		t.Fatalf("indeterminate blocker allowed dispatch: ok=%v err=%v", ok, err)
+	}
+	if err := restarted.skipIndeterminate("session", "message"); err != nil {
+		t.Fatalf("skip indeterminate blocker: %v", err)
+	}
+	if next, ok := restarted.next("session"); !ok || next.ClientMsgID != "later" {
+		t.Fatalf("next after explicit skip = %#v, %v", next, ok)
 	}
 }
 
@@ -206,7 +254,7 @@ func TestPromptQueueSealedEnvelopeRoundTripsByteForByte(t *testing.T) {
 	}
 }
 
-func TestPromptQueuePauseResumeSessionKeepsFIFO(t *testing.T) {
+func TestPromptQueueBlockedFailureResumeKeepsFIFO(t *testing.T) {
 	queue, err := loadPromptQueue(filepath.Join(t.TempDir(), "queue.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -219,18 +267,17 @@ func TestPromptQueuePauseResumeSessionKeepsFIFO(t *testing.T) {
 	if err := queue.markRunning("session", "one"); err != nil {
 		t.Fatal(err)
 	}
-	if err := queue.pauseSession("session"); err != nil {
+	if err := queue.blockSession("session", promptQueueBlockedFailed); err != nil {
 		t.Fatal(err)
 	}
-	for _, item := range queue.list("session") {
-		if item.Status != promptQueuePaused {
-			t.Fatalf("unpaused item after terminal pause: %#v", item)
-		}
+	items := queue.list("session")
+	if items[0].Status != promptQueueBlockedFailed || items[1].Status != promptQueueQueued {
+		t.Fatalf("failed blocker queue = %#v", items)
 	}
 	if err := queue.resumeSession("session"); err != nil {
 		t.Fatal(err)
 	}
-	if next, ok := queue.next("session"); !ok || next.ClientMsgID != "one" {
+	if next, ok := queue.next("session"); !ok || next.ClientMsgID != "two" {
 		t.Fatalf("resumed FIFO next = %#v, %v", next, ok)
 	}
 }
@@ -305,5 +352,45 @@ func TestQueuedPromptPayloadRejectsMoreThanFiveAttachments(t *testing.T) {
 	]`)
 	if _, _, err := queuedPromptPayload("device", "session", item); err == nil || !strings.Contains(err.Error(), "limit 5") {
 		t.Fatalf("queued payload limit error = %v", err)
+	}
+}
+
+func TestQueuedPromptRetainsAttachmentsAfterPostBoundaryJournalFailure(t *testing.T) {
+	journalPath := filepath.Join(t.TempDir(), "prompt-journal.json")
+	journal, err := loadPromptJournal(journalPath, "device", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachmentDir := t.TempDir()
+	attachmentPath := filepath.Join(attachmentDir, "file.txt")
+	if err := os.WriteFile(attachmentPath, []byte("still in use"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var request adapters.PromptRequest
+	target := &routingAdapter{name: "claude_code", sendPrompt: func(got adapters.PromptRequest) error {
+		request = got
+		// The native process has started. Force only the following accepted
+		// journal transition to fail.
+		journal.path = t.TempDir()
+		return nil
+	}}
+	item := promptQueueItem{SessionID: "session", ClientMsgID: "message", AgentType: "claude_code", Prompt: "inspect"}
+	crossed, dispatchErr := dispatchQueuedPrompt(
+		target, journal, newPromptAcceptanceCache(8), nil, "device", item,
+		"inspect", []attach.LocalFile{{Path: attachmentPath, Name: "file.txt", MIME: "text/plain"}},
+		attachmentDir, 1, newActiveTurnRegistry(), nil,
+	)
+	if dispatchErr == nil || !crossed {
+		t.Fatalf("dispatch = crossed %v, err %v", crossed, dispatchErr)
+	}
+	if _, err := os.Stat(attachmentPath); err != nil {
+		t.Fatalf("post-boundary attachment was removed early: %v", err)
+	}
+	if request.OnComplete == nil {
+		t.Fatal("native process did not receive attachment cleanup ownership")
+	}
+	request.OnComplete()
+	if _, err := os.Stat(attachmentDir); !os.IsNotExist(err) {
+		t.Fatalf("attachment directory still exists after native completion: %v", err)
 	}
 }

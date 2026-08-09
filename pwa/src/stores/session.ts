@@ -4,6 +4,7 @@ import type {
   AgentSession,
   AgentStartCapability,
   AgentType,
+  AttachmentMode,
   AttachmentRef,
   DeliveryStatus,
   MessageType,
@@ -33,6 +34,7 @@ export const useSessionStore = defineStore('sessions', () => {
   const startCapabilities = ref<AgentStartCapability[] | null>(null)
   const catalogStatus = ref<'loading' | 'ready'>('loading')
   const catalogDeviceId = ref<string | null>(null)
+  const catalogProducerVersion = ref<string | null>(null)
   const currentSession = ref<AgentSession | null>(null)
   const messages = ref<SessionMessage[]>([])
   const loading = ref(false)
@@ -156,9 +158,14 @@ export const useSessionStore = defineStore('sessions', () => {
       const item = value as Record<string, unknown>
       const clientMsgId = typeof item.client_msg_id === 'string' ? item.client_msg_id.trim() : ''
       if (!clientMsgId) return []
-      const status: QueueItem['status'] = item.status === 'starting' || item.status === 'paused'
-        ? item.status
-        : 'queued'
+      const rawStatus = String(item.status || '')
+      const status: QueueItem['status'] = rawStatus === 'starting' || rawStatus === 'running'
+        ? 'running'
+        : rawStatus === 'paused'
+          ? 'blocked_indeterminate'
+          : ['queued', 'completed', 'blocked_failed', 'blocked_interrupted', 'blocked_indeterminate', 'cancelled'].includes(rawStatus)
+            ? rawStatus as QueueItem['status']
+            : 'blocked_indeterminate'
       return [{
         client_msg_id: clientMsgId,
         position: typeof item.position === 'number' ? item.position : 0,
@@ -416,7 +423,8 @@ export const useSessionStore = defineStore('sessions', () => {
             'send_prompt',
             payload,
             it.clientMsgId,
-            timestamp
+            timestamp,
+            nekoWS().getProtocolVersion()
           )
         } catch {
           // Fail closed below: a sealed nest must never leak a plaintext retry.
@@ -432,6 +440,7 @@ export const useSessionStore = defineStore('sessions', () => {
           return false
         }
         const frame: NekoMessage = {
+          protocol_version: nekoWS().getProtocolVersion(),
           type: 'send_prompt',
           device_id: it.deviceId,
           session_id: it.sessionId,
@@ -730,7 +739,7 @@ export const useSessionStore = defineStore('sessions', () => {
         flushOutbox()
       } else if (msg.type === 'session_list' && msg.device_id === deviceId) {
         withAuthenticatedMessagePayload(msg, payload => {
-          applySessionList(payload as SessionListPayload, deviceId)
+          applySessionList(payload as SessionListPayload, deviceId, msg.protocol_version)
           catalogDeviceId.value = deviceId
           catalogStatus.value = 'ready'
           if (currentSession.value) {
@@ -756,13 +765,33 @@ export const useSessionStore = defineStore('sessions', () => {
         })
       } else if (msg.type === 'session_update') {
 		const applySessionUpdate = (plain: Record<string, unknown> | undefined) => {
-		const raw = plain?.session ?? plain
-		const updated = raw as AgentSession | undefined
-		if (!updated?.id) return
+		const raw = (plain?.session ?? plain) as AgentSession | undefined
+		if (!raw?.id) return
+		const idx = sessions.value.findIndex(s => s.id === raw.id)
+		const previous = idx >= 0
+		  ? sessions.value[idx]
+		  : currentSession.value?.id === raw.id
+		    ? currentSession.value
+		    : undefined
+		// session_update is a patch, not a replacement. Active-turn, approval,
+		// and user-input updates intentionally omit the capability table.
+		const merged = previous
+		  ? {
+		      ...previous,
+		      ...raw,
+		      capabilities: raw.capabilities === undefined ? previous.capabilities : raw.capabilities
+		    }
+		  : raw
+		const updated = normalizeSessionCapabilities(merged, msg.protocol_version)
+		if (!updated) return
+        if (updated.agent_type === 'kilo') {
+          sessions.value = sessions.value.filter(session => session.id !== updated.id)
+          if (currentSession.value?.id === updated.id) setCurrentSession(null)
+          return
+        }
         if (updated.device_id && updated.device_id !== deviceId) return
-        const idx = sessions.value.findIndex(s => s.id === updated.id)
         if (idx >= 0) {
-          sessions.value[idx] = { ...sessions.value[idx], ...updated }
+          sessions.value[idx] = updated
           if (currentSession.value?.id === updated.id) {
             currentSession.value = sessions.value[idx]
           }
@@ -1040,14 +1069,42 @@ export const useSessionStore = defineStore('sessions', () => {
     })
   }
 
-  function applySessionList(payload: SessionListPayload, deviceId: string) {
-    sessions.value = (payload.sessions || []).filter(
-      s => !s.device_id || s.device_id === deviceId
+  function applySessionList(payload: SessionListPayload, deviceId: string, producerVersion?: string) {
+    catalogProducerVersion.value = producerVersion || null
+    sessions.value = (payload.sessions || []).map(session =>
+      normalizeSessionCapabilities(session, producerVersion)
+    ).filter(
+      (s): s is AgentSession => !!s && s.agent_type !== 'kilo' && (!s.device_id || s.device_id === deviceId)
     )
     // Keep absent (legacy) distinct from an explicit empty catalog.
     startCapabilities.value = Array.isArray(payload.start_capabilities)
-      ? payload.start_capabilities
+      ? payload.start_capabilities.filter(capability => capability.agent_type !== 'kilo')
       : null
+  }
+
+  function normalizeSessionCapabilities(session: AgentSession | undefined, producerVersion?: string): AgentSession | undefined {
+    if (!session) return undefined
+    const match = /^(\d+)\.(\d+)$/.exec(producerVersion || '')
+    const legacy = !!match && Number(match[1]) === 1 && Number(match[2]) <= 1
+    const caps = session.capabilities
+    if (!caps) {
+      return { ...session, capabilities: { send: legacy, interrupt: legacy, attachment_mode: 'unsupported' } }
+    }
+    return {
+      ...session,
+      capabilities: {
+        ...caps,
+        send: typeof caps.send === 'boolean' ? caps.send : legacy,
+        interrupt: typeof caps.interrupt === 'boolean' ? caps.interrupt : legacy,
+        approve: caps.approve === true,
+        deny: caps.deny === true,
+        steer: caps.steer === true,
+        queue: caps.queue === true,
+        spawn: caps.spawn === true,
+        user_input: caps.user_input === true || (legacy && !!session.pending_user_input),
+        attachment_mode: caps.attachment_mode || 'unsupported'
+      }
+    }
   }
 
   function pushInbox(deviceId: string, sessionId: string, msg: SessionMessage) {
@@ -1261,7 +1318,16 @@ export const useSessionStore = defineStore('sessions', () => {
     attachments?: Array<{ id?: string; url: string; name?: string; mime?: string; size?: number }>
   ): boolean {
     lastError.value = null
+	const capabilitySession = sessionForCapability(deviceId, sessionId)
+    if (capabilitySession?.capabilities?.send !== true) {
+      lastError.value = tGlobal('session.sendUnavailable')
+      return false
+    }
     const atts = attachments?.filter(a => a?.url) || []
+	if (atts.length > 0 && !attachmentsAllowed(capabilitySession.capabilities?.attachment_mode, atts)) {
+	  lastError.value = tGlobal('session.attachmentUnavailable')
+	  return false
+	}
     if (!prompt.trim() && atts.length === 0) {
       lastError.value = tGlobal('errors.emptyPrompt')
       return false
@@ -1339,6 +1405,15 @@ export const useSessionStore = defineStore('sessions', () => {
       lastError.value = tGlobal('errors.channelRetry')
       return false
     }
+    const capabilitySession = sessionForCapability(item.deviceId, item.sessionId)
+    if (capabilitySession?.capabilities?.send !== true) {
+      lastError.value = tGlobal('session.sendUnavailable')
+      return false
+    }
+    if (!attachmentsAllowed(capabilitySession.capabilities?.attachment_mode, item.attachments || [])) {
+      lastError.value = tGlobal('session.attachmentUnavailable')
+      return false
+    }
     // A definitive retry is a new command. One client_msg_id always keeps one
     // immutable envelope; the failed ID remains terminal in server durability.
     const retryClientMsgId = newPromptClientMsgId()
@@ -1374,12 +1449,20 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   function approve(deviceId: string, sessionId: string, approvalId: string): boolean {
+	if (!hasSessionCapability(deviceId, sessionId, 'approve')) {
+	  lastError.value = tGlobal('session.controlUnavailable')
+	  return false
+	}
     const ok = sendApplicationCommand('approve', deviceId, sessionId, { approval_id: approvalId })
     if (!ok) lastError.value = tGlobal('errors.channelApprove')
     return ok
   }
 
   function deny(deviceId: string, sessionId: string, approvalId: string): boolean {
+	if (!hasSessionCapability(deviceId, sessionId, 'deny')) {
+	  lastError.value = tGlobal('session.controlUnavailable')
+	  return false
+	}
     const ok = sendApplicationCommand('deny', deviceId, sessionId, { approval_id: approvalId })
     if (!ok) lastError.value = tGlobal('errors.channelReject')
     return ok
@@ -1408,7 +1491,7 @@ export const useSessionStore = defineStore('sessions', () => {
       try {
         sealed = await encryptSessionPayload(
           deviceId, sessionId, getPhoneId() || 'phone', type, payload,
-          clientMsgId, timestamp
+          clientMsgId, timestamp, nekoWS().getProtocolVersion()
         )
       } catch {
         // Fall through to the fail-closed error below.
@@ -1431,6 +1514,10 @@ export const useSessionStore = defineStore('sessions', () => {
 	pending: PendingUserInput,
 	answers: Record<string, string[]>
   ): Promise<boolean> {
+	if (!hasSessionCapability(deviceId, sessionId, 'user_input')) {
+	  lastError.value = tGlobal('session.controlUnavailable')
+	  return false
+	}
 	const payload: Record<string, unknown> = { request_id: pending.request_id, answers }
 	const timestamp = Math.floor(Date.now() / 1000)
 	if (nestTransportMode() === 'sealed') {
@@ -1438,7 +1525,7 @@ export const useSessionStore = defineStore('sessions', () => {
 	  try {
 		sealed = await encryptSessionPayload(
 		  deviceId, sessionId, getPhoneId() || 'phone', 'respond_user_input', payload,
-		  undefined, timestamp
+		  undefined, timestamp, nekoWS().getProtocolVersion()
 		)
 	  } catch {
 		// Treat local crypto failures as definitive so the form can be retried.
@@ -1463,7 +1550,16 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   function interrupt(deviceId: string, sessionId: string): boolean {
-    const ok = sendApplicationCommand('interrupt', deviceId, sessionId, {})
+	const session = sessionForCapability(deviceId, sessionId)
+	const binding = session?.active_turn
+	if (!canInterrupt(deviceId, sessionId)) {
+	  lastError.value = tGlobal('session.controlUnavailable')
+	  return false
+	}
+	const payload = binding && validActiveTurnBinding(binding)
+	  ? { generation: binding.generation, client_msg_id: binding.client_msg_id }
+	  : {}
+	const ok = sendApplicationCommand('interrupt', deviceId, sessionId, payload)
     if (!ok) lastError.value = tGlobal('errors.channelInterrupt')
     return ok
   }
@@ -1475,17 +1571,25 @@ export const useSessionStore = defineStore('sessions', () => {
       lastError.value = tGlobal('errors.emptySteer')
       return false
     }
+	if (!hasSessionCapability(deviceId, sessionId, 'steer')) {
+	  lastError.value = tGlobal('session.controlUnavailable')
+	  return false
+	}
     const ok = sendApplicationCommand('steer', deviceId, sessionId, { text: trimmed })
     if (!ok) lastError.value = tGlobal('errors.channelSteer')
     return ok
   }
 
   function sendQueueControl(
-    type: 'cancel_prompt' | 'resume_prompt_queue',
+    type: 'cancel_prompt' | 'resume_prompt_queue' | 'skip_prompt_queue_item',
     deviceId: string,
     sessionId: string,
     payload: Record<string, unknown>
   ): boolean {
+	if (!hasSessionCapability(deviceId, sessionId, 'queue')) {
+	  lastError.value = tGlobal('session.controlUnavailable')
+	  return false
+	}
     return sendApplicationCommand(type, deviceId, sessionId, payload)
   }
 
@@ -1499,6 +1603,14 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function resumePromptQueue(deviceId: string, sessionId: string): boolean {
     const ok = sendQueueControl('resume_prompt_queue', deviceId, sessionId, {})
+    if (!ok) lastError.value = tGlobal('errors.channelQueueControl')
+    return ok
+  }
+
+  function skipPromptQueueItem(deviceId: string, sessionId: string, clientMsgId: string): boolean {
+    const cid = clientMsgId.trim()
+    if (!cid) return false
+    const ok = sendQueueControl('skip_prompt_queue_item', deviceId, sessionId, { client_msg_id: cid })
     if (!ok) lastError.value = tGlobal('errors.channelQueueControl')
     return ok
   }
@@ -1529,20 +1641,46 @@ export const useSessionStore = defineStore('sessions', () => {
     attachments?: AttachmentRef[]
   ): { ok: boolean; operationId: string } {
     const operationId = boundOperationId.trim() || `local_start_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+	const projectDir = cwd.trim()
+	const legacyCodexSession = startCapabilities.value === null && agentType === 'codex'
+	  ? [currentSession.value, ...sessions.value].find(session =>
+	      session?.device_id === deviceId &&
+	      session.agent_type === 'codex' &&
+	      session.capabilities?.spawn === true
+	    )
+	  : undefined
+	const capability: AgentStartCapability | undefined =
+	  startCapabilities.value?.find(item => item.agent_type === agentType) ??
+	  (legacyCodexSession
+	    ? {
+	        agent_type: 'codex',
+	        available: true,
+	        spawn: true,
+	        attachment_mode: legacyCodexSession.capabilities?.attachment_mode
+	      }
+	    : undefined)
+	const refs = attachments?.filter(item => item?.url) || []
+	if (!projectDir || !capability || capability.available !== true || capability.spawn !== true ||
+	  !attachmentsAllowed(capability.attachment_mode, refs)) {
+	  lastError.value = refs.length > 0 && capability?.attachment_mode === 'unsupported'
+	    ? tGlobal('session.attachmentUnavailable')
+	    : tGlobal('deviceDetail.startThreadUnavailable')
+	  return { ok: false, operationId }
+	}
     const firstPromptText = firstPrompt.trim()
     startOps.value = {
       ...startOps.value,
       [operationId]: {
-        deviceId, agentType, cwd, firstPrompt: firstPromptText, status: 'starting'
+		deviceId, agentType, cwd: projectDir, firstPrompt: firstPromptText, status: 'starting'
       }
     }
     const timestamp = Math.floor(Date.now() / 1000)
     const payload = {
       operation_id: operationId,
-      project_dir: cwd,
+		project_dir: projectDir,
       agent_type: agentType,
       prompt: firstPrompt,
-      ...(attachments?.length ? { attachments } : {})
+      ...(refs.length ? { attachments: refs } : {})
     }
     if (nestTransportMode() === 'sealed') {
       void (async () => {
@@ -1555,7 +1693,8 @@ export const useSessionStore = defineStore('sessions', () => {
             'start_thread',
             payload,
             operationId,
-            timestamp
+            timestamp,
+            nekoWS().getProtocolVersion()
           )
         } catch {
           // No ciphertext was produced or sent; this is a definitive local failure.
@@ -1610,6 +1749,46 @@ export const useSessionStore = defineStore('sessions', () => {
     }
     return { ok, operationId }
   }
+
+	function sessionForCapability(deviceId: string, sessionId: string): AgentSession | undefined {
+	  if (currentSession.value?.id === sessionId && currentSession.value.device_id === deviceId) {
+	    return currentSession.value
+	  }
+	  return sessions.value.find(session => session.id === sessionId && session.device_id === deviceId)
+	}
+
+	function hasSessionCapability(
+	  deviceId: string,
+	  sessionId: string,
+	  capability: 'approve' | 'deny' | 'interrupt' | 'steer' | 'queue' | 'user_input'
+	): boolean {
+	  return sessionForCapability(deviceId, sessionId)?.capabilities?.[capability] === true
+	}
+
+	function validActiveTurnBinding(binding: AgentSession['active_turn']): boolean {
+	  return !!binding && Number.isSafeInteger(binding.generation) && binding.generation > 0 &&
+	    !!binding.client_msg_id?.trim()
+	}
+
+	function legacyCatalogProducer(): boolean {
+	  const match = /^(\d+)\.(\d+)$/.exec(catalogProducerVersion.value || '')
+	  return !!match && Number(match[1]) === 1 && Number(match[2]) <= 1
+	}
+
+	function canInterrupt(deviceId: string, sessionId: string): boolean {
+	  const session = sessionForCapability(deviceId, sessionId)
+	  return session?.capabilities?.interrupt === true &&
+	    (validActiveTurnBinding(session.active_turn) || legacyCatalogProducer())
+	}
+
+	function attachmentsAllowed(
+	  mode: AttachmentMode | undefined,
+	  attachments: Array<{ mime?: string }>
+	): boolean {
+	  if (attachments.length === 0) return true
+	  if (mode === 'native_image_and_file' || mode === 'path_best_effort') return true
+	  return mode === 'native_image' && attachments.every(item => item.mime?.toLowerCase().startsWith('image/'))
+	}
 
   function applyStartThreadResult(
     type: string,
@@ -1689,11 +1868,11 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   return {
-    sessions, startCapabilities, catalogStatus, catalogDeviceId, currentSession, currentSessionCatalogVisible, messages, loading, importing, streaming, lastError, lastUserInputResult, wsStatus,
+    sessions, startCapabilities, catalogStatus, catalogDeviceId, catalogProducerVersion, currentSession, currentSessionCatalogVisible, messages, loading, importing, streaming, lastError, lastUserInputResult, wsStatus,
     promptQueues, currentPromptQueue,
     startOps,
     subscribeDevice, applySessionList, setCurrentSession, clearMessages, requestNativeHistory,
-    sendPrompt, retryPrompt, approve, deny, respondUserInput, interrupt, steer, cancelPrompt, resumePromptQueue, startThread, clearStartOp,
+    sendPrompt, retryPrompt, approve, deny, respondUserInput, canInterrupt, interrupt, steer, cancelPrompt, resumePromptQueue, skipPromptQueueItem, startThread, clearStartOp,
     isPending, cleanup
   }
 })

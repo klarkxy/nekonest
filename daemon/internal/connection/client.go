@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/nekonest/daemon/internal/buildinfo"
+	"github.com/nekonest/daemon/internal/wire"
 )
 
 const (
@@ -23,21 +24,22 @@ const (
 
 // Client manages the WebSocket connection to the NekoNest server.
 type Client struct {
-	serverURL     string
-	deviceID      string
-	token         string
-	transportMode string
-	conn          *websocket.Conn
-	mu            sync.Mutex
-	connectMu     sync.Mutex
-	dispatchMu    sync.RWMutex // linearizes callbacks against endpoint changes/Close
-	onMessage     func([]byte)
-	onConnect     func() // called after successful auth (initial + reconnect)
-	connected     bool
-	reconnects    int
-	closed        bool
-	generation    uint64        // incremented whenever the desired endpoint changes
-	closeCh       chan struct{} // closed when Close() is called
+	serverURL       string
+	deviceID        string
+	token           string
+	transportMode   string
+	protocolVersion string
+	conn            *websocket.Conn
+	mu              sync.Mutex
+	connectMu       sync.Mutex
+	dispatchMu      sync.RWMutex // linearizes callbacks against endpoint changes/Close
+	onMessage       func([]byte)
+	onConnect       func() // called after successful auth (initial + reconnect)
+	connected       bool
+	reconnects      int
+	closed          bool
+	generation      uint64        // incremented whenever the desired endpoint changes
+	closeCh         chan struct{} // closed when Close() is called
 }
 
 // NewClient creates a new connection client.
@@ -47,11 +49,12 @@ func NewClient(ctx context.Context, serverURL, deviceID, token string, modes ...
 		transportMode = strings.TrimSpace(modes[0])
 	}
 	return &Client{
-		serverURL:     serverURL,
-		deviceID:      deviceID,
-		token:         token,
-		transportMode: transportMode,
-		closeCh:       make(chan struct{}),
+		serverURL:       serverURL,
+		deviceID:        deviceID,
+		token:           token,
+		transportMode:   transportMode,
+		protocolVersion: wire.CurrentProtocolVersion,
+		closeCh:         make(chan struct{}),
 	}
 }
 
@@ -115,6 +118,7 @@ func (c *Client) SetServerURLAndPublish(url string, publish func()) {
 		oldConn = c.conn
 		c.conn = nil
 		c.connected = false
+		c.protocolVersion = wire.CurrentProtocolVersion
 	}
 	c.mu.Unlock()
 
@@ -156,7 +160,7 @@ func (c *Client) Connect() error {
 			return fmt.Errorf("invalid configured transport_mode %q", transportMode)
 		}
 		authMsg := map[string]interface{}{
-			"protocol_version": "1.1",
+			"protocol_version": wire.CurrentProtocolVersion,
 			"transport_mode":   transportMode,
 			"type":             "register_device",
 			"device_id":        deviceID,
@@ -217,7 +221,9 @@ func (c *Client) Connect() error {
 			_ = conn.Close()
 			return fmt.Errorf("auth failed: transport_mode mismatch: configured %s, server %q", transportMode, serverMode)
 		}
+		negotiatedVersion := ""
 		if payload, ok := resp["payload"].(map[string]interface{}); ok {
+			negotiatedVersion, _ = payload["protocol_version"].(string)
 			serverVersion, _ := payload["server_version"].(string)
 			if serverVersion != "" {
 				log.Printf(
@@ -227,6 +233,18 @@ func (c *Client) Connect() error {
 					serverVersion != buildinfo.Version,
 				)
 			}
+		}
+		if negotiatedVersion == "" {
+			negotiatedVersion, _ = resp["protocol_version"].(string)
+		}
+		if negotiatedVersion == "" {
+			// Compatibility with pre-negotiation test/development servers. A real
+			// v1.1 server sends the negotiated version in auth_response payload.
+			negotiatedVersion = wire.CurrentProtocolVersion
+		}
+		if err := wire.ValidateNegotiatedVersion(negotiatedVersion); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("auth failed: %w", err)
 		}
 
 		c.dispatchMu.Lock()
@@ -246,6 +264,7 @@ func (c *Client) Connect() error {
 		oldConn := c.conn
 		c.conn = conn
 		c.connected = true
+		c.protocolVersion = negotiatedVersion
 		c.reconnects = 0
 		onConnect := c.onConnect
 		c.mu.Unlock()
@@ -295,6 +314,18 @@ func (c *Client) Send(msg interface{}) error {
 	return c.conn.WriteJSON(msg)
 }
 
+// ProtocolVersion returns the current connection generation's negotiated
+// major.minor. Before authentication it returns the highest locally supported
+// version used by the register_device frame.
+func (c *Client) ProtocolVersion() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.protocolVersion == "" {
+		return wire.CurrentProtocolVersion
+	}
+	return c.protocolVersion
+}
+
 // StartReadLoop starts the read loop with auto-reconnect, respects context cancellation.
 func (c *Client) StartReadLoop(ctx context.Context) {
 	for {
@@ -337,6 +368,7 @@ func (c *Client) StartReadLoop(ctx context.Context) {
 			if wasCurrent {
 				c.conn = nil
 				c.connected = false
+				c.protocolVersion = wire.CurrentProtocolVersion
 			}
 			c.mu.Unlock()
 			_ = conn.Close()
@@ -395,9 +427,13 @@ func (c *Client) heartbeatMessage(now time.Time) map[string]interface{} {
 	c.mu.Lock()
 	deviceID := c.deviceID
 	transportMode := c.transportMode
+	protocolVersion := c.protocolVersion
+	if protocolVersion == "" {
+		protocolVersion = wire.CurrentProtocolVersion
+	}
 	c.mu.Unlock()
 	return map[string]interface{}{
-		"protocol_version": "1.1",
+		"protocol_version": protocolVersion,
 		"transport_mode":   transportMode,
 		"type":             "heartbeat",
 		"device_id":        deviceID,
@@ -418,6 +454,7 @@ func (c *Client) Close() {
 	}
 	c.closed = true
 	c.generation++
+	c.protocolVersion = wire.CurrentProtocolVersion
 	close(c.closeCh)
 
 	if c.conn != nil {

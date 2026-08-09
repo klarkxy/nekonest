@@ -8,10 +8,15 @@ import (
 )
 
 // CurrentProtocolVersion is the server's advertised major.minor wire version.
-const CurrentProtocolVersion = "1.1"
+const CurrentProtocolVersion = "1.2"
 
 // CurrentProtocolMajor is the major component of CurrentProtocolVersion.
 const CurrentProtocolMajor = 1
+
+// CurrentProtocolMinor is the highest backward-compatible minor supported by
+// this server. Handshake sites must use this constant rather than drifting
+// local literals.
+const CurrentProtocolMinor = 2
 
 // MessageType defines the type of messages in the NekoNest protocol.
 type MessageType string
@@ -41,6 +46,7 @@ const (
 	MsgCancelPrompt        MessageType = "cancel_prompt"
 	MsgPromptCancelled     MessageType = "prompt_cancelled"
 	MsgResumePromptQueue   MessageType = "resume_prompt_queue"
+	MsgSkipPromptQueueItem MessageType = "skip_prompt_queue_item"
 	MsgStartThread         MessageType = "start_thread"
 	MsgThreadStarting      MessageType = "thread_starting"
 	MsgThreadOwned         MessageType = "thread_owned"
@@ -163,21 +169,24 @@ type AgentType string
 const (
 	AgentClaudeCode AgentType = "claude_code"
 	AgentCodex      AgentType = "codex"
-	AgentKilo       AgentType = "kilo"
-	AgentKimiCLI    AgentType = "kimi_cli"
-	AgentGrokBuild  AgentType = "grok_build"
+	// AgentKilo is retained only so protocol 1.x peers can parse and reject the
+	// retired id without treating it as an active catalog entry.
+	AgentKilo      AgentType = "kilo"
+	AgentKimiCLI   AgentType = "kimi_cli"
+	AgentGrokBuild AgentType = "grok_build"
 )
 
 // AgentStartCapability is a device-scoped native thread-creation capability.
 // A missing entry, an unknown agent, or Available=false must be treated as
 // unavailable by consumers.
 type AgentStartCapability struct {
-	AgentType      AgentType `json:"agent_type"`
-	Available      bool      `json:"available"`
-	Spawn          bool      `json:"spawn"`
-	Reason         string    `json:"reason,omitempty"`
-	ControlPath    string    `json:"control_path,omitempty"`
-	ControlVersion string    `json:"control_version,omitempty"`
+	AgentType      AgentType      `json:"agent_type"`
+	Available      bool           `json:"available"`
+	Spawn          bool           `json:"spawn"`
+	Reason         string         `json:"reason,omitempty"`
+	ControlPath    string         `json:"control_path,omitempty"`
+	ControlVersion string         `json:"control_version,omitempty"`
+	AttachmentMode AttachmentMode `json:"attachment_mode"`
 }
 
 // SessionListPayload is the optional structured payload for session_list.
@@ -190,14 +199,19 @@ type SessionListPayload struct {
 // SessionCapabilities advertises per-session control surface.
 // Absent / zero values mean unsupported (false).
 type SessionCapabilities struct {
-	ControlMode    ControlMode    `json:"control_mode,omitempty"`
-	Approve        bool           `json:"approve,omitempty"`
-	Deny           bool           `json:"deny,omitempty"`
-	Interrupt      bool           `json:"interrupt,omitempty"`
-	Steer          bool           `json:"steer,omitempty"`
-	Queue          bool           `json:"queue,omitempty"`
-	Spawn          bool           `json:"spawn,omitempty"`
-	AttachmentMode AttachmentMode `json:"attachment_mode,omitempty"`
+	ControlMode        ControlMode       `json:"control_mode"`
+	Send               bool              `json:"send"`
+	Approve            bool              `json:"approve"`
+	Deny               bool              `json:"deny"`
+	Interrupt          bool              `json:"interrupt"`
+	Steer              bool              `json:"steer"`
+	Queue              bool              `json:"queue"`
+	Spawn              bool              `json:"spawn"`
+	UserInput          bool              `json:"user_input"`
+	AttachmentMode     AttachmentMode    `json:"attachment_mode"`
+	ControlPath        string            `json:"control_path,omitempty"`
+	ControlVersion     string            `json:"control_version,omitempty"`
+	UnavailableReasons map[string]string `json:"unavailable_reasons,omitempty"`
 }
 
 // Normalize applies defaults for absent capability fields.
@@ -234,6 +248,15 @@ type AgentSession struct {
 	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
 	PendingApproval  *PendingApproval     `json:"pending_approval,omitempty"`
 	PendingUserInput *PendingUserInput    `json:"pending_user_input,omitempty"`
+	ActiveTurn       *ActiveTurnBinding   `json:"active_turn,omitempty"`
+}
+
+// ActiveTurnBinding identifies the exact daemon generation that may receive
+// an interrupt. Phones must echo both required fields; stale bindings fail.
+type ActiveTurnBinding struct {
+	Generation      uint64 `json:"generation"`
+	ClientMsgID     string `json:"client_msg_id"`
+	NativeRequestID string `json:"native_request_id,omitempty"`
 }
 
 // PendingApproval represents a tool call awaiting user approval.
@@ -441,7 +464,7 @@ func BodyPolicy(msgType MessageType) MessageBodyPolicy {
 		MsgSendPrompt, MsgPromptQueued, MsgPromptAccepted, MsgPromptFailed, MsgPromptSent,
 		MsgApprove, MsgDeny, MsgInterrupt, MsgSteer,
 		MsgRespondUserInput, MsgUserInputResult,
-		MsgQueueUpdate, MsgCancelPrompt, MsgPromptCancelled, MsgResumePromptQueue,
+		MsgQueueUpdate, MsgCancelPrompt, MsgPromptCancelled, MsgResumePromptQueue, MsgSkipPromptQueueItem,
 		MsgStartThread, MsgThreadStarting, MsgThreadOwned, MsgThreadFailed, MsgThreadIndeterminate,
 		MsgFetchHistory, MsgSessionHistory:
 		return MessageBodyApplication
@@ -529,7 +552,7 @@ type HandshakeResult struct {
 
 // NegotiateHandshake validates client protocol_version and transport_mode against
 // the nest configuration. serverMinor is the server's supported minor for the
-// current major (currently 1 for protocol 1.1).
+// current major (currently 2 for protocol 1.2).
 func NegotiateHandshake(clientVersion string, clientMode string, nestMode TransportMode, serverMinor int) HandshakeResult {
 	if nestMode == "" {
 		nestMode = TransportSealed

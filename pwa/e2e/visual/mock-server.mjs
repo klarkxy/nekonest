@@ -19,6 +19,7 @@ import {
 const HOST = '127.0.0.1'
 const PORT = 18080
 let activeScenario = 'devices-mixed'
+let disconnectedCatalogScenario = ''
 
 function sendJSON(response, status, value) {
   const body = JSON.stringify(value)
@@ -83,6 +84,7 @@ const server = createServer(async (request, response) => {
         return
       }
       activeScenario = name
+      disconnectedCatalogScenario = ''
       for (const client of webSockets.clients) client.close(1000, 'scenario changed')
       sendJSON(response, 200, { ok: true, scenario: activeScenario })
     } catch {
@@ -231,7 +233,7 @@ webSockets.on('connection', socket => {
     const deviceId = message.device_id || MAIN_DEVICE_ID
 
     if (message.type === 'subscribe') {
-      if (state.behavior.websocket === 'disconnect') {
+      if (state.behavior.websocket === 'disconnect' && disconnectedCatalogScenario === state.name) {
         socket.close(1012, 'visual fixture disconnected')
         return
       }
@@ -251,6 +253,11 @@ webSockets.on('connection', socket => {
         device_id: deviceId,
         payload: { sessions: state.sessions, start_capabilities: START_CAPABILITIES }
       })
+      if (state.behavior.websocket === 'disconnect') {
+        disconnectedCatalogScenario = state.name
+        setTimeout(() => socket.close(1012, 'visual fixture disconnected'), 20)
+        return
+      }
       if (state.name === 'session-streaming') {
         setTimeout(() => {
           sendSessionMessage(socket, MAIN_SESSION_ID, {
@@ -358,13 +365,17 @@ webSockets.on('connection', socket => {
         project: 'nekonest',
         capabilities: {
           control_mode: 'app_server',
+          send: true,
           approve: true,
           deny: true,
           interrupt: true,
           steer: true,
+          queue: true,
           spawn: true,
+          user_input: true,
           attachment_mode: 'native_image_and_file'
-        }
+        },
+        active_turn: { generation: 22, client_msg_id: operationId, native_request_id: 'turn-visual-22' }
       }
       setTimeout(() => {
         sendFrame(socket, {
@@ -383,7 +394,7 @@ webSockets.on('connection', socket => {
             session_id: NATIVE_THREAD_ID,
             ...(state.behavior.threadOutcome === 'indeterminate'
               ? { error: 'Daemon 未能确认最终回执' }
-              : {})
+              : { prompt_accepted: true })
           }
         })
         if (state.behavior.threadOutcome === 'owned') {

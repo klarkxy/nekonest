@@ -26,7 +26,7 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 | [v1-product.zh-CN.md](./v1-product.zh-CN.md) | 冻结 v1.0.0 目录：Windows+Linux、Codex 全控制、默认密封 |
 | [configuration.zh-CN.md](./configuration.zh-CN.md) | 环境变量、flags、配置文件、限额 |
 | [security.zh-CN.md](./security.zh-CN.md) | 信任模型、密钥、加固 |
-| [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md) | **分 harness 现行能力矩阵**（Codex / Claude / Kilo / Kimi / Grok） |
+| [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md) | **分 harness 现行能力矩阵**（Codex / Claude / Kimi / Grok） |
 | [architecture.zh-CN.md](./architecture.zh-CN.md) | 组件、发现、提示词路径 |
 | [protocol.zh-CN.md](./protocol.zh-CN.md) | 线协议信封、消息类型、REST |
 | [development.zh-CN.md](./development.zh-CN.md) | 本地开发与测试 |

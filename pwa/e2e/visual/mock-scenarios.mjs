@@ -42,32 +42,35 @@ export const SCENARIO_NAMES = new Set([
 
 const codexCapabilities = {
   control_mode: 'app_server',
+  send: true,
   approve: true,
   deny: true,
   interrupt: true,
   steer: true,
-  queue: false,
+  queue: true,
   spawn: true,
+  user_input: true,
   attachment_mode: 'native_image_and_file'
 }
 
 const compatibilityCapabilities = {
   control_mode: 'compatibility',
+  send: true,
   approve: false,
   deny: false,
   interrupt: true,
   steer: false,
   queue: false,
   spawn: false,
+  user_input: false,
   attachment_mode: 'path_best_effort'
 }
 
 export const START_CAPABILITIES = [
-  { agent_type: 'claude_code', available: true, spawn: true },
-  { agent_type: 'codex', available: true, spawn: true },
-  { agent_type: 'kilo', available: false, spawn: false, reason: 'ACP starter probe failed' },
-  { agent_type: 'kimi_cli', available: true, spawn: true },
-  { agent_type: 'grok_build', available: false, spawn: false, reason: 'CLI missing' }
+  { agent_type: 'claude_code', available: true, spawn: true, attachment_mode: 'path_best_effort' },
+  { agent_type: 'codex', available: true, spawn: true, attachment_mode: 'native_image_and_file' },
+  { agent_type: 'kimi_cli', available: true, spawn: true, attachment_mode: 'unsupported' },
+  { agent_type: 'grok_build', available: false, spawn: false, reason: 'CLI missing', attachment_mode: 'unsupported' }
 ]
 
 export function devicesFor(name) {
@@ -110,15 +113,20 @@ function primarySession(name) {
     capabilities: unavailable
       ? {
           control_mode: 'exec_resume',
+          send: false,
           approve: false,
           deny: false,
           interrupt: false,
           steer: false,
           queue: false,
           spawn: false,
+          user_input: false,
           attachment_mode: 'unsupported'
         }
       : codexCapabilities,
+    ...((approval || streaming) ? {
+      active_turn: { generation: 21, client_msg_id: 'visual-active-turn', native_request_id: 'turn-visual-21' }
+    } : {}),
     ...(approval
       ? {
           pending_approval: {
@@ -152,17 +160,6 @@ export function sessionsFor(name) {
       status: 'idle',
       summary: '检查部署文档中英文一致性',
       last_activity: FIXED_NOW - 600,
-      project_dir: 'D:\\0 code\\nekonest',
-      project: 'nekonest',
-      capabilities: compatibilityCapabilities
-    },
-    {
-      id: 'session-kilo',
-      device_id: MAIN_DEVICE_ID,
-      agent_type: 'kilo',
-      status: 'error',
-      summary: '修复 Windows 构建脚本',
-      last_activity: FIXED_NOW - 1200,
       project_dir: 'D:\\0 code\\nekonest',
       project: 'nekonest',
       capabilities: compatibilityCapabilities

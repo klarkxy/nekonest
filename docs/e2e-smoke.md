@@ -86,6 +86,14 @@ Full-control baseline: **codex-cli 0.146.0+** with `codex app-server`.
 - Formal hosts: Windows + Linux; macOS later  
 - Open mode: VPS can read application plaintext  
 
+## Protocol 1.2 capability acceptance
+
+1. Capture a live and reconnect `session_list`; confirm both retain the daemon producer version and explicitly include every boolean capability plus `unavailable_reasons`.
+2. Against an isolated 1.1 fixture, confirm legacy send/interrupt remains usable. Remove the producer version or use 1.2 with missing flags and confirm the controls stay closed.
+3. Queue two prompts on each reliable installed path. Verify FIFO success advances automatically; failure/interrupt pauses later items; restart converts an unconfirmed running item to `blocked_indeterminate`; explicit Skip advances without replaying its `client_msg_id`.
+4. Start a native thread and independently exercise the four prompt-success/ownership quadrants. Only the both-positive quadrant may become `thread_owned`; long first turns must not be terminated by a PWA timer.
+5. Keep the maintained production nest in its persisted transport mode. Run sealed acceptance only on an isolated fresh data directory; scan Server DB/logs for prompt, response, path, approval, and attachment plaintext.
+
 ## Related
 
 - [Troubleshooting](./troubleshooting.md)

@@ -12,7 +12,7 @@ v1 推进期间若实现与合同冲突，应**有意识地修订合同**，而�
 
 ## 1. 一句话产品
 
-NekoNest 是**自托管的猫娘窝**：在不向家用主机开入站端口、不取代各 agent 原生会话库的前提下，用**手机优先客户端**继续、驾驭并完成家中机器上**真实的本地编程 agent 线程**。**Codex 是 v1 唯一全控制 agent**；Claude Code、Kilo、Kimi CLI、Grok Build 以**兼容续聊**适配器交付。
+NekoNest 是**自托管的猫娘窝**：在不向家用主机开入站端口、不取代各 agent 原生会话库的前提下，用**手机优先客户端**继续、驾驭并完成家中机器上**真实的本地编程 agent 线程**。**Codex 是 v1 唯一全控制 agent**；Claude Code、Kimi CLI、Grok Build 以**兼容续聊**适配器交付。Kilo 已退出现行支持；协议 1.x 只保留旧 wire id 的解析兼容。
 
 ## 2. 问题与要完成的工作
 
@@ -21,7 +21,7 @@ NekoNest 是**自托管的猫娘窝**：在不向家用主机开入站端口、�
 | **离开工位仍能续聊** | 打开手机 → 看到主机上已有线程 → 读历史 → 发下一句 → 看流式输出 |
 | **不断轮、不双发** | 重连、杀进程、弱网：prompt 至多一次；用户看到诚实的投递状态 |
 | **不必走回主机才能解卡** | Codex 等你（权限、提问、出错后空闲）时手机有通知且能操作 |
-| **多 agent 日常** | 一个窝呈现 Codex（全控制）以及 Claude Code、Kilo、Kimi、Grok（兼容续聊）；缺一个 CLI 不拖死全家 |
+| **多 agent 日常** | 一个窝呈现 Codex（全控制）以及 Claude Code、Kimi、Grok（兼容续聊）；缺一个 CLI 不拖死全家 |
 | **信任这只窝** | 运维自有 VPS；**默认密封 E2E** 使中继读不到应用正文；开放中继仅管理员可开 |
 | **家宽现实** | 主机只出站；CGNAT / 无公网 IP / 不能端口映射也能用 |
 
@@ -44,7 +44,7 @@ NekoNest 是**自托管的猫娘窝**：在不向家用主机开入站端口、�
 7. **不假装能力：** agent 做不了审批/steer/附件/开线程时，UI 必须说明，禁止空操作亮绿灯。能力标志缺省为 false/unsupported。  
 8. **单个 agent 缺失对其余非致命。**  
 9. **默认密封：** 新窝使用 E2E 密封传输；开放中继须管理员显式配置；同一窝密封/开放客户端不得混用；禁止自动从密封降级为开放。  
-10. **仅 Codex 全控制：** approve/deny、steer 与完整附件是 Codex app-server 承诺。五个 agent 都只有在原生 starter 已安装并探测通过时，才可宣告 agent 范围的手机 `start_thread`；这不会把兼容适配器提升为全控制。
+10. **仅 Codex 全控制：** approve/deny、steer 与完整附件是 Codex app-server 承诺。四个现行 agent 都只有在原生 starter 已安装并探测通过时，才可宣告 agent 范围的手机 `start_thread`；这不会把兼容适配器提升为全控制。
 
 ## 4. 竞品定位（为何 v1 长这样）
 
@@ -140,10 +140,10 @@ v1.0.0 = **单人运维自托管窝**可日常在路上使用的功能完备版�
 | 主 agent | **Codex** 为唯一全控制 v1 agent。规范路径：`codex app-server` JSON-RPC；全控制最低基线为 **codex-cli 0.146.0**，并实时探测 schema/initialize。 |
 | Codex 控制 | 发送、结构化问答、approve/deny、中断、steer 与持久 FIFO 后续队列均为已实现全控制面。遗留 `codex exec resume` 为能力降级兼容路径。 |
 | 开线程 | **按 agent 与能力门控。** 手机先打开仅本地草稿；只在发送首条提示词时创建原生线程。已安装并探测通过的 starter 只能进入 daemon **当前由原生会话发现的项目目录并集**。禁止任意路径输入或扫盘。生命周期：`starting → owned \| failed \| indeterminate`（无永久幽灵行）；`owned` 须有首条提示词正向确认和原生 store 所有权。 |
-| 其他 agent | Claude Code、Kilo、Kimi CLI、Grok Build：**兼容续聊** — 发现、所有权、历史、发送/流、中断、按宣告能力的附件；仅在原生 `spawn` 确已安装、探测通过且已宣告时可开线程。**不**承诺审批/steer/排队。 |
+| 其他 agent | Claude Code、Kimi CLI、Grok Build 仍是**兼容续聊**适配器；每项控制只根据本轮原生探测/事件独立提升。可靠发送路径可使用 NekoNest 持久 FIFO；这不是 Agent 原生队列，也不授予 steer 或全控制。 |
 | 附件 | Codex app-server **MUST** 端到端支持图片与普通文件。其他适配器宣告 `native_image`、`path_best_effort` 或 `unsupported`；UI 不得暗示更高等级。 |
 | 通知 | Codex 等待审批、等待用户输入、运行失败为 **MUST**。成功与设备离线为 **SHOULD**。密封推送仅含通用事件文案 + 设备/会话引用；详情在打开 PWA 后解密。 |
-| 扩展 agent | **无** v1 发版门槛要求在五个 wire id 之外再加 agent。 |
+| 扩展 agent | **无** v1 发版门槛要求在四个现行 wire id 之外再加 agent；退役的 `kilo` id 仅解析兼容。 |
 
 ### 7.1 窝服务器
 
@@ -182,11 +182,11 @@ v1.0.0 = **单人运维自托管窝**可日常在路上使用的功能完备版�
 | D7 | 经各 agent 支持路径的 headless resume/send | MUST | Codex 优先 app-server；其余 CLI resume |
 | D8 | Prompt 日志 fail-closed；`client_msg_id` 至多一次 | MUST | 密封信封精确重试；不得把重加密当作同一命令 |
 | D9 | 流归一；stderr 仅诊断 | MUST | |
-| D10 | 中断 / 停止进程树 | MUST | 支持 OS 无孤儿树（Windows Job Object；Linux 进程组） |
+| D10 | 中断 / 停止进程树 | MUST | 支持 OS 无孤儿树（Windows Job Object；Linux 进程组）；延迟命令不能中断更新 generation |
 | D11 | 附件落到 per-run 临时目录 + agent 接线 | MUST | 各 agent 能力矩阵诚实；Codex 完整图片+文件 |
 | D12 | **Codex app-server 原生审批桥** | MUST | 手机 approve/deny 到达真回调；非 Codex 宣告不可用；禁止假装 |
 | D13 | 会话状态机：`idle` / `running` / `waiting_user` / `waiting_approval` / `error` | MUST | `waiting_*` 仅来自 app-server 正信号；不支持的适配器保持 running/idle/error |
-| D14 | 每 agent/会话能力宣告 | MUST | 标志：control_mode、approve、deny、interrupt、steer、queue、spawn、attachment_mode；缺省 = false/unsupported |
+| D14 | 每 agent/会话能力宣告 | MUST | 协议 1.2 标志：send、approve、deny、interrupt、steer、queue、spawn、user_input、attachment_mode、控制路径/版本与稳定不可用原因；缺省 = false/unsupported |
 | D15 | register + pair 生成 CLI；**doctor** 诊断 | MUST | 查协议/模式、鉴权、密钥、服务器、适配器、Codex app-server 方法/版本、可写状态、进程控制 |
 | D16 | 自启动包（Windows 服务/任务；Linux `systemd --user`） | SHOULD | 文档一键路径；macOS launchd 为 LATER |
 | D17 | 配置校验 + 非身份字段安全热更 | SHOULD | |
@@ -212,8 +212,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 
 | Wire id | 产品 | 保证 | 明确不承诺 |
 |---|---|---|---|
-| `claude_code` | Claude Code | 发现、所有权、历史、发送/流、中断；附件与 agent 范围开线程按宣告等级 | 不承诺审批 / steer / 排队；原生 starter 未安装或未探测通过时 start=false |
-| `kilo` | Kilo | 同上兼容续聊集合；仅在已宣告时 agent 范围开线程 | 同上不承诺 |
+| `claude_code` | Claude Code | 发现、所有权、历史、发送/流、进程中断、路径附件、NekoNest FIFO 与探测后新建 | 审批/提问/原生图片需要已打包桥接正向信号；steer 保持 false |
 | `kimi_cli` | Kimi CLI | 同上；现代 store；遗留路径有文档；仅在已宣告时 agent 范围开线程 | 同上不承诺 |
 | `grok_build` | Grok Build | 同上；安全非交互默认；仅在已宣告时 agent 范围开线程 | 同上不承诺 |
 
@@ -243,8 +242,8 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | P8 | 输入：发送、草稿、附件、忙碌锁定 | MUST | 附件 UI 按能力分档 |
 | P9 | 发件箱：`client_msg_id`、重试、上限、重连重放 | MUST | 重试同一密封信封；仅 committed 时清除 |
 | P10 | **投递 UX**：accepted / committed / failed / not_seen / indeterminate | MUST | 用户可见，不只传输成功或已弃用的 `prompt_sent` |
-| P11 | 中断控制 | MUST | 无能力时禁用 |
-| P12 | **批准 / 拒绝** UI（`waiting_approval`） | MUST | 仅 Codex 且能力为真；否则禁用并解释 |
+| P11 | 中断控制 | MUST | 无能力或未广告精确 active-turn 绑定时禁用 |
+| P12 | **批准 / 拒绝** UI（`waiting_approval`） | MUST | 仅在收到正向实时权限请求且能力为真时启用；否则禁用并解释 |
 | P13 | 状态徽章：运行中 / 等你 / 等审批 / 错误 | MUST | |
 | P14 | 推送选择加入 + 深链到目标会话 | MUST | 配合 S9；通用密封载荷；PWA 内解密详情 |
 | P15 | i18n 简中 + 英文 | MUST | |
@@ -255,7 +254,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | P20 | 会话偏好持久化 | SHOULD | 线程/项目归档、折叠、排序 |
 | P21 | 相册/相机附件 | SHOULD | 在附件限制内；Codex 完整路径 |
 | P22 | 语音转文字（系统/浏览器 API） | SHOULD | 不强制云 STT |
-| P23 | 运行中排队下一条（有能力时） | SHOULD | 否则禁用并说明；仅 Codex 且已宣告 |
+| P23 | 运行中排队下一条（有能力时） | SHOULD | 任一可靠且已宣告路径使用 NekoNest 持久 FIFO；blocker 需恢复或显式跳过不确定项 |
 | P24 | Steer / 跟进而不整段中断 | Codex app-server 能力为真时 MUST；UI 门控 | 非 Codex 禁用并说明 |
 | P25 | 设备管理 + 手机身份撤销 | SHOULD / 自令牌撤销为 MUST | 配合 S15 |
 | P26 | 离线横幅 + 上次同步时间 | SHOULD | |
@@ -268,7 +267,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 
 | ID | 功能 | 优先级 | 规则 |
 |---|---|---|---|
-| L1 | 续接已有原生线程 | MUST | 五个 agent 的核心路径；保留原生 id。手机目录固定为最近 7 天视图；隐藏不删除原生数据。只有旧线程的项目从选择器隐藏，主机端再次活动后恢复。旧深链显示已隐藏/移除且不扫描历史。 |
+| L1 | 续接已有原生线程 | MUST | 四个现行 agent 的核心路径；保留原生 id。手机目录固定为最近 7 天视图；隐藏不删除原生数据。只有旧线程的项目从选择器隐藏，主机端再次活动后恢复。旧深链显示已隐藏/移除且不扫描历史。 |
 | L2 | **从手机开线程** | MUST | 先创建 **agent 范围的手机本地草稿**。发送首条提示词时才调用所选、已安装并探测通过的原生 starter，使该 agent 的**原生 store 出现线程** |
 | L3 | 目录选择限于 daemon 发现得到的**当前已发现原生项目目录并集** | MUST | 禁止任意扫盘；禁止运维手输路径；拒绝消失目录、`..`、符号链接逃逸 |
 | L4 | 所选 agent 的原生 starter 缺失/未探测通过、`spawn=false`、或目录不在当前已发现并集时拒绝 | MUST | 错误清晰；可能时在 spawn 前 → `thread_failed` |
@@ -287,7 +286,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | C1 | 中断运行中工作 | MUST | 所有宣告 interrupt 的 agent |
 | C2 | 批准 / 拒绝工具 | MUST | **Codex app-server 真桥**；其余诚实不可用 |
 | C3 | agent 抛出的用户提问 | Codex 正信号为 MUST；通道 SHOULD | 与审批同一状态通道 |
-| C4 | Prompt 排队 | SHOULD | 仅 Codex 且能力为真 |
+| C4 | Prompt 排队 | SHOULD | 任一可靠 queue-capable 路径使用 NekoNest 持久 FIFO；不得冒充 Agent 原生队列 |
 | C5 | 驾驭进行中回合（steer） | MUST | Codex app-server；能力门控 |
 | C6 | 只读 git 快照（分支、脏、短 status） | SHOULD | 无用户显式动作不自动 commit |
 | C7 | 手机 git 写操作（commit/push） | LATER | 高风险；非 v1 阻塞 |
@@ -479,7 +478,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 不因下列项阻塞 v1：
 
 - macOS 正式支持（LATER；v1 标签仅 Windows + Linux）  
-- 五个 wire id 之外的扩展 agent（无 ≥2 扩展门槛）  
+- 四个现行 wire id 之外的扩展 agent（无 ≥2 扩展门槛）
 - 对非 Codex agent 的同等全控制（审批/steer/开线程/完整附件）  
 - App Store 原生 iOS/Android（PWA 为主；原生 MAY 更后）  
 - 飞书 / Telegram / Slack / Discord 作主客户端  
@@ -549,7 +548,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | 5 | **扩展 agent** | v1.0.0 **无**额外要求。无「至少两个」门槛。 |
 | 6 | **消息类型名** | 按计划目录在实现中钉选：`start_thread`、`thread_starting`、`thread_owned`、`thread_failed`、`thread_indeterminate`、`steer`、`pair_request`、`pair_confirm`、`pair_ready`、`pair_failed`、`key_package`、`phone_revoked`、`attention_event`；状态含 `waiting_user`。精确 schema 在 Phase 1 `protocol.json` 落地。 |
 | 7 | **正式 OS** | Windows + Linux MUST；macOS LATER。 |
-| 8 | **Agent 角色** | Codex 全控制；其余四者为兼容续聊。五者都只可在原生 starter 安装并探测通过后宣告 agent 范围开线程；这不授予其他控制能力。 |
+| 8 | **Agent 角色** | Codex 全控制；其余三者为兼容续聊。四个现行 agent 都只可在原生 starter 安装并探测通过后宣告 agent 范围开线程；这不授予其他控制能力。Kilo 已从现行目录退役。 |
 | 9 | **开线程生命周期** | `starting → owned \| failed \| indeterminate`；首条提示词正向确认且原生所有权确认后才可 owned；无永久幽灵行。 |
 | 10 | **通知** | MUST：waiting_approval、waiting_user、运行失败。SHOULD：成功、设备离线。 |
 | 11 | **协议版本** | 按 §7.0 的 `major.minor`。 |
@@ -567,7 +566,6 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | **线上根 README** | 在发版重写前描述**现行 v0.1** 行为 — 不作 v1 合同 |
 | **冻结历史** | `docs/archive/` — 永不当合同 |
 | **用户可见历史** | [CHANGELOG.md](../CHANGELOG.md) |
-| **实现计划** | `.kilo/plans/*-v1-codex-e2e-release-plan.md`（工程顺序；产品含义以本合同为准） |
 
 ### 变更流程
 
@@ -579,4 +577,4 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 
 ---
 
-*当单人运维能部署默认密封的窝、在 Windows 与 Linux 上连接家用机、为五个 agent 续接原生线程、对 Codex 完成全控制闭环（通知 → 审批/steer/中断/在已发现目录开线程 → 完成）、对其余四个诚实兼容续聊、在已文档化的元数据边界内信任投递与密封传输——且产品没有滑成远程 IDE、云端 agent、或对每个 CLI 同等全控制承诺——NekoNest v1.0.0 即告完成。*
+*当单人运维能部署默认密封的窝、在 Windows 与 Linux 上连接家用机、为四个现行 agent 续接原生线程、对 Codex 完成全控制闭环（通知 → 审批/steer/中断/在已发现目录开线程 → 完成）、对其余三个诚实兼容续聊、在已文档化的元数据边界内信任投递与密封传输——且产品没有滑成远程 IDE、云端 agent、或对每个 CLI 同等全控制承诺——NekoNest v1.0.0 即告完成。*

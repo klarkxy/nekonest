@@ -15,7 +15,7 @@ Keep JSON field names, enums, optionality, timestamps, and meanings identical ac
 
 | Field | Rule |
 |---|---|
-| `protocol_version` | `major.minor` (current **1.1**). Major mismatch rejects; minor is backward compatible (unknown optional fields ignored and absent capability flags are false). |
+| `protocol_version` | `major.minor` (current **1.2**). Major mismatch rejects; minor is backward compatible. A 1.2 PWA infers legacy send/interrupt only when the capability producer is confirmed as 1.1 or older; unknown producer versions fail closed. |
 | `transport_mode` | Nest-wide `sealed` \| `open`. One persisted mode per nest; **no** sealed→open automatic downgrade. New databases default sealed; legacy databases without metadata are classified once as open. |
 
 First frames (`register_device` for daemon, `subscribe` for phone) **must** include both fields. Every later frame is validated against the negotiated major version, transport mode, and its explicit routing-vs-application body policy. In sealed mode application frames require `sealed_payload`; open mode rejects it; mixed bodies are always rejected. Server returns negotiated version/mode on `auth_response` / `subscribe_ack`. Stable error codes: `version_mismatch`, `transport_mode_mismatch`, `invalid_envelope`.
@@ -68,9 +68,11 @@ Every WebSocket application message is a `NekoMessage`:
 |---|---|
 | `claude_code` | Claude Code |
 | `codex` | Codex |
-| `kilo` | Kilo |
 | `kimi_cli` | Kimi CLI |
 | `grok_build` | Grok Build |
+
+Protocol 1.x also accepts the retired `kilo` value for parse compatibility.
+Current daemons and PWAs do not advertise, discover, start, or display it.
 
 Adding an agent requires adapter + registry, server types, PWA catalog/assets, schema, tests, and docs to agree.
 
@@ -97,17 +99,20 @@ Adding an agent requires adapter + registry, server types, PWA catalog/assets, s
 | `status` | `idle` \| `running` \| `waiting_user` \| `waiting_approval` \| `error` |
 | `summary`, `last_activity` | List UX |
 | `project_dir` / `project` | Directory grouping |
-| `capabilities` | Optional; absent fields default false/unsupported |
+| `capabilities` | New daemons send every boolean explicitly; absent fields default false/unsupported |
 | `pending_approval` | Optional tool approval blob |
 | `pending_user_input` | Optional structured Codex question request; distinct from approval |
+| `active_turn` | Exact controllable turn: daemon `generation`, `client_msg_id`, and optional native request id; `null` clears it |
 
 ### SessionCapabilities
 
 | Field | Notes |
 |---|---|
 | `control_mode` | `app_server` \| `exec_resume` \| `compatibility` |
-| `approve`, `deny`, `interrupt`, `steer`, `queue`, `spawn` | bool; default false. `spawn` may be true only for an installed/probed native starter and a permitted discovered directory; it does not imply any other control capability. |
+| `send`, `approve`, `deny`, `interrupt`, `steer`, `queue`, `spawn`, `user_input` | bool; default false. `spawn` may be true only for an installed/probed native starter and a permitted discovered directory; no flag implies another. |
 | `attachment_mode` | `native_image_and_file` \| `native_image` \| `path_best_effort` \| `unsupported` |
+| `control_path`, `control_version` | Probed native mechanism/version when known |
+| `unavailable_reasons` | Stable reason codes keyed by `send/approve/deny/interrupt/steer/queue/spawn/user_input/attachment` |
 
 Live values per harness (what the daemon actually stamps today): [agent-capability-matrix.md](./agent-capability-matrix.md).
 
@@ -117,7 +122,7 @@ Live values per harness (what the daemon actually stamps today): [agent-capabili
 Its absence disables device-level creation; during the minor-version transition,
 an older daemon may still expose Codex creation only through an explicit
 per-session `capabilities.spawn=true`. Each
-entry has `agent_type`, `available`, `spawn`, an optional display `reason`, and
+entry has `agent_type`, `available`, `spawn`, `attachment_mode`, an optional display `reason`, and
 optional `control_path` / `control_version`. The PWA may offer a local draft
 only for `available=true` and `spawn=true`; it must use the daemon's current
 union of native-discovered project directories, never an arbitrary path.
@@ -204,7 +209,7 @@ Grouped by role. Payload shapes for critical flows are implemented in Go/TS—wh
 | `send_prompt` | Phone → … → daemon: user prompt (+ attachments) |
 | `prompt_status_query` | Ask current delivery state |
 | `prompt_not_seen` | Daemon/server has no record of id |
-| `prompt_queued` | Durably admitted to the Codex FIFO, but not yet accepted by native `turn/start` |
+| `prompt_queued` | Durably admitted to the NekoNest FIFO, but not yet accepted by the native agent boundary |
 | `prompt_accepted` | Positively accepted by the native agent control path (outbox **not** cleared) |
 | `prompt_committed` | Journal committed — **clear durable outbox here** |
 | `prompt_failed` | Failed visibly |
@@ -226,12 +231,13 @@ indeterminate result is never exposed as an ordinary retry.
 | Type | Role |
 |---|---|
 | `approve` / `deny` | Tool approval (Codex app-server when capable) |
-| `interrupt` | Stop running work |
+| `interrupt` | Stop running work; payload must echo the current `active_turn.generation` and `active_turn.client_msg_id` |
 | `steer` | Mid-turn correction (Codex) |
 | `respond_user_input` / `user_input_result` | Structured Codex question response and terminal request status |
-| `queue_update` | FIFO snapshot including queued/running/paused entries |
+| `queue_update` | FIFO snapshot with `queued/running/completed` and `blocked_failed/blocked_interrupted/blocked_indeterminate` states |
 | `cancel_prompt` / `prompt_cancelled` | Cancel a not-yet-started queue entry |
-| `resume_prompt_queue` | Explicitly resume a paused per-session queue |
+| `resume_prompt_queue` | Resume only after a failed/interrupted blocker; the blocker prompt itself is never replayed |
+| `skip_prompt_queue_item` | Explicitly tombstone an indeterminate blocker after a strong warning, then continue later items |
 | `start_thread` / `thread_*` | Agent-scoped phone-local draft, first-prompt native start into permitted discovered dirs |
 | `pair_*` / `key_package` / `phone_revoked` | Pairing and E2E key distribution |
 | `attention_event` | Generic push-driving event class (sealed-safe) |

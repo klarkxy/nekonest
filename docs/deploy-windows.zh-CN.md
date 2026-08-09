@@ -19,7 +19,6 @@
 |---|---|---|---|
 | Claude Code | `~/.claude/projects` | `claude --resume` | 授权临时目录；路径写入提示词 |
 | Codex | `~/.codex/sessions` | `codex exec resume` | 原生图片参数；其他文件经受限目录 + 路径 |
-| Kilo | Kilo / OpenCode 本地 DB | `kilo run --session` | 原生 `--file` |
 | Kimi CLI | `.kimi-code`（旧 `.kimi`） | `kimi --session` | 提示词中的本地路径；受 CLI 权限约束 |
 | Grok Build | `~/.grok/sessions` | `grok --resume` | 提示词路径；非交互安全模式 |
 
@@ -107,7 +106,7 @@ Add-MpPreference -ExclusionProcess "nekonest-daemon.exe"
 
 ## 5. 日常用法
 
-1. 在 PC 上正常使用 Claude Code / Codex / Kilo / Kimi CLI / Grok Build，产生线程。  
+1. 在 PC 上正常使用 Claude Code / Codex / Kimi CLI / Grok Build，产生线程。
 2. Daemon 上报最近 7 天有活动的原生线程，运行/等待线程始终可见；常规 Discover 在上一轮完成约 30 秒后执行。
 3. 手机：按 **目录 → 智能体 → 线程** 打开，发送提示词或附件。  
 4. 无可识别项目目录的线程进入「**未分类**」。  

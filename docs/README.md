@@ -26,7 +26,7 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 | [v1-product.md](./v1-product.md) | Frozen v1.0.0 catalog: Windows+Linux, Codex full-control, sealed default |
 | [configuration.md](./configuration.md) | Env vars, flags, config files, limits |
 | [security.md](./security.md) | Trust model, secrets, hardening |
-| [agent-capability-matrix.md](./agent-capability-matrix.md) | **Per-harness live capability matrix** (Codex / Claude / Kilo / Kimi / Grok) |
+| [agent-capability-matrix.md](./agent-capability-matrix.md) | **Per-harness live capability matrix** (Codex / Claude / Kimi / Grok) |
 | [architecture.md](./architecture.md) | Components, discovery, prompt path |
 | [protocol.md](./protocol.md) | Wire envelope, message types, REST |
 | [development.md](./development.md) | Local dev and tests |

@@ -25,6 +25,7 @@ type ClaudeCommander struct {
 	// OnAgentOutput is called for each line of output from the agent.
 	// The callback receives (sessionID, parsedMessageType, content).
 	OnAgentOutput func(sessionID string, msgType string, content string)
+	OnTurnEnd     func(sessionID string, exitCode int, interrupted bool)
 }
 
 // NewClaudeCommander creates a new Claude Code commander.
@@ -186,6 +187,9 @@ func (c *ClaudeCommander) startPromptInDir(
 			delete(c.executors, sessionID)
 		}
 		c.mu.Unlock()
+		if c.OnTurnEnd != nil {
+			c.OnTurnEnd(sessionID, exitCode, executor.WasIntentionallyStopped())
+		}
 	}
 
 	if err := executor.StartWithDir(c.cliPath, args, nil, workDir); err != nil {

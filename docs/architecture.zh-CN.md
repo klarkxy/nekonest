@@ -19,9 +19,9 @@ NekoNest 三个运行时如何协作，使手机能够续写编码智能体线�
                                         │ journal / 执行   │
                                         └────────┬─────────┘
                                                  │ 原生存储 + CLI
-                    ┌────────────┬───────────┬───┴──────┬────────────┐
-                    │Claude Code │   Codex   │  Kilo    │ Kimi CLI   │ Grok Build
-                    └────────────┴───────────┴──────────┴────────────┴───────────
+                    ┌────────────┬───────────┬───┴────────┬────────────┐
+                    │Claude Code │   Codex   │ Kimi CLI   │ Grok Build │
+                    └────────────┴───────────┴────────────┴────────────┘
 ```
 
 | 层 | 模块 | 职责 |
@@ -43,7 +43,8 @@ NekoNest 三个运行时如何协作，使手机能够续写编码智能体线�
 
 - 无法识别工作目录的线程归入「**未分类**」。
 - 某目录下无某类智能体线程时不显示该分组。
-- 线协议 agent id：`claude_code`、`codex`、`kilo`、`kimi_cli`、`grok_build`。
+- 现行线协议 agent id：`claude_code`、`codex`、`kimi_cli`、`grok_build`。
+- 协议 1.x 只为失败关闭的混合版本兼容解析已退役的 `kilo`；现行目录会过滤它。
 
 分 harness **现行**能力矩阵（控制标志、附件、建线探测、现行 vs v1）：
 [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)。
@@ -151,6 +152,13 @@ docs/         运维与贡献者文档
 ```
 
 Go module 路径为 `github.com/nekonest/server` 与 `github.com/nekonest/daemon`（稳定；勿仅因 GitHub 仓库为 `klarkxy/nekonest` 而“修正”）。
+
+## 协议 1.2 控制面
+
+- Daemon 是能力表生产者。Server 在实时转发与 open 模式重建快照中保留生产者协议版本，不把目录重盖章成 Server 自身版本。
+- 每个回合绑定唯一控制 generation、公开 session id、`client_msg_id` 与原生 request id；旧 generation 的 accepted/success/failure/interrupted/indeterminate 事件全部拒绝；中断还必须在同一 session 派发锁内回传当前广告的 generation 与 `client_msg_id`。
+- 每条可靠且已安装的发送路径都可在越过原生边界前进入 NekoNest queue v2。重启后未知的 running 工作变为 `blocked_indeterminate`，绝不重放。
+- 原生开线程保持 `thread_starting`，直到首提示词成功与原生 store 所有权均为正；PWA 不再本地超时制造终态。
 
 ## 相关文档
 

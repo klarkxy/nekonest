@@ -33,6 +33,8 @@ type DaemonConn struct {
 	LastPing               time.Time
 	Sessions               map[string]*protocol.AgentSession
 	AgentStartCapabilities []protocol.AgentStartCapability
+	CatalogProtocolVersion string
+	ProtocolVersion        string
 	SealedCatalog          *protocol.NekoMessage
 	generation             uint64
 	closed                 bool
@@ -606,12 +608,24 @@ func (cm *ConnectionManager) UpdateSessionListFrom(
 	sessions []*protocol.AgentSession,
 	capabilities []protocol.AgentStartCapability,
 ) {
+	cm.UpdateSessionListFromVersion(dc, sessions, capabilities, protocol.CurrentProtocolVersion)
+}
+
+// UpdateSessionListFromVersion preserves the producer daemon's negotiated
+// protocol version. Open-mode snapshots must not be restamped as if an older
+// daemon had emitted new explicit capability fields.
+func (cm *ConnectionManager) UpdateSessionListFromVersion(
+	dc *DaemonConn,
+	sessions []*protocol.AgentSession,
+	capabilities []protocol.AgentStartCapability,
+	producerVersion string,
+) {
 	if dc == nil {
 		return
 	}
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	cm.updateSessionListFromLocked(dc, sessions, capabilities)
+	cm.updateSessionListFromLocked(dc, sessions, capabilities, producerVersion)
 }
 
 // IsLiveDaemon reports whether dc is still the registered connection for its device.
@@ -647,6 +661,7 @@ func (cm *ConnectionManager) updateSessionListFromLocked(
 	dc *DaemonConn,
 	sessions []*protocol.AgentSession,
 	capabilities []protocol.AgentStartCapability,
+	producerVersion string,
 ) {
 	if dc == nil || dc.closed {
 		return
@@ -661,17 +676,22 @@ func (cm *ConnectionManager) updateSessionListFromLocked(
 	clean := make([]*protocol.AgentSession, 0, len(sessions))
 	dc.Sessions = make(map[string]*protocol.AgentSession)
 	for _, s := range sessions {
-		if s == nil || s.ID == "" {
+		if s == nil || s.ID == "" || s.AgentType == protocol.AgentKilo {
 			continue
 		}
 		dc.Sessions[s.ID] = s
 		clean = append(clean, s)
 	}
 	dc.AgentStartCapabilities = cleanAgentStartCapabilities(capabilities)
+	if _, err := protocol.ParseProtocolVersion(producerVersion); err != nil {
+		producerVersion = ""
+	}
+	dc.CatalogProtocolVersion = producerVersion
 
 	// Replacement waits on dc.mu, so this final broadcast is ordered before
 	// the old generation is marked closed.
 	msg := protocol.NewMessage(protocol.MsgSessionList, dc.DeviceID)
+	msg.ProtocolVersion = producerVersion
 	msg.Payload = map[string]any{"sessions": clean}
 	if dc.AgentStartCapabilities != nil {
 		msg.Payload["start_capabilities"] = dc.AgentStartCapabilities
@@ -720,7 +740,6 @@ func cleanAgentStartCapabilities(in []protocol.AgentStartCapability) []protocol.
 	known := map[protocol.AgentType]bool{
 		protocol.AgentClaudeCode: true,
 		protocol.AgentCodex:      true,
-		protocol.AgentKilo:       true,
 		protocol.AgentKimiCLI:    true,
 		protocol.AgentGrokBuild:  true,
 	}
@@ -746,24 +765,31 @@ func (cm *ConnectionManager) GetDeviceSessions(deviceID string) []*protocol.Agen
 // catalog from one live daemon generation. Absent catalog entries are
 // deliberately not synthesized: consumers must default them to unavailable.
 func (cm *ConnectionManager) GetDeviceSessionSnapshot(deviceID string) ([]*protocol.AgentSession, []protocol.AgentStartCapability) {
+	sessions, capabilities, _ := cm.GetDeviceSessionSnapshotVersion(deviceID)
+	return sessions, capabilities
+}
+
+// GetDeviceSessionSnapshotVersion returns the daemon producer version together
+// with its cached open-mode catalog.
+func (cm *ConnectionManager) GetDeviceSessionSnapshotVersion(deviceID string) ([]*protocol.AgentSession, []protocol.AgentStartCapability, string) {
 	cm.mu.RLock()
 	dc, ok := cm.daemonConns[deviceID]
 	cm.mu.RUnlock()
 
 	if !ok {
-		return nil, nil
+		return nil, nil, ""
 	}
 
 	dc.mu.RLock()
 	defer dc.mu.RUnlock()
 	if dc.closed {
-		return nil, nil
+		return nil, nil, ""
 	}
 	cm.mu.RLock()
 	cur, live := cm.daemonConns[deviceID]
 	cm.mu.RUnlock()
 	if !live || cur != dc {
-		return nil, nil
+		return nil, nil, ""
 	}
 
 	sessions := make([]*protocol.AgentSession, 0, len(dc.Sessions))
@@ -774,7 +800,7 @@ func (cm *ConnectionManager) GetDeviceSessionSnapshot(deviceID string) ([]*proto
 	if dc.AgentStartCapabilities != nil {
 		capabilities = append([]protocol.AgentStartCapability{}, dc.AgentStartCapabilities...)
 	}
-	return sessions, capabilities
+	return sessions, capabilities, dc.CatalogProtocolVersion
 }
 
 // GetSealedCatalogSnapshot returns an opaque copy of the latest live catalog.

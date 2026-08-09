@@ -86,7 +86,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duo", type=Path, required=True)
     parser.add_argument("--claude-code", type=Path, required=True)
     parser.add_argument("--codex", type=Path, required=True)
-    parser.add_argument("--kilo", type=Path, required=True)
     parser.add_argument("--kimi-cli", type=Path, required=True)
     parser.add_argument("--grok-build", type=Path, required=True)
     return parser.parse_args()
@@ -97,7 +96,6 @@ def main() -> None:
     sources = {
         "claude-code": source_image(args.claude_code),
         "codex": source_image(args.codex),
-        "kilo": source_image(args.kilo),
         "kimi-cli": source_image(args.kimi_cli),
         "grok-build": source_image(args.grok_build),
     }

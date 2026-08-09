@@ -35,6 +35,7 @@ type ACPStartResult struct {
 	NativeCreatePossible bool
 	PromptAccepted       bool
 	Process              *ACPProcess
+	PromptResult         <-chan error
 }
 
 type acpRemoteError struct {
@@ -169,6 +170,15 @@ func StartACPThread(ctx context.Context, options ACPStartOptions) (ACPStartResul
 	}
 
 	result := ACPStartResult{ProcessStarted: true}
+	promptResult := make(chan error, 1)
+	result.PromptResult = promptResult
+	var promptResultOnce sync.Once
+	resolvePromptResult := func(err error) {
+		promptResultOnce.Do(func() {
+			promptResult <- err
+			close(promptResult)
+		})
+	}
 	process := &ACPProcess{cmd: cmd, stdin: stdin, job: job, done: make(chan struct{})}
 	result.Process = process
 	responses := make(map[string]chan acpEnvelope)
@@ -302,6 +312,7 @@ func StartACPThread(ctx context.Context, options ACPStartOptions) (ACPStartResul
 		"clientInfo":         map[string]any{"name": "nekonest", "version": "dev"},
 	})
 	if err != nil {
+		resolvePromptResult(err)
 		_ = process.Stop()
 		return result, err
 	}
@@ -309,6 +320,7 @@ func StartACPThread(ctx context.Context, options ACPStartOptions) (ACPStartResul
 		ProtocolVersion int `json:"protocolVersion"`
 	}
 	if json.Unmarshal(initialize.Result, &initialized) != nil || initialized.ProtocolVersion != 1 {
+		resolvePromptResult(errors.New("ACP initialize returned unsupported protocol"))
 		_ = process.Stop()
 		return result, fmt.Errorf("ACP initialize returned unsupported protocol")
 	}
@@ -324,6 +336,7 @@ func StartACPThread(ctx context.Context, options ACPStartOptions) (ACPStartResul
 		if errors.As(err, &remote) {
 			result.NativeCreatePossible = false
 		}
+		resolvePromptResult(err)
 		_ = process.Stop()
 		return result, err
 	}
@@ -331,6 +344,7 @@ func StartACPThread(ctx context.Context, options ACPStartOptions) (ACPStartResul
 		SessionID string `json:"sessionId"`
 	}
 	if json.Unmarshal(created.Result, &session) != nil || session.SessionID == "" {
+		resolvePromptResult(errors.New("ACP session/new returned no sessionId"))
 		_ = process.Stop()
 		return result, fmt.Errorf("ACP session/new returned no sessionId")
 	}
@@ -350,6 +364,7 @@ func StartACPThread(ctx context.Context, options ACPStartOptions) (ACPStartResul
 		},
 	})
 	if err != nil {
+		resolvePromptResult(err)
 		if options.OnPromptResult != nil {
 			options.OnPromptResult(session.SessionID, err)
 		}
@@ -379,6 +394,7 @@ func StartACPThread(ctx context.Context, options ACPStartOptions) (ACPStartResul
 		if options.OnPromptResult != nil {
 			options.OnPromptResult(session.SessionID, promptErr)
 		}
+		resolvePromptResult(promptErr)
 		// The start-only ACP process is no longer needed after a terminal prompt
 		// response. Mark shutdown intentional so a clean close never becomes a
 		// false adapter error; crashed processes were already observed above.

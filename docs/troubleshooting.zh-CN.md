@@ -89,7 +89,7 @@ Daemon 启动后，手机列表应在短重连窗口内变为 online。
 | MIME | 图片（jpeg/png/webp/gif）、txt、markdown、pdf、json |
 | 上传 | 手机密钥有效；`data/attachments` 有磁盘空间 |
 | Daemon 下载 | 设备 online；能从 VPS GET 附件 URL |
-| Agent 接线 | Claude/Codex/Kilo 用原生文件/图片机制；**Kimi CLI / Grok Build** 仅在提示词中得到本机路径——CLI 沙箱可能禁止读临时目录 |
+| Agent 接线 | Claude/Codex 在能力广告允许时使用原生文件/图片机制；**Kimi CLI / Grok Build** 可能仅在提示词中得到本机路径——CLI 沙箱可能禁止读临时目录 |
 
 ## 手机上审批完不成
 
@@ -132,6 +132,13 @@ Daemon 启动后，手机列表应在短重连窗口内变为 online。
 4. 贡献者按 PWA → server → daemon → 适配器端到端追踪（[architecture.zh-CN.md](./architecture.zh-CN.md)）。  
 
 切勿把设备令牌、手机密钥或 bootstrap 粘贴到公开 issue。
+
+## 协议 1.2 控制与 blocker
+
+- **能看历史但不能发送：**查看会话 `unavailable_reasons`。只剩原生 store、CLI 已缺失时出现 `cli_missing` 属于预期，不要绕过标志。
+- **重连后某项 1.2 控制消失：**核对能力目录生产者版本。只有确认来自 1.1 daemon 的目录才兼容推定发送/中断；来源缺失或未知时失败关闭。
+- **队列显示 `blocked_failed` / `blocked_interrupted`：**“恢复”只继续后续 FIFO 条目，绝不重放 blocker。`blocked_indeterminate` 必须经过带强警告的显式“跳过”。
+- **开线程长期停在 `thread_starting`：**Daemon 仍在等首提示词终态与原生 store 所有权；不要重发，也不要由手机计时器伪造不确定结果。
 
 ## 相关文档
 

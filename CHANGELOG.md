@@ -7,17 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-09
+
 ### Added
 
-- Document a per-harness live capability matrix for Claude Code, Codex, Kilo, Kimi CLI, and Grok Build.
-- Add capability-gated native thread creation for Claude Code, Codex, Kilo,
-  Kimi CLI, and Grok Build in directories discovered from native sessions.
+- Document a per-harness live capability matrix for Claude Code, Codex, Kimi CLI, and Grok Build.
+- Add capability-gated native thread creation for Claude Code, Codex, Kimi CLI,
+  and Grok Build in directories discovered from native sessions.
 - Complete the Codex 0.146.0 full-control path with structured
   `requestUserInput` forms, password-safe secret answers, expiry and
   idempotent/indeterminate response handling.
-- Add a durable per-session Codex FIFO queue with a 20-item limit, native
-  acceptance-based commit, cancel-before-start, pause/resume, reconnect
-  deduplication, and exact sealed-envelope reuse.
+- Add a durable per-session NekoNest FIFO queue for every reliable installed
+  agent path, with generation-bound native outcomes, explicit blockers,
+  resume/skip controls, restart-safe v1-to-v2 migration, payload-free
+  tombstones, and exact sealed-envelope reuse. This is not an agent-native queue.
 - Add atomic Codex first turns with image and ordinary-file attachments plus
   fail-closed ownership/acceptance lifecycle results.
 - Supervise `codex app-server` with generation guards, immediate capability
@@ -26,12 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Persist the nest transport mode, default new databases to sealed, classify
   legacy databases/configs as open, expose the live mode from `/health`, and
   make the PWA resolve it before WebSocket connection.
-- Upgrade the wire protocol to backward-compatible 1.1 with queue control,
-  structured user input, and stable sealed-safe attention events.
+- Upgrade the wire protocol to backward-compatible 1.2 with explicit
+  capabilities, stable unavailable-reason codes, producer-version-preserving
+  snapshots, queue control, structured user input, and sealed-safe events.
+
+### Changed
+
+- Retire Kilo from active daemon and PWA catalogs while preserving protocol
+  1.x parse compatibility for its old wire id. Existing native Kilo data is
+  left untouched.
 
 ### Fixed
 
-- Limit all five native thread catalogs to a shared 7-day activity window while
+- Limit all four active native thread catalogs to a shared 7-day activity window while
   preserving ownership and native data, keep actionable running/waiting threads
   visible, and give old deep links an explicit hidden/removed state.
 - Cache compact file discovery metadata by path/size/mtime and schedule daemon
@@ -224,7 +234,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/klarkxy/nekonest/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/klarkxy/nekonest/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/klarkxy/nekonest/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/klarkxy/nekonest/compare/v0.2.0...v0.2.1

@@ -168,12 +168,13 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 		authMsg.ProtocolVersion,
 		string(authMsg.TransportMode),
 		s.TransportMode(),
-		1,
+		protocol.CurrentProtocolMinor,
 	)
 	_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
-		Type:      protocol.MsgAuthResponse,
-		DeviceID:  deviceID,
-		Timestamp: time.Now().Unix(),
+		ProtocolVersion: hs.NegotiatedVersion,
+		Type:            protocol.MsgAuthResponse,
+		DeviceID:        deviceID,
+		Timestamp:       time.Now().Unix(),
 		Payload: map[string]any{
 			"status":           "authenticated",
 			"protocol_version": hs.NegotiatedVersion,
@@ -192,6 +193,7 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	dc := s.connMgr.AddDaemonVersioned(deviceID, conn, daemonVersion)
+	dc.ProtocolVersion = hs.NegotiatedVersion
 	s.replayPromptCommits(dc)
 
 	// Start heartbeat
@@ -286,7 +288,7 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 				startCapabilities = []protocol.AgentStartCapability{}
 			}
 		}
-		s.connMgr.updateSessionListFromLocked(dc, sessions, startCapabilities)
+		s.connMgr.updateSessionListFromLocked(dc, sessions, startCapabilities, msg.ProtocolVersion)
 
 		// Also persist to database for offline querying
 		n := 0
@@ -574,7 +576,8 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if hs := s.negotiateFirstFrame(&subscribeMsg); hs.ErrorCode != "" {
+	hs := s.negotiateFirstFrame(&subscribeMsg)
+	if hs.ErrorCode != "" {
 		s.writeHandshakeError(conn, hs)
 		return
 	}
@@ -671,6 +674,7 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		deviceID,
 		subscriptionID,
 		reportedComponentVersion(subscribeMsg.Payload, "pwa_version"),
+		hs.NegotiatedVersion,
 	)
 	s.pushPhoneSnapshot(conn, deviceID)
 
@@ -682,7 +686,7 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Read loop for phone commands
-	currentDevice = s.phoneReadLoop(conn, currentDevice)
+	currentDevice = s.phoneReadLoop(conn, currentDevice, hs.NegotiatedVersion)
 }
 
 // pushPhoneSnapshot sends session_list + device_list for the subscribed device.
@@ -692,11 +696,14 @@ func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
 			s.connMgr.SafeWritePhone(conn, catalog)
 		}
 	} else {
-		sessions, startCapabilities := s.connMgr.GetDeviceSessionSnapshot(deviceID)
+		sessions, startCapabilities, producerVersion := s.connMgr.GetDeviceSessionSnapshotVersion(deviceID)
 		if sessions == nil {
 			sessions = []*protocol.AgentSession{}
 		}
 		sessionMsg := s.stampEnvelope(protocol.NewMessage(protocol.MsgSessionList, deviceID))
+		// Preserve the daemon producer version. An empty value is deliberate and
+		// tells a new PWA to fail closed rather than infer legacy capabilities.
+		sessionMsg.ProtocolVersion = producerVersion
 		sessionMsg.Payload = map[string]any{"sessions": sessions}
 		if startCapabilities != nil {
 			sessionMsg.Payload["start_capabilities"] = startCapabilities
@@ -722,7 +729,7 @@ func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
 	s.connMgr.SafeWritePhone(conn, statusMsg)
 }
 
-func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID string) string {
+func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID, protocolVersion string) string {
 	stopPing := make(chan struct{})
 	defer close(stopPing)
 	go func() {
@@ -781,7 +788,7 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID string) string {
 				continue
 			}
 			if newID == deviceID {
-				s.writeSubscribeAck(conn, deviceID, subscriptionID, pwaVersion)
+				s.writeSubscribeAck(conn, deviceID, subscriptionID, pwaVersion, protocolVersion)
 				continue
 			}
 			if !allowDeviceSwitch(&switches, time.Now()) {
@@ -794,7 +801,7 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID string) string {
 			}
 			s.connMgr.ResubscribePhone(newID, conn)
 			deviceID = newID
-			s.writeSubscribeAck(conn, newID, subscriptionID, pwaVersion)
+			s.writeSubscribeAck(conn, newID, subscriptionID, pwaVersion, protocolVersion)
 			s.pushPhoneSnapshot(conn, newID)
 			continue
 		}
@@ -874,14 +881,15 @@ func subscribeRequestID(payload map[string]any) (string, bool) {
 
 func (s *Server) writeSubscribeAck(
 	conn *websocket.Conn,
-	deviceID, subscriptionID, pwaVersion string,
+	deviceID, subscriptionID, pwaVersion, protocolVersion string,
 ) {
 	ack := s.stampEnvelope(protocol.NewMessage(protocol.MsgSubscribeAck, deviceID))
+	ack.ProtocolVersion = protocolVersion
 	ack.Payload = map[string]any{
 		"status":           "subscribed",
 		"device_id":        deviceID,
 		"subscription_id":  subscriptionID,
-		"protocol_version": protocol.CurrentProtocolVersion,
+		"protocol_version": protocolVersion,
 		"transport_mode":   string(s.TransportMode()),
 		"pwa_version":      pwaVersion,
 		"server_version":   buildinfo.Version,
@@ -1078,7 +1086,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 		}
 
 	case protocol.MsgApprove, protocol.MsgDeny, protocol.MsgRespondUserInput,
-		protocol.MsgCancelPrompt, protocol.MsgResumePromptQueue:
+		protocol.MsgCancelPrompt, protocol.MsgResumePromptQueue, protocol.MsgSkipPromptQueueItem:
 		msg.DeviceID = deviceID
 		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
 			errMsg := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID))

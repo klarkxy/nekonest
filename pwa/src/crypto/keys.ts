@@ -8,7 +8,7 @@ import {
   loadOrCreatePhoneIdentity,
   type PairQRPayload
 } from './identity'
-import type { SealedPayload } from '@/types/protocol'
+import { PROTOCOL_VERSION, type SealedPayload } from '@/types/protocol'
 import { apiFetch } from '@/api/http'
 
 const IDB_NAME = 'nekonest-crypto'
@@ -208,16 +208,17 @@ export async function encryptSessionPayload(
   type: string,
   payload: unknown,
   clientMsgId?: string,
-  timestamp?: number
+  timestamp?: number,
+  protocolVersion: string = PROTOCOL_VERSION
 ): Promise<SealedPayload | null> {
   const sessionKey = await getContentKeyRecord(deviceId, 'session', sessionId)
   if (!sessionKey) {
     // Fall back to catalog key if session key not yet distributed.
     const cat = await getContentKeyRecord(deviceId, 'device_catalog', '')
     if (!cat) return null
-    return sealWithKey(b64urlDecode(cat.keyB64), 'device_catalog', cat.epoch, deviceId, sessionId, senderId, type, payload, clientMsgId, timestamp)
+    return sealWithKey(b64urlDecode(cat.keyB64), 'device_catalog', cat.epoch, deviceId, sessionId, senderId, type, payload, clientMsgId, timestamp, protocolVersion)
   }
-  return sealWithKey(b64urlDecode(sessionKey.keyB64), 'session', sessionKey.epoch, deviceId, sessionId, senderId, type, payload, clientMsgId, timestamp)
+  return sealWithKey(b64urlDecode(sessionKey.keyB64), 'session', sessionKey.epoch, deviceId, sessionId, senderId, type, payload, clientMsgId, timestamp, protocolVersion)
 }
 
 async function sealWithKey(
@@ -230,12 +231,13 @@ async function sealWithKey(
   type: string,
   payload: unknown,
   clientMsgId?: string,
-  timestamp?: number
+  timestamp?: number,
+  protocolVersion: string = PROTOCOL_VERSION
 ): Promise<SealedPayload> {
   const seq = Date.now() % 1_000_000_000
   const ts = timestamp ?? Math.floor(Date.now() / 1000)
   const aad: AADFields = {
-    protocol_version: '1.1',
+    protocol_version: protocolVersion,
     transport_mode: 'sealed',
     type,
     device_id: deviceId,

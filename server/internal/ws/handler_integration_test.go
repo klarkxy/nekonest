@@ -771,7 +771,9 @@ func TestQueuedPromptAdmissionStaysPendingUntilNativeAcceptance(t *testing.T) {
 		t.Fatalf("accepted command history count=%d err=%v", count, err)
 	}
 
-	for _, kind := range []protocol.MessageType{protocol.MsgCancelPrompt, protocol.MsgResumePromptQueue} {
+	for _, kind := range []protocol.MessageType{
+		protocol.MsgCancelPrompt, protocol.MsgResumePromptQueue, protocol.MsgSkipPromptQueueItem,
+	} {
 		request := v1Envelope(kind, "dev1", map[string]any{"client_msg_id": "msg_queue_prompt_1"})
 		request.SessionID = "session-queue"
 		if err := phone.WriteJSON(request); err != nil {

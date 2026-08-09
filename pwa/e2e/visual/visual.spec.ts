@@ -93,7 +93,7 @@ test.describe('390px primary visual matrix', () => {
     await capture(page, 'devices-server-error.png')
   })
 
-  test('device full five-agent tree', async ({ page, request }) => {
+  test('device full four-agent tree', async ({ page, request }) => {
     await openScenario(page, request, 'device-full', devicePath)
     await expect(page.getByText('完善 NekoNest 本地截图回归')).toBeVisible()
     await expect(page.getByRole('button', { name: /Grok Build/ })).toBeVisible()
@@ -107,7 +107,6 @@ test.describe('390px primary visual matrix', () => {
     const codexStart = project.getByRole('button', { name: '使用 Codex 在“nekonest”里新建线团' })
     const claudeStart = project.getByRole('button', { name: '使用 Claude Code 在“nekonest”里新建线团' })
     const kimiStart = project.getByRole('button', { name: '使用 Kimi CLI 在“nekonest”里新建线团' })
-    const kiloGroup = project.locator('.agent-group').filter({ hasText: 'Kilo' })
 
     await expect(codexStart).toBeVisible()
     await expect(claudeStart).toBeVisible()
@@ -115,9 +114,6 @@ test.describe('390px primary visual matrix', () => {
     await expect(
       project.locator('.agent-group').filter({ hasText: 'Kimi CLI' }).getByText('0 条线团')
     ).toBeVisible()
-    await expect(kiloGroup.locator('.agent-add-btn')).toHaveCount(0)
-    await expect(kiloGroup.getByText('1 条线团', { exact: true })).toBeVisible()
-    await expect(project.getByText('ACP starter probe failed', { exact: true })).toHaveCount(0)
 
     await page.getByLabel('猫娘', { exact: true }).selectOption('kimi_cli')
     await expect(page.locator('.project-group')).toHaveCount(2)
@@ -169,7 +165,7 @@ test.describe('390px primary visual matrix', () => {
     await project.getByRole('button', { name: '收起项目 nekonest 下的所有线团' }).click()
     await page.getByText('显示已收起').click()
     const archivedProject = page.locator('.project-group').filter({ hasText: 'nekonest' }).first()
-    await expect(archivedProject.locator('.session-item.archived')).toHaveCount(3)
+    await expect(archivedProject.locator('.session-item.archived')).toHaveCount(2)
     await expect(
       archivedProject.getByRole('button', { name: '放回项目 nekonest 下的所有线团' })
     ).toBeVisible()
@@ -372,14 +368,15 @@ test.describe('390px primary visual matrix', () => {
     await expect(page.locator('.empty-hint')).toContainText('等待本机发现与对账')
     await expect(page.getByRole('button', { name: '已禁用创建' })).toBeDisabled()
     await expect(page.locator('#session-attachment-input')).toBeDisabled()
-    // Prompt remains visible in-memory; persistence of phone-only draft is removed.
+    // Prompt and phone-local draft stay available for inspection, but the
+    // disabled terminal state prevents any automatic replay.
     await expect(input).toHaveValue('ping ×19')
     await expect.poll(async () => page.evaluate((draftId) => {
       const raw = localStorage.getItem('nekonest_local_threads_v1')
-      if (!raw) return true
+      if (!raw) return false
       try {
         const list = JSON.parse(raw) as Array<{ id?: string }>
-        return !list.some(item => item.id === draftId)
+        return list.some(item => item.id === draftId)
       } catch {
         return false
       }
@@ -391,10 +388,10 @@ test.describe('390px primary visual matrix', () => {
         const map = JSON.parse(raw) as Record<string, { text?: string }>
         const localKey = `${deviceId}::${localId}`
         const nativeKey = `${deviceId}::${nativeId}`
-        // Phone-local draft must be gone; unowned native session draft must survive.
-        if (map[localKey] || Object.keys(map).some(key => key.includes(localId))) return false
+        // Both drafts survive, but neither is treated as proof of native ownership.
+        const local = map[localKey]
         const native = map[nativeKey]
-        return !!native && native.text === nativeText
+        return !!local && local.text === 'ping ×19' && !!native && native.text === nativeText
       } catch {
         return false
       }

@@ -28,13 +28,12 @@ describe('project start capabilities', () => {
   it('lists all known agents from a catalog and disables unavailable entries', () => {
     const options = projectStartOptions(project, [
       { agent_type: 'claude_code', available: true, spawn: true },
-      { agent_type: 'kilo', available: false, spawn: false, reason: 'CLI missing' }
+      { agent_type: 'grok_build', available: false, spawn: false, reason: 'CLI missing' }
     ])
 
-    expect(options).toHaveLength(5)
+    expect(options).toHaveLength(4)
     expect(options).toContainEqual({ agentType: 'claude_code', enabled: true, reason: undefined })
-    expect(options).toContainEqual({ agentType: 'kilo', enabled: false, reason: 'CLI missing' })
-    expect(options).toContainEqual({ agentType: 'grok_build', enabled: false, reason: undefined })
+    expect(options).toContainEqual({ agentType: 'grok_build', enabled: false, reason: 'CLI missing' })
   })
 
   it('uses only a positive legacy Codex session capability when the catalog is absent', () => {
@@ -43,9 +42,9 @@ describe('project start capabilities', () => {
   })
 
   it('rejects stale phone-only paths even when the agent catalog is available', () => {
-    const catalog = [{ agent_type: 'kilo' as const, available: true, spawn: true }]
+    const catalog = [{ agent_type: 'kimi_cli' as const, available: true, spawn: true }]
     const sessions = project.agents[0].sessions
-    expect(canStartInCurrentProject('kilo', 'D:/repo', sessions, catalog)).toBe(true)
-    expect(canStartInCurrentProject('kilo', 'D:/stale', sessions, catalog)).toBe(false)
+    expect(canStartInCurrentProject('kimi_cli', 'D:/repo', sessions, catalog)).toBe(true)
+    expect(canStartInCurrentProject('kimi_cli', 'D:/stale', sessions, catalog)).toBe(false)
   })
 })

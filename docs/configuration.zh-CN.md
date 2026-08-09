@@ -179,6 +179,12 @@ REST 使用由 ws(s) 推导的 http(s)。部署见 [deploy-windows.zh-CN.md](./d
 - 服务端签发 TTL 约 **5 分钟**。
 - 手机在持有手机密钥的前提下消费配对 API；Daemon 在 `-register` 或 `-pair gen` 后打印配对码。
 
+## 能力与队列运行说明
+
+- NekoNest 不安装或升级任何 Agent CLI。可执行文件缺失时仍可浏览已有原生历史，但 `send`、`interrupt`、`queue`、`spawn` 会以 `cli_missing` 原因关闭。
+- queue v2 位于 Daemon 配置旁，属于敏感数据；升级前应与配置一起备份。存在活动或 blocker 项时不得直接用旧 Daemon 读取 v2 队列。
+- 本版本不配置 Claude bridge 专属能力：自包含 Bun/SDK 打包门槛未通过，因此继续使用既有 Claude CLI fallback，也不要求 Node/Bun 运行时。
+
 ## 相关文档
 
 - [安全模型](./security.zh-CN.md)

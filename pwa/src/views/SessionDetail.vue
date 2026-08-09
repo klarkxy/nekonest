@@ -31,7 +31,7 @@
           type="button"
           class="interrupt-btn"
           :disabled="sessionStore.wsStatus !== 'connected' || !interruptSupported"
-          :title="interruptSupported ? undefined : t('session.interruptUnavailable')"
+          :title="interruptSupported ? undefined : capabilityUnavailableText('interrupt', 'session.interruptUnavailable')"
           :aria-label="t('session.interruptAria')"
           @click="handleInterrupt"
         >{{ t('session.interrupt') }}</button>
@@ -86,7 +86,7 @@
       <div class="prompt-queue-head">
         <strong>{{ t('session.queueTitle') }}</strong>
         <button
-          v-if="sessionStore.currentPromptQueue?.paused"
+          v-if="queueHasResumableBlocker"
           type="button"
           class="queue-action"
           :disabled="sessionStore.wsStatus !== 'connected'"
@@ -95,16 +95,28 @@
       </div>
       <ol class="prompt-queue-list">
         <li v-for="item in sessionStore.currentPromptQueue?.items" :key="item.client_msg_id" class="prompt-queue-item">
-          <span>{{ t('session.queuePosition', { position: item.position }) }} · {{ queueStatusLabel(item.status) }}</span>
+          <span>
+            <template v-if="item.position > 0">{{ t('session.queuePosition', { position: item.position }) }} · </template>{{ queueStatusLabel(item.status) }}
+          </span>
           <button
-            v-if="item.status !== 'starting'"
+            v-if="item.status === 'queued'"
             type="button"
             class="queue-action"
             :disabled="sessionStore.wsStatus !== 'connected'"
             @click="cancelQueuedPrompt(item.client_msg_id)"
           >{{ t('session.queueCancel') }}</button>
+          <button
+            v-else-if="item.status === 'blocked_indeterminate'"
+            type="button"
+            class="queue-action"
+            :disabled="sessionStore.wsStatus !== 'connected'"
+            @click="skipBlockedPrompt(item.client_msg_id)"
+          >{{ t('session.queueSkip') }}</button>
         </li>
       </ol>
+      <p v-if="sessionStore.currentPromptQueue?.items.some(item => item.status.startsWith('blocked_'))" class="approval-note">
+        {{ queueBlockerWarning }}
+      </p>
     </section>
 
     <form
@@ -354,7 +366,7 @@
         :placeholder="composerPlaceholder"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 4 }"
-        :disabled="sending || uploading || isIndeterminateStart"
+        :disabled="sending || uploading || isIndeterminateStart || !sendSupported"
         :aria-label="t('session.inputAria')"
         @keydown.enter.exact="onEnterKey"
         @paste="onPaste"
@@ -364,6 +376,7 @@
         circle
         class="send-btn"
         :aria-label="sendButtonLabel"
+        :title="sendSupported ? undefined : capabilityUnavailableText('send', 'session.sendUnavailable')"
         @click="handleSend"
         :disabled="composerSendDisabled"
         :loading="sending || uploading"
@@ -464,6 +477,15 @@ const sessionAwaitingControl = computed(() => {
 const sessionBusy = computed(() => sessionRunning.value || sessionAwaitingControl.value)
 
 const sessionCaps = computed(() => sessionStore.currentSession?.capabilities)
+const sendSupported = computed(() => isLocalDraft.value || sessionCaps.value?.send === true)
+const startCapability = computed(() => sessionStore.startCapabilities?.find(
+  capability => capability.agent_type === sessionStore.currentSession?.agent_type
+))
+const effectiveAttachmentMode = computed(() => isLocalDraft.value
+  ? startCapability.value?.attachment_mode || sessionCaps.value?.attachment_mode || 'unsupported'
+  : sessionCaps.value?.attachment_mode || 'unsupported'
+)
+const attachmentSupported = computed(() => effectiveAttachmentMode.value !== 'unsupported')
 
 const steerSupported = computed(() => !!sessionCaps.value?.steer)
 
@@ -482,6 +504,18 @@ const sendBlocked = computed(
 const showPromptQueue = computed(() => {
   const queue = sessionStore.currentPromptQueue
   return queueEnabled.value && !!queue && (queue.paused || queue.items.length > 0)
+})
+const queueHasResumableBlocker = computed(() =>
+  !!sessionStore.currentPromptQueue?.items.some(item =>
+    item.status === 'blocked_failed' || item.status === 'blocked_interrupted'
+  )
+)
+const queueBlockerWarning = computed(() => {
+  const items = sessionStore.currentPromptQueue?.items || []
+  if (items.some(item => item.status === 'blocked_indeterminate')) return t('session.queueBlockedIndeterminate')
+  if (items.some(item => item.status === 'blocked_interrupted')) return t('session.queueBlockedInterrupted')
+  if (items.some(item => item.status === 'blocked_failed')) return t('session.queueBlockedFailed')
+  return ''
 })
 
 const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
@@ -540,6 +574,7 @@ const composerPlaceholder = computed(() => {
   if (isStartingThread.value) return t('session.placeholderStarting')
   if (mainSendIsSteer.value) return t('session.placeholderSteer')
   if (sendBlocked.value) return t('session.placeholderBusy')
+  if (!sendSupported.value) return capabilityUnavailableText('send', 'session.sendUnavailable')
   return t('session.placeholder')
 })
 
@@ -552,6 +587,7 @@ const sendButtonLabel = computed(() => {
 
 const attachmentControlsDisabled = computed(
   () =>
+    !attachmentSupported.value ||
     sending.value ||
     uploading.value ||
     mainSendIsSteer.value ||
@@ -560,12 +596,14 @@ const attachmentControlsDisabled = computed(
 )
 
 const attachmentPickerTitle = computed(() => {
+  if (!attachmentSupported.value) return capabilityUnavailableText('attachment', 'session.attachmentUnavailable')
   if (isIndeterminateStart.value) return t('session.attachIndeterminate')
   if (mainSendIsSteer.value) return t('session.attachSteerUnavailable')
   return t('session.attachAria')
 })
 
 const composerSendDisabled = computed(() => {
+  if (!sendSupported.value) return true
   if (isIndeterminateStart.value || isStartingThread.value) return true
   if (sending.value || uploading.value || sendBlocked.value) return true
   if (mainSendIsSteer.value) return !inputText.value.trim()
@@ -584,14 +622,13 @@ const composeStatusText = computed(() => {
       : t('session.approvalComposeUnavailable')
   }
   if (mainSendIsSteer.value || isStartingThread.value || isIndeterminateStart.value) return ''
+  if (!sendSupported.value) return capabilityUnavailableText('send', 'session.sendUnavailable')
   if (sendBlocked.value && !showActivityBanner.value) return t('session.sendBusyHint')
   return ''
 })
 
 const interruptSupported = computed(() => {
-  const c = sessionCaps.value
-  // Default true when capabilities absent (legacy open-mode hosts).
-  return c?.interrupt !== false
+	return sessionStore.canInterrupt(deviceId.value, sessionId.value)
 })
 
 const approveSupported = computed(() => {
@@ -912,10 +949,34 @@ function retryMessage(messageId: string) {
   sessionStore.retryPrompt(messageId)
 }
 
-function queueStatusLabel(status: 'queued' | 'paused' | 'starting') {
-  if (status === 'starting') return t('session.queueStarting')
-  if (status === 'paused') return t('session.queuePaused')
+function queueStatusLabel(status: import('@/types/protocol').QueueItem['status']) {
+  if (status === 'running') return t('session.queueStarting')
+  if (status === 'blocked_failed') return t('session.queueBlockedFailed')
+  if (status === 'blocked_interrupted') return t('session.queueBlockedInterrupted')
+  if (status === 'blocked_indeterminate') return t('session.queueBlockedIndeterminate')
   return t('session.queueQueued')
+}
+
+function capabilityUnavailableText(
+  capability: 'send' | 'interrupt' | 'attachment',
+  fallbackKey: string
+) {
+  const reason = sessionCaps.value?.unavailable_reasons?.[capability]
+  const reasonKeys: Record<string, string> = {
+    cli_missing: 'session.capabilityCliMissing',
+    runtime_not_probed: 'session.capabilityNotProbed',
+    claude_bridge_unavailable: 'session.capabilityBridgeUnavailable',
+    unsupported_by_agent: 'session.capabilityUnsupported',
+    agent_unavailable: 'session.capabilityAgentUnavailable',
+    queue_journal_unavailable: 'session.capabilityQueueUnavailable',
+    acp_permission_not_observed: 'session.capabilityNotObserved',
+    acp_question_not_observed: 'session.capabilityNotObserved'
+  }
+  return t(reasonKeys[reason || ''] || fallbackKey)
+}
+
+function skipBlockedPrompt(clientMsgId: string) {
+  sessionStore.skipPromptQueueItem(deviceId.value, sessionId.value, clientMsgId)
 }
 
 function cancelQueuedPrompt(clientMsgId: string) {
@@ -1107,7 +1168,6 @@ async function handleSend() {
     // Keep composer content until owned; clear after migrate.
     const waitOwned = () =>
       new Promise<{ sessionId?: string; promptAccepted?: boolean; error?: string; status: string }>((resolve) => {
-        const started = Date.now()
         const tick = window.setInterval(() => {
           const op = sessionStore.startOps[operationId]
           if (!op) return
@@ -1119,10 +1179,7 @@ async function handleSend() {
               error: op.error,
               status: op.status
             })
-          } else if (Date.now() - started > 90000) {
-            window.clearInterval(tick)
-            resolve({ status: 'indeterminate', error: t('errors.ambiguousNoRetry') })
-          }
+		  }
         }, 200)
       })
     const result = await waitOwned()

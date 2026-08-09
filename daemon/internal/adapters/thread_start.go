@@ -27,13 +27,20 @@ type ThreadStartResult struct {
 	SessionID      string
 	Created        bool
 	PromptAccepted bool
+	// PromptResult resolves only after the native controller has positively
+	// completed or rejected the initial prompt. Nil means PromptAccepted is the
+	// final synchronous observation.
+	PromptResult <-chan error
 }
 
 // ThreadStartCapability is published at device scope so the phone can offer
 // agents that do not yet have a session in a discovered project.
 type ThreadStartCapability struct {
-	Available bool   `json:"available"`
-	Reason    string `json:"reason,omitempty"`
+	Available      bool           `json:"available"`
+	Reason         string         `json:"reason,omitempty"`
+	ControlPath    string         `json:"control_path,omitempty"`
+	ControlVersion string         `json:"control_version,omitempty"`
+	AttachmentMode AttachmentMode `json:"attachment_mode"`
 }
 
 // NativeThreadStarter is an optional adapter capability. A returned SessionID

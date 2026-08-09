@@ -28,19 +28,25 @@ type ClaudeCodeAdapter struct {
 	discoveryCache *fileDiscoveryCache[*SessionInfo]
 	attentionCache *fileDiscoveryCache[*SessionInfo]
 	commander      *agentexec.ClaudeCommander
+	turns          turnTracker
 }
 
 // NewClaudeCodeAdapter creates a new Claude Code adapter.
 func NewClaudeCodeAdapter() *ClaudeCodeAdapter {
 	home, _ := os.UserHomeDir()
-	return &ClaudeCodeAdapter{
+	a := &ClaudeCodeAdapter{
 		projectsDir:    filepath.Join(home, ".claude", "projects"),
 		watchers:       make(map[string]*fsnotify.Watcher),
 		lastPaths:      make(map[string]string),
 		discoveryCache: newFileDiscoveryCache[*SessionInfo](),
 		attentionCache: newFileDiscoveryCache[*SessionInfo](),
 		commander:      agentexec.NewClaudeCommander(),
+		turns:          newTurnTracker(AgentClaudeCode),
 	}
+	a.commander.OnTurnEnd = func(sessionID string, exitCode int, interrupted bool) {
+		a.turns.finish(sessionID, exitCode, interrupted)
+	}
+	return a
 }
 
 func (a *ClaudeCodeAdapter) Name() string { return "claude_code" }
@@ -57,7 +63,7 @@ func (a *ClaudeCodeAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCap
 	if err := a.commander.ProbeThreadStart(ctx); err != nil {
 		return ThreadStartCapability{Reason: err.Error()}
 	}
-	return ThreadStartCapability{Available: true}
+	return ThreadStartCapability{Available: true, ControlPath: "cli", AttachmentMode: AttachUnsupported}
 }
 
 func (a *ClaudeCodeAdapter) StartNativeThread(ctx context.Context, request ThreadStartRequest) (ThreadStartResult, error) {
@@ -70,6 +76,7 @@ func (a *ClaudeCodeAdapter) StartNativeThread(ctx context.Context, request Threa
 
 // Close releases all file watchers and stops running agent processes.
 func (a *ClaudeCodeAdapter) Close() error {
+	a.turns.detachAll()
 	if a.commander != nil {
 		a.commander.StopAll()
 	}
@@ -172,10 +179,6 @@ func (a *ClaudeCodeAdapter) probeOldSessionAttention(path string, info os.FileIn
 		return nil, err
 	}
 	session := *cached
-	if cached.PendingApproval != nil {
-		pending := *cached.PendingApproval
-		session.PendingApproval = &pending
-	}
 	applyClaudeDynamicStatus(&session, a.commander)
 	return &session, nil
 }
@@ -200,14 +203,13 @@ func parseClaudeAttentionProbe(path string, info os.FileInfo, probe jsonlAttenti
 	}
 
 	status := StatusIdle
-	var pending *ApprovalInfo
 	lastAssistantMessage := ""
 	lastTime := info.ModTime()
 	lines := probe.tail
 	if probe.whole {
 		lines = probe.head
 	}
-	for index, line := range lines {
+	for _, line := range lines {
 		var msg map[string]interface{}
 		if json.Unmarshal(line, &msg) != nil {
 			continue
@@ -228,27 +230,6 @@ func parseClaudeAttentionProbe(path string, info os.FileInfo, probe jsonlAttenti
 				lastAssistantMessage = truncate(content, 120)
 			}
 		}
-		if msgType == "tool_use" || hasToolUse(contentSource) || hasToolUse(msg) {
-			toolName := extractToolName(contentSource)
-			if toolName == "" {
-				toolName = extractToolName(msg)
-			}
-			if toolName != "" && !isReadOnlyTool(toolName) {
-				description := extractToolDescription(contentSource)
-				if description == "" || description == "Tool call" {
-					description = extractToolDescription(msg)
-				}
-				status = StatusWaitingApproval
-				pending = &ApprovalInfo{
-					ID:       fmt.Sprintf("approval_%s_probe_%d", filepath.Base(path), index),
-					ToolName: toolName, Description: description,
-				}
-			}
-		}
-		if msgType == "tool_result" || role == "tool" || hasToolResult(contentSource) || hasToolResult(msg) {
-			status = StatusIdle
-			pending = nil
-		}
 		if timestamp, ok := parseMessageTime(msg["timestamp"]); ok && timestamp.After(lastTime) {
 			lastTime = timestamp
 		} else if created, ok := parseMessageTime(msg["created"]); ok && created.After(lastTime) {
@@ -260,7 +241,6 @@ func parseClaudeAttentionProbe(path string, info os.FileInfo, probe jsonlAttenti
 		ID:        strings.TrimSuffix(filepath.Base(path), ".jsonl"),
 		AgentType: AgentClaudeCode, Status: status, Summary: lastAssistantMessage,
 		LastActivity: lastTime, SessionPath: path, ProjectDir: projectDir,
-		PendingApproval: pending,
 	}, nil
 }
 
@@ -393,10 +373,6 @@ func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*Se
 		return nil, err
 	}
 	session := *cached
-	if cached.PendingApproval != nil {
-		pending := *cached.PendingApproval
-		session.PendingApproval = &pending
-	}
 	applyClaudeDynamicStatus(&session, a.commander)
 	return &session, nil
 }
@@ -405,9 +381,7 @@ func applyClaudeDynamicStatus(session *SessionInfo, commander *agentexec.ClaudeC
 	if session == nil {
 		return
 	}
-	if session.PendingApproval != nil {
-		session.Status = StatusWaitingApproval
-	} else if commander != nil && commander.IsSessionRunning(session.ID) {
+	if commander != nil && commander.IsSessionRunning(session.ID) {
 		session.Status = StatusRunning
 	} else if time.Since(session.LastActivity) < time.Minute {
 		session.Status = StatusRunning
@@ -429,8 +403,6 @@ func (a *ClaudeCodeAdapter) parseSessionFileUncached(path string, info os.FileIn
 	var lastAssistantMsg string
 	var lastTime time.Time
 	var msgCount int
-	var isWaiting bool
-	var pendingApproval *ApprovalInfo
 	var projectDir string
 
 	for scanner.Scan() {
@@ -489,32 +461,6 @@ func (a *ClaudeCodeAdapter) parseSessionFileUncached(path string, info os.FileIn
 			}
 		}
 
-		// Detect tool_use for approval detection
-		if msgType == "tool_use" || hasToolUse(contentSrc) || hasToolUse(msg) {
-			toolName := extractToolName(contentSrc)
-			if toolName == "" {
-				toolName = extractToolName(msg)
-			}
-			if toolName != "" && !isReadOnlyTool(toolName) {
-				isWaiting = true
-				desc := extractToolDescription(contentSrc)
-				if desc == "" || desc == "Tool call" {
-					desc = extractToolDescription(msg)
-				}
-				pendingApproval = &ApprovalInfo{
-					ID:          fmt.Sprintf("approval_%s_%d", filepath.Base(path), msgCount),
-					ToolName:    toolName,
-					Description: desc,
-				}
-			}
-		}
-
-		// Tool result clears waiting state (top-level or nested message.content blocks).
-		if msgType == "tool_result" || role == "tool" || hasToolResult(contentSrc) || hasToolResult(msg) {
-			isWaiting = false
-			pendingApproval = nil
-		}
-
 		// Update timestamp (unix seconds/ms or RFC3339 string)
 		if t, ok := parseMessageTime(msg["timestamp"]); ok && t.After(lastTime) {
 			lastTime = t
@@ -534,9 +480,7 @@ func (a *ClaudeCodeAdapter) parseSessionFileUncached(path string, info os.FileIn
 	}
 
 	status := StatusIdle
-	if isWaiting {
-		status = StatusWaitingApproval
-	} else if time.Since(lastTime) < 60*time.Second {
+	if time.Since(lastTime) < 60*time.Second {
 		status = StatusRunning
 	}
 
@@ -546,14 +490,13 @@ func (a *ClaudeCodeAdapter) parseSessionFileUncached(path string, info os.FileIn
 	}
 
 	return &SessionInfo{
-		ID:              sessionID,
-		AgentType:       AgentClaudeCode,
-		Status:          status,
-		Summary:         lastAssistantMsg,
-		LastActivity:    lastTime,
-		SessionPath:     path,
-		ProjectDir:      projectDir,
-		PendingApproval: pendingApproval,
+		ID:           sessionID,
+		AgentType:    AgentClaudeCode,
+		Status:       status,
+		Summary:      lastAssistantMsg,
+		LastActivity: lastTime,
+		SessionPath:  path,
+		ProjectDir:   projectDir,
 	}, nil
 }
 
@@ -661,13 +604,33 @@ func (a *ClaudeCodeAdapter) SendPrompt(sessionID string, request PromptRequest) 
 	if !a.commander.IsAvailable() {
 		return fmt.Errorf("claude CLI not found in PATH")
 	}
-	return a.commander.SendPrompt(
+	if !a.turns.begin(sessionID, request) {
+		return agentexec.ErrSessionBusy
+	}
+	err := a.commander.SendPrompt(
 		sessionID,
 		request.Prompt,
 		request.Attachments,
 		request.OnComplete,
 	)
+	if err != nil {
+		a.turns.abort(sessionID, request.Generation)
+		return err
+	}
+	if !request.DeferAcceptance {
+		a.turns.accepted(sessionID, request.Generation)
+	}
+	return nil
 }
+
+func (a *ClaudeCodeAdapter) AcknowledgePrompt(sessionID string, generation uint64) {
+	a.turns.accepted(sessionID, generation)
+}
+func (a *ClaudeCodeAdapter) AbandonPrompt(sessionID string, generation uint64) {
+	a.turns.abort(sessionID, generation)
+}
+
+func (a *ClaudeCodeAdapter) SetControlSink(sink func(ControlEvent)) { a.turns.setSink(sink) }
 
 // Approve approves a pending tool call.
 func (a *ClaudeCodeAdapter) Approve(sessionID string, approvalID string) error {

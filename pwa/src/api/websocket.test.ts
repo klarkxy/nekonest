@@ -60,12 +60,13 @@ function latestSubscription(socket: FakeWebSocket) {
   }
 }
 
-function acknowledge(socket: FakeWebSocket, deviceId: string, subscriptionId: string) {
+function acknowledge(socket: FakeWebSocket, deviceId: string, subscriptionId: string, protocolVersion = '1.2') {
   socket.message({
+    protocol_version: protocolVersion,
     type: 'subscribe_ack',
     device_id: deviceId,
     timestamp: 1,
-    payload: { subscription_id: subscriptionId }
+    payload: { subscription_id: subscriptionId, protocol_version: protocolVersion }
   })
 }
 
@@ -189,6 +190,20 @@ describe('NekoWebSocket lifecycle', () => {
 
     acknowledge(socket, 'device-b', second.subscriptionId)
     expect(client.isConnected()).toBe(true)
+  })
+
+  it('uses the negotiated 1.1 version for subsequent frames', () => {
+    const client = new NekoWebSocket()
+    client.subscribe('device-a')
+    const socket = FakeWebSocket.instances[0]
+    socket.open()
+    const subscription = latestSubscription(socket)
+    acknowledge(socket, 'device-a', subscription.subscriptionId, '1.1')
+
+    expect(client.getProtocolVersion()).toBe('1.1')
+    expect(client.send({ type: 'heartbeat', device_id: 'device-a' })).toBe(true)
+    const frame = JSON.parse(socket.sent[socket.sent.length - 1])
+    expect(frame.protocol_version).toBe('1.1')
   })
 
   it('retries a rejected handshake when subscribing to the same device', () => {

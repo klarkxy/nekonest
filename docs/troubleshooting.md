@@ -89,7 +89,7 @@ Do not manually mint a new message id to “retry” the same user action if the
 | MIME | Images (jpeg/png/webp/gif), txt, markdown, pdf, json |
 | Upload | Phone secret valid; server disk space in `data/attachments` |
 | Daemon download | Device online; can GET attachment URL from VPS |
-| Agent wiring | Claude/Codex/Kilo use native file/image mechanisms; **Kimi CLI / Grok Build** only get local paths in the prompt—CLI sandbox may block temp paths |
+| Agent wiring | Claude/Codex use native file/image mechanisms where advertised; **Kimi CLI / Grok Build** may only get local paths in the prompt—CLI sandbox may block temp paths |
 
 ## Approvals never complete on phone
 
@@ -132,6 +132,13 @@ Self-hosters sometimes add path/process exclusions (see [deploy-windows.md](./de
 4. For contributors, trace PWA → server → daemon → adapter end-to-end ([architecture.md](./architecture.md)).
 
 Never paste device tokens, phone secrets, or bootstrap tokens into public issues.
+
+## Protocol 1.2 controls and blockers
+
+- **History is visible but Send is disabled:** inspect the session `unavailable_reasons`. `cli_missing` is expected when only a native store remains; do not bypass the flag.
+- **A 1.2 control disappeared after reconnect:** verify the catalog producer version. Only confirmed 1.1 daemon catalogs receive legacy send/interrupt inference; an absent/unknown producer fails closed.
+- **Queue shows `blocked_failed` or `blocked_interrupted`:** Resume continues only later FIFO items and never replays the blocker. `blocked_indeterminate` requires the explicit Skip action and warning.
+- **Start remains `thread_starting`:** the daemon is still waiting for prompt outcome and native-store ownership. Do not resend or fabricate an indeterminate result from a phone timer.
 
 ## Related
 

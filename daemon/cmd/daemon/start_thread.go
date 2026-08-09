@@ -30,7 +30,6 @@ const (
 var supportedStartAgents = []adapters.AgentType{
 	adapters.AgentClaudeCode,
 	adapters.AgentCodex,
-	adapters.AgentKilo,
 	adapters.AgentKimiCLI,
 	adapters.AgentGrokBuild,
 }
@@ -168,8 +167,8 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 		finish(startjournal.StatusFailed, "", reason)
 		return
 	}
-	if len(command.Attachments) > 0 && agentType != adapters.AgentCodex {
-		finish(startjournal.StatusFailed, "", "first-turn attachments are currently supported only for codex")
+	if len(command.Attachments) > 0 && capability.AttachmentMode == adapters.AttachUnsupported {
+		finish(startjournal.StatusFailed, "", "first-turn attachments are unavailable for the selected native control path")
 		return
 	}
 
@@ -225,11 +224,41 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 	sessionID := strings.TrimSpace(started.SessionID)
 	crossedNativeBoundary := started.Created || started.PromptAccepted
 	promptAccepted := started.PromptAccepted && startErr == nil && startPanic == nil
-	starterOwnsFiles = promptAccepted
+	starterOwnsFiles = crossedNativeBoundary && started.PromptResult != nil || promptAccepted
 	if !starterOwnsFiles {
 		releaseFiles()
 	}
-	ownershipConfirmed := crossedNativeBoundary && sessionID != "" && c.waitForOwnership(parent, adapter, sessionID)
+	var ownershipConfirmed bool
+	if crossedNativeBoundary && sessionID != "" {
+		ownershipResult := make(chan bool, 1)
+		go func() { ownershipResult <- c.waitForOwnership(parent, adapter, sessionID) }()
+		promptResult := started.PromptResult
+		ownershipDone := false
+		promptDone := promptAccepted || promptResult == nil
+		for !ownershipDone || !promptDone {
+			select {
+			case ownershipConfirmed = <-ownershipResult:
+				ownershipDone = true
+			case promptErr, ok := <-promptResult:
+				promptDone = true
+				promptResult = nil
+				promptAccepted = ok && promptErr == nil
+				if promptErr != nil {
+					startErr = promptErr
+				}
+			case <-parent.Done():
+				finish(startjournal.StatusIndeterminate, sessionID, "daemon stopped while native ownership or initial prompt outcome was unresolved; automatic retry is disabled")
+				return
+			}
+		}
+		if started.PromptResult != nil {
+			releaseFiles()
+			starterOwnsFiles = false
+		}
+		if promptAccepted && !ownershipConfirmed {
+			ownershipConfirmed = c.waitForOwnership(parent, adapter, sessionID)
+		}
+	}
 	if ownershipConfirmed && promptAccepted {
 		finish(startjournal.StatusOwned, sessionID, "", true)
 		return
@@ -543,9 +572,10 @@ func (c *agentStartCapabilityCache) Get(parent context.Context, registry *adapte
 	entries := make([]map[string]interface{}, 0, len(supportedStartAgents))
 	for _, agentType := range supportedStartAgents {
 		entry := map[string]interface{}{
-			"agent_type": string(agentType),
-			"available":  false,
-			"spawn":      false,
+			"agent_type":      string(agentType),
+			"available":       false,
+			"spawn":           false,
+			"attachment_mode": string(adapters.AttachUnsupported),
 		}
 		adapter, exists := registry.Get(string(agentType))
 		starter, canStart := adapter.(adapters.NativeThreadStarter)
@@ -560,6 +590,9 @@ func (c *agentStartCapabilityCache) Get(parent context.Context, registry *adapte
 			} else {
 				entry["available"] = capability.Available
 				entry["spawn"] = capability.Available
+				entry["control_path"] = capability.ControlPath
+				entry["control_version"] = capability.ControlVersion
+				entry["attachment_mode"] = string(capability.AttachmentMode)
 				if !capability.Available {
 					reason := strings.TrimSpace(capability.Reason)
 					if reason == "" {

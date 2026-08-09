@@ -19,9 +19,9 @@ How NekoNest’s three runtimes cooperate to resume coding-agent threads from a 
                                         │ journal / exec   │
                                         └────────┬─────────┘
                                                  │ native store + CLI
-                    ┌────────────┬───────────┬───┴──────┬────────────┐
-                    │Claude Code │   Codex   │  Kilo    │ Kimi CLI   │ Grok Build
-                    └────────────┴───────────┴──────────┴────────────┴───────────
+                    ┌────────────┬───────────┬───┴────────┬────────────┐
+                    │Claude Code │   Codex   │ Kimi CLI   │ Grok Build │
+                    └────────────┴───────────┴────────────┴────────────┘
 ```
 
 | Layer | Module | Responsibility |
@@ -43,7 +43,8 @@ directory (project path)  →  agent type  →  thread (native session id)
 
 - Threads without a recognizable working directory appear under **未分类** (Uncategorized).
 - Empty agent groups under a directory are omitted.
-- Wire agent IDs: `claude_code`, `codex`, `kilo`, `kimi_cli`, `grok_build`.
+- Active wire agent IDs: `claude_code`, `codex`, `kimi_cli`, `grok_build`.
+- Protocol 1.x parses retired `kilo` values only for fail-closed mixed-version compatibility; active catalogs filter them.
 
 Per-harness **live** capability matrix (control flags, attachments, start probes, live vs v1):
 [agent-capability-matrix.md](./agent-capability-matrix.md).
@@ -151,6 +152,13 @@ docs/         operator and maintainer docs
 ```
 
 Go module paths are `github.com/nekonest/server` and `github.com/nekonest/daemon` (stable; do not “fix” solely because the GitHub repo is `klarkxy/nekonest`).
+
+## Protocol 1.2 control plane
+
+- The daemon is the capability producer. The Server preserves that producer protocol version in live forwarding and rebuilt open-mode snapshots instead of restamping the catalog as its own release.
+- A turn is bound to one control generation, public session id, `client_msg_id`, and native request id. Accepted/success/failure/interrupted/indeterminate events from an older generation are rejected, and interrupt must echo the current advertised generation plus `client_msg_id` under the same per-session dispatch lock.
+- Every reliable installed send path may enter the NekoNest queue v2 before crossing the native boundary. Unknown running work after restart becomes `blocked_indeterminate`; it is never replayed.
+- Native thread start stays `thread_starting` until both first-prompt success and native-store ownership are positive. The PWA has no local timeout that invents a terminal result.
 
 ## Related docs
 

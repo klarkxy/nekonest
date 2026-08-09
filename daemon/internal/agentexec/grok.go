@@ -30,6 +30,7 @@ type GrokCommander struct {
 	streams   map[string]*grokStreamState
 
 	OnAgentOutput func(sessionID, msgType, content, msgID string)
+	OnTurnEnd     func(sessionID string, exitCode int, interrupted bool)
 }
 
 type grokStreamState struct {
@@ -213,6 +214,9 @@ func (c *GrokCommander) startPromptInDir(
 			delete(c.streams, sessionID)
 		}
 		c.mu.Unlock()
+		if c.OnTurnEnd != nil {
+			c.OnTurnEnd(sessionID, exitCode, executor.WasIntentionallyStopped())
+		}
 	}
 
 	if err := executor.StartWithDir(c.cliPath, args, nil, workDir); err != nil {

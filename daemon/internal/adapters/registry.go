@@ -39,7 +39,6 @@ func NewDefaultRegistry() (*Registry, error) {
 	return NewRegistry(
 		NewClaudeCodeAdapter(),
 		NewCodexAdapter(),
-		NewKiloAdapter(),
 		NewKimiCLIAdapter(),
 		NewGrokBuildAdapter(),
 	)
@@ -70,6 +69,19 @@ func (r *Registry) SetOutputSink(sink OutputSink) {
 	for _, adapter := range r.ordered {
 		if source, ok := adapter.(OutputAdapter); ok {
 			source.SetOutputSink(sink)
+		}
+	}
+}
+
+// SetControlSink installs one normalized control sink on every adapter that
+// can produce positive native control signals.
+func (r *Registry) SetControlSink(sink func(ControlEvent)) {
+	if r == nil {
+		return
+	}
+	for _, adapter := range r.ordered {
+		if source, ok := adapter.(ControlSinkAdapter); ok {
+			source.SetControlSink(sink)
 		}
 	}
 }

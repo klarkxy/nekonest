@@ -13,7 +13,6 @@ The production mascot and agent portraits are original hard-cel anime catgirl as
 - Logo: warm cocoa-haired and pearl-silver-haired catgirl pair, square icon-safe composition, no text or watermark.
 - Claude Code: copper-auburn scholarly craftswoman, amber and terracotta.
 - Codex: short black/teal engineer, emerald circuit motif.
-- Kilo: strawberry twin-bun builder, raspberry speed and block motifs.
 - Kimi CLI: long midnight-blue moon navigator, periwinkle and silver.
 - Grok Build: black/white wolf-cut investigator, graphite and electric cyan.
 
@@ -29,7 +28,6 @@ python tools/build_brand_assets.py `
   --duo <duo-source.png> `
   --claude-code <claude-source.png> `
   --codex <codex-source.png> `
-  --kilo <kilo-source.png> `
   --kimi-cli <kimi-source.png> `
   --grok-build <grok-source.png>
 ```

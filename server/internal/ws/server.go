@@ -131,7 +131,7 @@ func (s *Server) negotiateFirstFrame(msg *protocol.NekoMessage) protocol.Handsha
 		msg.ProtocolVersion,
 		string(msg.TransportMode),
 		s.TransportMode(),
-		1,
+		protocol.CurrentProtocolMinor,
 	)
 }
 

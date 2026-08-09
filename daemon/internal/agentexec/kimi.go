@@ -34,6 +34,7 @@ type KimiCommander struct {
 	helpProbe func() (string, error)
 
 	OnAgentOutput func(sessionID, msgType, content, msgID string)
+	OnTurnEnd     func(sessionID string, exitCode int, interrupted bool)
 }
 
 func NewKimiCommander() *KimiCommander {
@@ -61,9 +62,9 @@ func (c *KimiCommander) ProbeThreadStart(ctx context.Context) error {
 
 // StartThread creates a Kimi-native session with ACP. The ACP ID is native;
 // callers must namespace it at the adapter boundary and confirm store ownership.
-func (c *KimiCommander) StartThread(ctx context.Context, workDir, prompt string) (string, bool, bool, error) {
+func (c *KimiCommander) StartThread(ctx context.Context, workDir, prompt string) (string, bool, bool, <-chan error, error) {
 	if err := c.ProbeThreadStart(ctx); err != nil {
-		return "", false, false, err
+		return "", false, false, nil, err
 	}
 	var stateMu sync.Mutex
 	var createdID string
@@ -100,7 +101,7 @@ func (c *KimiCommander) StartThread(ctx context.Context, workDir, prompt string)
 		},
 	})
 	if err != nil {
-		return started.SessionID, started.NativeCreatePossible, started.PromptAccepted, err
+		return started.SessionID, started.NativeCreatePossible, started.PromptAccepted, started.PromptResult, err
 	}
 	stateMu.Lock()
 	if !exited {
@@ -109,7 +110,7 @@ func (c *KimiCommander) StartThread(ctx context.Context, workDir, prompt string)
 		c.mu.Unlock()
 	}
 	stateMu.Unlock()
-	return started.SessionID, started.NativeCreatePossible, started.PromptAccepted, nil
+	return started.SessionID, started.NativeCreatePossible, started.PromptAccepted, started.PromptResult, nil
 }
 
 func findKimiCLI() string {
@@ -120,12 +121,7 @@ func findKimiCLI() string {
 	}
 	appData := os.Getenv("APPDATA")
 	home, _ := os.UserHomeDir()
-	for _, candidate := range []string{
-		filepath.Join(appData, "npm", "kimi.exe"),
-		filepath.Join(appData, "npm", "kimi.cmd"),
-		filepath.Join(home, ".local", "bin", "kimi"),
-		filepath.Join(home, ".local", "bin", "kimi.exe"),
-	} {
+	for _, candidate := range kimiSearchPaths(appData, home, os.Getenv("KIMI_CODE_HOME")) {
 		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
 			return candidate
 		}
@@ -134,6 +130,21 @@ func findKimiCLI() string {
 		return "kimi.exe"
 	}
 	return "kimi"
+}
+
+func kimiSearchPaths(appData, home, codeHome string) []string {
+	return []string{
+		filepath.Join(appData, "npm", "kimi.exe"),
+		filepath.Join(appData, "npm", "kimi.cmd"),
+		filepath.Join(codeHome, "bin", "kimi"),
+		filepath.Join(codeHome, "bin", "kimi.exe"),
+		filepath.Join(codeHome, "bin", "kimi.cmd"),
+		filepath.Join(home, ".kimi-code", "bin", "kimi"),
+		filepath.Join(home, ".kimi-code", "bin", "kimi.exe"),
+		filepath.Join(home, ".kimi-code", "bin", "kimi.cmd"),
+		filepath.Join(home, ".local", "bin", "kimi"),
+		filepath.Join(home, ".local", "bin", "kimi.exe"),
+	}
 }
 
 func (c *KimiCommander) CLIPath() string { return c.cliPath }
@@ -240,6 +251,9 @@ func (c *KimiCommander) sendPromptInDir(
 			delete(c.runIDs, sessionID)
 		}
 		c.mu.Unlock()
+		if c.OnTurnEnd != nil {
+			c.OnTurnEnd(sessionID, exitCode, executor.WasIntentionallyStopped())
+		}
 	}
 
 	if err := executor.StartWithDir(c.cliPath, args, nil, workDir); err != nil {

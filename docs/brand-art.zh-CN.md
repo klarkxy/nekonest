@@ -13,7 +13,6 @@
 - Logo：暖可可发色与珍珠白发猫娘双人，方形图标安全构图，无文字无水印。
 - Claude Code：赤铜褐发学者工匠，琥珀与赤陶。
 - Codex：短黑/青绿工程师，翠绿电路母题。
-- Kilo：草莓双丸子建造者，覆盆子速度与方块母题。
 - Kimi CLI：长夜蓝月导航者，长春花蓝与银。
 - Grok Build：黑白狼剪调查者，石墨与电青。
 
@@ -29,7 +28,6 @@ python tools/build_brand_assets.py `
   --duo <duo-source.png> `
   --claude-code <claude-source.png> `
   --codex <codex-source.png> `
-  --kilo <kilo-source.png> `
   --kimi-cli <kimi-source.png> `
   --grok-build <grok-source.png>
 ```

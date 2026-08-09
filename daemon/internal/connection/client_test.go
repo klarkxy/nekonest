@@ -120,11 +120,47 @@ func TestHeartbeatCarriesNegotiatedTransportEnvelope(t *testing.T) {
 	client := NewClient(context.Background(), "ws://example.invalid", "device-a", "token", "open")
 
 	frame := client.heartbeatMessage(now)
-	if frame["protocol_version"] != "1.1" || frame["transport_mode"] != "open" {
+	if frame["protocol_version"] != "1.2" || frame["transport_mode"] != "open" {
 		t.Fatalf("heartbeat envelope = %#v", frame)
 	}
 	if frame["type"] != "heartbeat" || frame["device_id"] != "device-a" || frame["timestamp"] != int64(1234) {
 		t.Fatalf("heartbeat identity = %#v", frame)
+	}
+}
+
+func TestConnectUsesNegotiatedProtocolVersionForHeartbeat(t *testing.T) {
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{
+			"protocol_version": "1.1", "transport_mode": "open", "type": "auth_response",
+			"payload": map[string]any{"protocol_version": "1.1", "transport_mode": "open"},
+		})
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(context.Background(), websocketTestURL(server.URL), "device", "token", "open")
+	if err := client.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if got := client.ProtocolVersion(); got != "1.1" {
+		t.Fatalf("negotiated protocol = %q", got)
+	}
+	if got := client.heartbeatMessage(time.Unix(1, 0))["protocol_version"]; got != "1.1" {
+		t.Fatalf("heartbeat protocol = %#v", got)
 	}
 }
 

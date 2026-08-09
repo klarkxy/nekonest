@@ -175,7 +175,7 @@ func (e *AgentExecutor) SendPrompt(prompt string) error {
 }
 
 // CloseStdin closes the process stdin. Call after Start when the prompt is
-// already on argv (kilo run / claude -p / codex exec) so the CLI does not
+// already on argv (claude -p / codex exec) so the CLI does not
 // block waiting for piped input.
 func (e *AgentExecutor) CloseStdin() error {
 	e.mu.Lock()
@@ -290,7 +290,7 @@ func (e *AgentExecutor) StdinOpen() bool {
 func (e *AgentExecutor) readLineOutput(r io.ReadCloser, source string) {
 	defer r.Close()
 	scanner := bufio.NewScanner(r)
-	// Kilo/Codex JSONL tool events can be multi‑MB single lines
+	// Codex JSONL tool events can be multi‑MB single lines.
 	scanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 
 	for scanner.Scan() {

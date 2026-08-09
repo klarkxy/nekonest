@@ -163,7 +163,7 @@ func TestClaudeDiscoverExcludesSubagents(t *testing.T) {
 	}
 }
 
-func TestClaudeDiscoverColdStartKeepsOldPendingApproval(t *testing.T) {
+func TestClaudeTranscriptDoesNotInventPendingApproval(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "D--old-project")
 	sessionID := "old-pending-approval"
@@ -191,23 +191,15 @@ func TestClaudeDiscoverColdStartKeepsOldPendingApproval(t *testing.T) {
 
 	adapter := NewClaudeCodeAdapter()
 	adapter.projectsDir = root
-	sessions, err := adapter.Discover()
+	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].ID != sessionID ||
-		sessions[0].Status != StatusWaitingApproval || sessions[0].PendingApproval == nil {
-		t.Fatalf("cold-start Claude attention session = %#v", sessions)
-	}
-	beforeHits, _, entries := adapter.attentionCache.stats()
-	if entries != 1 {
-		t.Fatalf("attention cache entries = %d, want 1", entries)
-	}
-	if _, err := adapter.Discover(); err != nil {
+	session, err := adapter.parseSessionFile(path, info)
+	if err != nil {
 		t.Fatal(err)
 	}
-	afterHits, _, _ := adapter.attentionCache.stats()
-	if afterHits-beforeHits != 1 {
-		t.Fatalf("second discovery attention cache hits = %d, want 1", afterHits-beforeHits)
+	if session.ID != sessionID || session.Status == StatusWaitingApproval || session.PendingApproval != nil {
+		t.Fatalf("transcript synthesized actionable approval = %#v", session)
 	}
 }

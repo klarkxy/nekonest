@@ -367,7 +367,7 @@ describe('mergeHistoryLists', () => {
         role: 'user',
         content: 'ping',
         timestamp: 101,
-        metadata: { imported: true, agent_type: 'kilo' }
+        metadata: { imported: true, agent_type: 'grok_build' }
       })
     ]
 

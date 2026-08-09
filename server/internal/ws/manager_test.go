@@ -344,6 +344,7 @@ func TestAgentStartCapabilitiesStayWithLiveDaemonGeneration(t *testing.T) {
 	cm.UpdateSessionListFrom(first, []*protocol.AgentSession{{ID: "session-1"}}, []protocol.AgentStartCapability{
 		{AgentType: protocol.AgentCodex, Available: true},
 		{AgentType: protocol.AgentKimiCLI, Available: false, Reason: "native start not verified"},
+		{AgentType: protocol.AgentKilo, Available: true},
 		{AgentType: "unknown", Available: true},
 		{AgentType: protocol.AgentCodex, Available: false, Reason: "duplicate ignored"},
 	})
@@ -370,6 +371,29 @@ func TestAgentStartCapabilitiesStayWithLiveDaemonGeneration(t *testing.T) {
 	sessions, capabilities = cm.GetDeviceSessionSnapshot("dev1")
 	if len(sessions) != 1 || sessions[0].ID != "session-2" || len(capabilities) != 1 || capabilities[0].AgentType != protocol.AgentGrokBuild {
 		t.Fatalf("live generation snapshot: sessions=%#v capabilities=%#v", sessions, capabilities)
+	}
+}
+
+func TestRetiredKiloSessionsAreNotCachedOrBroadcast(t *testing.T) {
+	d := testDB(t)
+	_, _ = d.RegisterDevice("dev1", "PC")
+	cm := NewConnectionManager(d)
+	dc := cm.AddDaemonVersioned("dev1", nil, "0.2.3")
+
+	cm.UpdateSessionListFrom(dc, []*protocol.AgentSession{
+		{ID: "legacy-kilo", AgentType: protocol.AgentKilo},
+		{ID: "active-codex", AgentType: protocol.AgentCodex},
+	}, []protocol.AgentStartCapability{
+		{AgentType: protocol.AgentKilo, Available: true, Spawn: true},
+		{AgentType: protocol.AgentCodex, Available: true, Spawn: true},
+	})
+
+	sessions, capabilities := cm.GetDeviceSessionSnapshot("dev1")
+	if len(sessions) != 1 || sessions[0].ID != "active-codex" {
+		t.Fatalf("retired session leaked into catalog: %#v", sessions)
+	}
+	if len(capabilities) != 1 || capabilities[0].AgentType != protocol.AgentCodex {
+		t.Fatalf("retired start capability leaked into catalog: %#v", capabilities)
 	}
 }
 

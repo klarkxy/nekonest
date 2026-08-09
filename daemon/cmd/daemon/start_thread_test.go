@@ -31,7 +31,7 @@ func TestBuildThreadResultMessageSealsApplicationDetails(t *testing.T) {
 	daemonTransport = "sealed"
 	daemonSealedKeys = manager
 
-	msg := buildThreadResultMessage(
+	msg := buildThreadResultMessage("1.2",
 		"device-a",
 		"claude_code",
 		"operation-a",
@@ -64,7 +64,7 @@ func TestBuildThreadResultMessageDegradesWhenSealingUnavailable(t *testing.T) {
 	daemonTransport = "sealed"
 	daemonSealedKeys = nil
 
-	msg := buildThreadResultMessage(
+	msg := buildThreadResultMessage("1.2",
 		"device-a",
 		"codex",
 		"operation-a",
@@ -363,15 +363,15 @@ func TestThreadStartWaitsForOwnershipLag(t *testing.T) {
 func TestThreadStartCreatedButUnownedIsIndeterminateAndNotRetried(t *testing.T) {
 	projectDir := testNativeProjectDir(t)
 	agent := &fakeStartAdapter{
-		name:   string(adapters.AgentKilo),
+		name:   string(adapters.AgentKimiCLI),
 		probe:  adapters.ThreadStartCapability{Available: true},
-		result: adapters.ThreadStartResult{SessionID: "native-kilo", Created: true},
+		result: adapters.ThreadStartResult{SessionID: "native-kimi", Created: true},
 	}
 	coordinator, _ := newThreadStartTestCoordinator(t, agent, projectDir)
 	coordinator.ownershipWait = 3 * time.Millisecond
-	command := threadStartCommand{OperationID: "unknown", AgentType: adapters.AgentKilo, ProjectDir: projectDir, Prompt: "hello"}
+	command := threadStartCommand{OperationID: "unknown", AgentType: adapters.AgentKimiCLI, ProjectDir: projectDir, Prompt: "hello"}
 	first := collectStartEvents(coordinator, command)
-	if len(first) != 2 || first[1].State != startjournal.StatusIndeterminate || first[1].SessionID != "native-kilo" {
+	if len(first) != 2 || first[1].State != startjournal.StatusIndeterminate || first[1].SessionID != "native-kimi" {
 		t.Fatalf("indeterminate events = %#v", first)
 	}
 	second := collectStartEvents(coordinator, command)

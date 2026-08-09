@@ -12,7 +12,7 @@ When implementation and this contract disagree during the v1 effort, **update th
 
 ## 1. One-sentence product
 
-NekoNest is a **self-hosted nest** that lets you continue, steer, and finish **real local coding-agent threads** on your home machines from a **phone-first client**, without exposing inbound ports on the home host and without replacing each agent’s native session store. **Codex is the only full-control v1 agent**; Claude Code, Kilo, Kimi CLI, and Grok Build ship as **compatibility-resume** adapters.
+NekoNest is a **self-hosted nest** that lets you continue, steer, and finish **real local coding-agent threads** on your home machines from a **phone-first client**, without exposing inbound ports on the home host and without replacing each agent’s native session store. **Codex is the only full-control v1 agent**; Claude Code, Kimi CLI, and Grok Build ship as **compatibility-resume** adapters. Kilo is retired from active support; protocol 1.x retains only legacy parse compatibility for its old wire id.
 
 ## 2. Problem and jobs-to-be-done
 
@@ -21,7 +21,7 @@ NekoNest is a **self-hosted nest** that lets you continue, steer, and finish **r
 | **Away-from-desk resume** | Open phone → see the same threads that exist on the host → read history → send the next prompt → watch stream |
 | **Don’t lose the turn** | Reconnect, app kill, flaky mobile network: prompts are at-most-once; user sees honest delivery state |
 | **Unblock without walking to the host** | When Codex waits on the user (permission, question, idle-after-error), phone is notified and can act |
-| **Multi-agent life** | One nest surfaces Codex (full control) plus Claude Code, Kilo, Kimi, and Grok (compatibility resume) without one missing CLI killing the others |
+| **Multi-agent life** | One nest surfaces Codex (full control) plus Claude Code, Kimi, and Grok (compatibility resume) without one missing CLI killing the others |
 | **Trust the nest** | Operator owns the VPS; **sealed E2E is default** so the relay cannot read application bodies; open relay is admin-only |
 | **Home network reality** | Host only dials out; works behind CGNAT / no public IP / no port-forward |
 
@@ -46,7 +46,7 @@ These survive v1 and constrain every feature below.
 7. **No fake capabilities:** if an agent cannot host an approval, steer, attachment path, or start-thread, the UI must say so — never green-check a no-op. Capability flags default false/unsupported when absent.
 8. **One missing agent is non-fatal** for the rest of the nest.
 9. **Sealed by default:** new nests use E2E sealed transport; open relay requires explicit administrator configuration; sealed and open clients never mix on one nest; never auto-downgrade sealed to open.
-10. **Codex-only full control:** approve/deny, steer, and full attachments are Codex app-server promises. Any of the five agents may advertise agent-scoped phone `start_thread` only after its native starter is installed and probed; that capability does not promote a compatibility adapter to full control.
+10. **Codex-only full control:** approve/deny, steer, and full attachments are Codex app-server promises. Any of the four active agents may advertise agent-scoped phone `start_thread` only after its native starter is installed and probed; that capability does not promote a compatibility adapter to full control.
 
 ## 4. Competitive position (why v1 looks like this)
 
@@ -142,10 +142,10 @@ Priority tags:
 | Primary agent | **Codex** is the only full-control v1 agent. Normative path: `codex app-server` JSON-RPC; the minimum full-control baseline is **codex-cli 0.146.0**, with live schema/initialize probing. |
 | Codex controls | Send, structured user input, approve/deny, interrupt, steer, and a durable FIFO follow-up queue are implemented full-control surfaces. Legacy `codex exec resume` is a capability-degraded compatibility path. |
 | Start thread | **Agent-scoped, capability-gated.** The phone opens a local-only draft; it creates the native thread only when the first prompt is sent. An installed/probed starter may target only a directory in the daemon's **current union of native-discovered project directories**. No arbitrary path entry or filesystem browsing. Lifecycle: `starting → owned \| failed \| indeterminate` (no permanent ghost row); `owned` requires positive first-prompt acknowledgement and native-store ownership. |
-| Other agents | Claude Code, Kilo, Kimi CLI, Grok Build: **compatibility resume** — discover, ownership, history, send/stream, interrupt, attachments per advertised capability, plus start only when native `spawn` is truly installed/probed and advertised. **No** approval/steer/queue promise. |
+| Other agents | Claude Code, Kimi CLI, and Grok Build remain **compatibility resume** adapters. Each control is independently raised only from a live native probe/event. A reliable send path may use the NekoNest durable FIFO; this is not an agent-native queue and does not grant steer or full control. |
 | Attachments | Codex app-server **MUST** support images and ordinary files end-to-end. Other adapters advertise `native_image`, `path_best_effort`, or `unsupported`; UI never implies a stronger tier. |
 | Notifications | Codex waiting for approval, waiting for user input, and run failure are **MUST**. Success and device offline are **SHOULD**. Sealed push contains only generic event text plus device/session references; details decrypt after opening the PWA. |
-| Expansion agents | **No** v1 release gate for additional agents beyond the five wire ids. |
+| Expansion agents | **No** v1 release gate for additional agents beyond the four active wire ids. The retired `kilo` id is parse-only compatibility. |
 
 ### 7.1 Nest server
 
@@ -184,11 +184,11 @@ Priority tags:
 | D7 | Headless resume/send via each agent’s supported path | MUST | Codex prefers app-server; others CLI resume |
 | D8 | Prompt journal fail-closed; at-most-once with `client_msg_id` | MUST | Exact sealed envelope retry; never re-encrypt as same command |
 | D9 | Stream normalize; stderr = diagnostics only | MUST | |
-| D10 | Interrupt / stop process tree | MUST | No orphan trees on supported OS (Windows Job Objects; Linux process groups) |
+| D10 | Interrupt / stop process tree | MUST | No orphan trees on supported OS (Windows Job Objects; Linux process groups); delayed commands cannot interrupt a newer generation |
 | D11 | Attachment materialize to per-run temp + agent wiring | MUST | Capability matrix honest per agent; Codex full image+file |
 | D12 | **Native approval bridge for Codex app-server** | MUST | Phone approve/deny reaches real callback; non-Codex advertise unavailable; never fake |
 | D13 | Session status machine: `idle` / `running` / `waiting_user` / `waiting_approval` / `error` | MUST | `waiting_*` only on positive app-server signal; unsupported adapters stay running/idle/error |
-| D14 | Capability advertisement per agent/session | MUST | Flags: control_mode, approve, deny, interrupt, steer, queue, spawn, attachment_mode; absent = false/unsupported |
+| D14 | Capability advertisement per agent/session | MUST | Protocol 1.2 flags: send, approve, deny, interrupt, steer, queue, spawn, user_input, attachment_mode, control path/version, and stable unavailable reasons; absent = false/unsupported |
 | D15 | Register + pair generate CLI; **doctor** diagnostics | MUST | Checks protocol/mode, auth, keys, server, adapters, Codex app-server methods/version, writable state, process control |
 | D16 | Autostart packages (Windows service/Task; Linux `systemd --user`) | SHOULD | Documented one-liners; macOS launchd LATER |
 | D17 | Config validate + safe reload of non-identity fields | SHOULD | |
@@ -214,8 +214,7 @@ Detailed **live** vs target cards for each harness: [agent-capability-matrix.md]
 
 | Wire id | Product | Guarantees | Explicit non-promises |
 |---|---|---|---|
-| `claude_code` | Claude Code | Discover, ownership, history, send/stream, interrupt; attachments and agent-scoped start per advertised tier | No approval / steer / queue promise; start is false unless its native starter is installed/probed |
-| `kilo` | Kilo | Same compatibility-resume set; agent-scoped start only when advertised | Same non-promises |
+| `claude_code` | Claude Code | Discover, ownership, history, send/stream, process interrupt, path attachments, NekoNest FIFO, and probed start | Approval/user-input/native image require a packaged bridge signal; steer remains false |
 | `kimi_cli` | Kimi CLI | Same; modern store; legacy path documented; agent-scoped start only when advertised | Same non-promises |
 | `grok_build` | Grok Build | Same; safe non-interactive defaults; agent-scoped start only when advertised | Same non-promises |
 
@@ -245,8 +244,8 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 | P8 | Composer: send, drafts, attachments, busy lock | MUST | Attachment UI tiered by capability |
 | P9 | Outbox with `client_msg_id`, retry, cap, reconnect replay | MUST | Same sealed envelope on retry; clear only on committed |
 | P10 | **Delivery UX** for accepted / committed / failed / not_seen / indeterminate | MUST | User-visible; not only transport send or deprecated `prompt_sent` |
-| P11 | Interrupt control | MUST | Disabled when capability false |
-| P12 | **Approve / Deny** UI when `waiting_approval` | MUST | Codex only when capability true; disabled + explanation otherwise |
+| P11 | Interrupt control | MUST | Disabled when capability false or no exact active-turn binding is advertised |
+| P12 | **Approve / Deny** UI when `waiting_approval` | MUST | Only after a positive live permission request and advertised capability; otherwise disabled with a reason |
 | P13 | Status badges: running / waiting you / waiting approval / error | MUST | |
 | P14 | Push opt-in + deep link into the needing session | MUST | With S9; generic sealed payload; decrypt details in PWA |
 | P15 | i18n zh-CN + en | MUST | |
@@ -257,7 +256,7 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 | P20 | Session prefs persist (thread/project archive, collapse, sort) | SHOULD | |
 | P21 | Image capture from camera roll | SHOULD | Within attachment limits; Codex full path |
 | P22 | Voice input → text (OS speech or browser API) | SHOULD | No cloud STT required |
-| P23 | Prompt queue while running (when capability allows) | SHOULD | Else disable with reason; Codex only when advertised |
+| P23 | Prompt queue while running (when capability allows) | SHOULD | NekoNest durable FIFO on any reliable advertised path; blockers require resume or explicit indeterminate skip |
 | P24 | Steer / follow-up without full interrupt | MUST when Codex app-server capability true; UI gated | Non-Codex disabled with reason |
 | P25 | Device management + phone identity revoke | SHOULD / MUST for own-token revoke | With S15 |
 | P26 | Offline banner + last-sync time | SHOULD | |
@@ -270,7 +269,7 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 
 | ID | Feature | Priority | Rules |
 |---|---|---|---|
-| L1 | Resume existing native threads | MUST | Core path for all five agents; native id preserved. The phone catalog is a fixed 7-day recent view; hiding never deletes native data. Old-only projects disappear from the picker and reappear after host-side activity. An old deep link shows hidden/removed state and does not scan history. |
+| L1 | Resume existing native threads | MUST | Core path for all four active agents; native id preserved. The phone catalog is a fixed 7-day recent view; hiding never deletes native data. Old-only projects disappear from the picker and reappear after host-side activity. An old deep link shows hidden/removed state and does not scan history. |
 | L2 | **Start thread from phone** | MUST | Start with an **agent-scoped phone-local draft**. Its first prompt invokes the selected installed/probed native starter so that agent's **native store gains the thread** |
 | L3 | Directory picker limited to the daemon's **current union of discovered** native project directories | MUST | No arbitrary filesystem walk; no operator path typing; reject vanished dirs, `..`, symlink escape |
 | L4 | Refuse start when the selected agent's native starter is missing/unprobed, `spawn=false`, or directory is not in the current discovered union | MUST | Clear error → `thread_failed` before spawn when possible |
@@ -289,7 +288,7 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 | C1 | Interrupt running work | MUST | All agents that advertise interrupt |
 | C2 | Approve / deny tool prompts | MUST | **Codex app-server real bridge**; others honest unavailable |
 | C3 | User-input / question prompts when agent surfaces them | MUST for Codex positive signals; SHOULD channel | Same status channel as approvals |
-| C4 | Prompt queue | SHOULD | Codex only when capability true |
+| C4 | Prompt queue | SHOULD | NekoNest durable FIFO on any reliable queue-capable path; never presented as an agent-native queue |
 | C5 | Steer active turn | MUST | Codex app-server; capability-gated |
 | C6 | Read-only git snapshot (branch, dirty, short status) | SHOULD | No auto-commit from nest without explicit user action |
 | C7 | Explicit git actions (commit/push) from phone | LATER | High risk; not v1 blocker |
@@ -481,7 +480,7 @@ Thread
 Do not block v1 on:
 
 - macOS formal support (LATER; Windows + Linux only for v1 tag)
-- Expansion agents beyond the five wire ids (no ≥2 expansion gate)
+- Expansion agents beyond the four active wire ids (no ≥2 expansion gate)
 - Equal full-control (approval/steer/start/full attachments) for non-Codex agents
 - Native App Store iOS/Android apps (PWA is primary; native MAY later)
 - Feishu / Telegram / Slack / Discord as primary clients
@@ -551,7 +550,7 @@ All former open items are closed. Resolutions:
 | 5 | **Expansion agents** | **None required** for v1.0.0. No “at least two” gate. |
 | 6 | **Message type names** | Stabilize in implementation against plan catalog: `start_thread`, `thread_starting`, `thread_owned`, `thread_failed`, `thread_indeterminate`, `steer`, `pair_request`, `pair_confirm`, `pair_ready`, `pair_failed`, `key_package`, `phone_revoked`, `attention_event`; status includes `waiting_user`. Exact schema lands in Phase 1 `protocol.json`. |
 | 7 | **Formal OS** | Windows + Linux MUST; macOS LATER. |
-| 8 | **Agent roles** | Codex full-control; four others compatibility-resume only. All five may advertise agent-scoped start only after native-starter install/probe; this grants no other control capability. |
+| 8 | **Agent roles** | Codex full-control; three others compatibility-resume only. All four active agents may advertise agent-scoped start only after native-starter install/probe; this grants no other control capability. Kilo is retired from active catalogs. |
 | 9 | **Start lifecycle** | `starting → owned \| failed \| indeterminate`; native ownership before owned; no permanent ghost row. |
 | 10 | **Notifications** | MUST: waiting_approval, waiting_user, run failure. SHOULD: success, device offline. |
 | 11 | **Protocol versioning** | `major.minor` as in §7.0. |
@@ -569,7 +568,6 @@ Changing any row requires updating this file and `v1-product.zh-CN.md` before fu
 | **Shipped root README** | Describes **live v0.1** behavior until release rewrite — do not treat as v1 contract |
 | **Frozen history** | `docs/archive/` — never treat as contract |
 | **User-visible history** | [CHANGELOG.md](../CHANGELOG.md) |
-| **Implementation plan** | `.kilo/plans/*-v1-codex-e2e-release-plan.md` (engineering order; this contract wins on product meaning) |
 
 ### Change process
 
@@ -581,4 +579,4 @@ Changing any row requires updating this file and `v1-product.zh-CN.md` before fu
 
 ---
 
-*NekoNest v1.0.0 is complete when a solo operator can deploy a sealed-by-default nest, connect home machines on Windows and Linux, resume native threads for five agents, fully control Codex (notify → approve/steer/interrupt/start-in-discovered-dir → done) with honest compatibility resume for the other four, trust delivery and sealed transport within the documented metadata limits — without turning the product into a remote IDE, cloud agent, or equal full-control promise for every CLI.*
+*NekoNest v1.0.0 is complete when a solo operator can deploy a sealed-by-default nest, connect home machines on Windows and Linux, resume native threads for four active agents, fully control Codex (notify → approve/steer/interrupt/start-in-discovered-dir → done) with honest compatibility resume for the other three, trust delivery and sealed transport within the documented metadata limits — without turning the product into a remote IDE, cloud agent, or equal full-control promise for every CLI.*

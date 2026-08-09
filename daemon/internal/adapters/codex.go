@@ -978,14 +978,17 @@ func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error
 		a.appServer.RegisterThreadIDs(sessionID, sessionID, sessionID)
 		turnID, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments)
 		if err != nil {
-			if errors.Is(err, agentexec.ErrAppServerExited) {
-				return err
-			}
-			// Fall back to exec resume rather than dropping the user prompt.
-			log.Printf("[codex] app-server turn/start failed, falling back to exec resume: %v", err)
+			// turn/start is the native write boundary. An error cannot prove that
+			// Codex did not accept it, so never execute the same prompt through a
+			// second control path.
+			return fmt.Errorf("%w: codex app-server turn/start: %v", ErrPromptBoundaryIndeterminate, err)
 		} else {
+			if request.OnNativeBound != nil {
+				request.OnNativeBound(turnID)
+			}
 			a.retainInitialTurnFiles(turnID, request.OnComplete)
 			if !a.appServer.IsTurnActive(sessionID) {
+				a.emitKnownAppServerTerminal(sessionID, turnID, a.appServer.LastTurnStatus(sessionID))
 				a.releaseInitialTurnFiles(turnID)
 			}
 			return nil
@@ -1026,8 +1029,12 @@ func (a *CodexAdapter) SendQueuedPrompt(sessionID string, request PromptRequest)
 	if err != nil {
 		return err
 	}
+	if request.OnNativeBound != nil {
+		request.OnNativeBound(turnID)
+	}
 	a.retainInitialTurnFiles(turnID, request.OnComplete)
 	if !a.appServer.IsTurnActive(sessionID) {
+		a.emitKnownAppServerTerminal(sessionID, turnID, a.appServer.LastTurnStatus(sessionID))
 		a.releaseInitialTurnFiles(turnID)
 	}
 	return nil
@@ -1075,10 +1082,9 @@ func (a *CodexAdapter) Interrupt(sessionID string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		err := a.appServer.InterruptTurn(ctx, sessionID)
 		cancel()
-		if err == nil {
-			return nil
-		}
-		log.Printf("[codex] app-server interrupt: %v", err)
+		// A turn is locked to one control path. Falling through to the exec
+		// commander could stop an unrelated process after an app-server race.
+		return err
 	}
 	return a.commander.Interrupt(sessionID)
 }
@@ -1136,7 +1142,7 @@ func (a *CodexAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapabili
 	if a.appServer == nil || !a.AppServerHealthy() {
 		return ThreadStartCapability{Reason: "codex app-server unavailable"}
 	}
-	return ThreadStartCapability{Available: true}
+	return ThreadStartCapability{Available: true, ControlPath: "app_server", AttachmentMode: AttachNativeImageAndFile}
 }
 
 // StartNativeThread starts the native Codex app-server path without treating a
@@ -1291,11 +1297,10 @@ func (a *CodexAdapter) SetRecoverySink(sink func()) {
 }
 
 func (a *CodexAdapter) handleAppServerExit(event agentexec.AppServerExit) {
-	a.abortAppServerOutput()
-
 	a.recoveryMu.Lock()
 	if a.recoveryClosed {
 		a.recoveryMu.Unlock()
+		a.abortAppServerOutput()
 		return
 	}
 	a.recoveryCrashSerial++
@@ -1316,8 +1321,10 @@ func (a *CodexAdapter) handleAppServerExit(event agentexec.AppServerExit) {
 			Capabilities: DefaultCapabilities(AgentCodex),
 			Class:        "failed",
 			EventID:      fmt.Sprintf("app_server_exit:%d:%s", event.Generation, sessionID),
+			Lifecycle:    TurnIndeterminate,
 		})
 	}
+	a.abortAppServerOutput()
 }
 
 func (a *CodexAdapter) recoverAppServer(ctx context.Context) {
@@ -1450,25 +1457,8 @@ func (a *CodexAdapter) handleAppServerNotification(method string, params json.Ra
 			} `json:"turn"`
 		}
 		if json.Unmarshal(params, &terminal) == nil && terminal.ThreadID != "" && terminal.Turn != nil {
+			a.emitKnownAppServerTerminal(a.appServer.WireIDForThread(terminal.ThreadID), terminal.Turn.ID, terminal.Turn.Status)
 			a.releaseInitialTurnFiles(terminal.Turn.ID)
-			status := StatusIdle
-			className := strings.ToLower(strings.TrimSpace(terminal.Turn.Status))
-			switch className {
-			case "", "completed":
-				className = "completed"
-			case "failed":
-				status = StatusError
-			case "interrupted", "cancelled", "canceled":
-				// A terminal cancellation is not a failure, but queue followers
-				// must remain paused until the user explicitly resumes them.
-			default:
-				className = "failed"
-				status = StatusError
-			}
-			a.emitControl(ControlEvent{
-				SessionID: a.appServer.WireIDForThread(terminal.ThreadID),
-				Status:    status, Class: className, EventID: "turn:" + terminal.Turn.ID + ":" + className,
-			})
 		}
 	}
 	event, ok := agentexec.ParseAppServerOutputNotification(method, params)
@@ -1505,6 +1495,32 @@ func (a *CodexAdapter) handleAppServerNotification(method string, params json.Ra
 		Content:   content,
 		MessageID: event.MessageID,
 	})
+}
+
+func (a *CodexAdapter) emitKnownAppServerTerminal(sessionID, turnID, rawStatus string) bool {
+	className := strings.ToLower(strings.TrimSpace(rawStatus))
+	status := StatusIdle
+	lifecycle := TurnTerminalSuccess
+	switch className {
+	case "completed":
+	case "failed":
+		status = StatusError
+		lifecycle = TurnTerminalFailure
+	case "interrupted", "cancelled", "canceled":
+		lifecycle = TurnInterrupted
+	case "", "inprogress", "in_progress", "running":
+		return false
+	default:
+		className = "failed"
+		status = StatusError
+		lifecycle = TurnTerminalFailure
+	}
+	a.emitControl(ControlEvent{
+		SessionID: sessionID, Status: status, Class: className,
+		EventID:         "turn:" + turnID + ":" + className,
+		NativeRequestID: turnID, Lifecycle: lifecycle,
+	})
+	return true
 }
 
 func (a *CodexAdapter) emitOutput(event OutputEvent) {

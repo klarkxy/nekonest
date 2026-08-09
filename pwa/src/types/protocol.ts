@@ -2,7 +2,7 @@
 
 import { runtimeTransportMode } from '@/api/transport'
 
-export const PROTOCOL_VERSION = '1.1' as const
+export const PROTOCOL_VERSION = '1.2' as const
 
 export type TransportMode = 'sealed' | 'open'
 
@@ -31,6 +31,7 @@ export type MessageType =
   | 'cancel_prompt'
   | 'prompt_cancelled'
   | 'resume_prompt_queue'
+  | 'skip_prompt_queue_item'
   | 'start_thread'
   | 'thread_starting'
   | 'thread_owned'
@@ -94,7 +95,6 @@ export interface Device {
 export type KnownAgentType =
   | 'claude_code'
   | 'codex'
-  | 'kilo'
   | 'kimi_cli'
   | 'grok_build'
 
@@ -112,13 +112,18 @@ export type AttachmentMode =
 /** Absent fields mean unsupported / false. */
 export interface SessionCapabilities {
   control_mode?: ControlMode
+  send?: boolean
   approve?: boolean
   deny?: boolean
   interrupt?: boolean
   steer?: boolean
   queue?: boolean
   spawn?: boolean
+  user_input?: boolean
   attachment_mode?: AttachmentMode
+  control_path?: string
+  control_version?: string
+  unavailable_reasons?: Partial<Record<'send' | 'approve' | 'deny' | 'interrupt' | 'steer' | 'queue' | 'spawn' | 'user_input' | 'attachment', string>>
 }
 
 /**
@@ -133,6 +138,7 @@ export interface AgentStartCapability {
   reason?: string
   control_path?: string
   control_version?: string
+  attachment_mode?: AttachmentMode
 }
 
 export interface SessionListPayload {
@@ -142,7 +148,7 @@ export interface SessionListPayload {
 
 export function capabilityEnabled(
   caps: SessionCapabilities | null | undefined,
-  key: keyof Pick<SessionCapabilities, 'approve' | 'deny' | 'interrupt' | 'steer' | 'queue' | 'spawn'>
+  key: keyof Pick<SessionCapabilities, 'send' | 'approve' | 'deny' | 'interrupt' | 'steer' | 'queue' | 'spawn' | 'user_input'>
 ): boolean {
   return Boolean(caps?.[key])
 }
@@ -167,6 +173,13 @@ export interface AgentSession {
   capabilities?: SessionCapabilities
   pending_approval?: PendingApproval
   pending_user_input?: PendingUserInput
+  active_turn?: ActiveTurnBinding | null
+}
+
+export interface ActiveTurnBinding {
+  generation: number
+  client_msg_id: string
+  native_request_id?: string
 }
 
 export interface PendingApproval {
@@ -202,7 +215,7 @@ export interface PendingUserInput {
 export interface QueueItem {
   client_msg_id: string
   position: number
-  status: 'queued' | 'paused' | 'starting'
+  status: 'queued' | 'running' | 'completed' | 'blocked_failed' | 'blocked_interrupted' | 'blocked_indeterminate' | 'cancelled'
 }
 
 export interface PromptQueueState {

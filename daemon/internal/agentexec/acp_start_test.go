@@ -10,7 +10,7 @@ import (
 )
 
 // TestACPFixtureProcess is launched as a child test binary. It is a stdio-only
-// fixture: no installed Kilo/Kimi CLI or native store is needed.
+// fixture: no installed Kimi CLI or native store is needed.
 func TestACPFixtureProcess(t *testing.T) {
 	mode := os.Getenv("NEKONEST_ACP_FIXTURE")
 	if mode == "" {
@@ -179,8 +179,7 @@ func TestStartACPThreadDoesNotTieFirstTurnToStartContext(t *testing.T) {
 	options := acpFixtureOptions(t, "slow-prompt")
 	options.Prompt = "long first prompt"
 	options.OnPromptResult = func(_ string, err error) { promptResult <- err }
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	startedAt := time.Now()
 	result, err := StartACPThread(ctx, options)
@@ -193,7 +192,7 @@ func TestStartACPThreadDoesNotTieFirstTurnToStartContext(t *testing.T) {
 	if !result.NativeCreatePossible || result.PromptAccepted || result.SessionID != "native-acp-id" {
 		t.Fatalf("start result = %#v", result)
 	}
-	<-ctx.Done()
+	cancel()
 	select {
 	case promptErr := <-promptResult:
 		if promptErr != nil {

@@ -1,10 +1,16 @@
 package adapters
 
 import (
+	"errors"
 	"time"
 
 	"github.com/nekonest/daemon/internal/attach"
 )
+
+// ErrPromptBoundaryIndeterminate means a native prompt RPC may have crossed
+// its write boundary. Callers must not retry through another path or delete
+// resources that the native process may still be reading.
+var ErrPromptBoundaryIndeterminate = errors.New("native prompt boundary indeterminate")
 
 // AgentType identifies the type of coding agent.
 type AgentType string
@@ -12,7 +18,6 @@ type AgentType string
 const (
 	AgentClaudeCode AgentType = "claude_code"
 	AgentCodex      AgentType = "codex"
-	AgentKilo       AgentType = "kilo"
 	AgentKimiCLI    AgentType = "kimi_cli"
 	AgentGrokBuild  AgentType = "grok_build"
 )
@@ -49,14 +54,19 @@ const (
 
 // SessionCapabilities advertises phone-side controls (absent = unsupported).
 type SessionCapabilities struct {
-	ControlMode    ControlMode    `json:"control_mode,omitempty"`
-	Approve        bool           `json:"approve,omitempty"`
-	Deny           bool           `json:"deny,omitempty"`
-	Interrupt      bool           `json:"interrupt,omitempty"`
-	Steer          bool           `json:"steer,omitempty"`
-	Queue          bool           `json:"queue,omitempty"`
-	Spawn          bool           `json:"spawn,omitempty"`
-	AttachmentMode AttachmentMode `json:"attachment_mode,omitempty"`
+	ControlMode        ControlMode       `json:"control_mode"`
+	Send               bool              `json:"send"`
+	Approve            bool              `json:"approve"`
+	Deny               bool              `json:"deny"`
+	Interrupt          bool              `json:"interrupt"`
+	Steer              bool              `json:"steer"`
+	Queue              bool              `json:"queue"`
+	Spawn              bool              `json:"spawn"`
+	UserInput          bool              `json:"user_input"`
+	AttachmentMode     AttachmentMode    `json:"attachment_mode"`
+	ControlPath        string            `json:"control_path,omitempty"`
+	ControlVersion     string            `json:"control_version,omitempty"`
+	UnavailableReasons map[string]string `json:"unavailable_reasons,omitempty"`
 }
 
 // DefaultCapabilities returns honest v1 defaults for a wire agent type.
@@ -68,32 +78,48 @@ func DefaultCapabilities(agentType AgentType) *SessionCapabilities {
 		// Full-control flags are raised at wire time when app-server is healthy.
 		return &SessionCapabilities{
 			ControlMode:    ControlExecResume,
+			Send:           true,
 			Interrupt:      true,
+			ControlPath:    "exec_resume",
 			AttachmentMode: AttachNativeImage,
 		}
 	case AgentClaudeCode:
 		return &SessionCapabilities{
-			ControlMode:    ControlCompatibility,
-			Interrupt:      true,
+			ControlMode: ControlCompatibility,
+			UnavailableReasons: map[string]string{
+				"send": "runtime_not_probed", "interrupt": "runtime_not_probed",
+				"approve": "claude_bridge_unavailable", "deny": "claude_bridge_unavailable",
+				"user_input": "claude_bridge_unavailable", "steer": "unsupported_by_agent",
+			},
 			AttachmentMode: AttachPathBestEffort,
 		}
-	case AgentKilo:
+	case AgentKimiCLI:
 		return &SessionCapabilities{
-			ControlMode:    ControlCompatibility,
-			Interrupt:      true,
+			ControlMode: ControlCompatibility,
+			UnavailableReasons: map[string]string{
+				"send": "runtime_not_probed", "interrupt": "runtime_not_probed",
+				"approve": "acp_permission_not_observed", "deny": "acp_permission_not_observed",
+				"user_input": "acp_question_not_observed", "steer": "unsupported_by_agent",
+			},
+			// Existing-session exec resume receives controlled local paths in
+			// the prompt. This is not native image/file transport.
 			AttachmentMode: AttachPathBestEffort,
 		}
-	case AgentKimiCLI, AgentGrokBuild:
+	case AgentGrokBuild:
 		return &SessionCapabilities{
-			ControlMode:    ControlCompatibility,
-			Interrupt:      true,
+			ControlMode: ControlCompatibility,
+			UnavailableReasons: map[string]string{
+				"send": "runtime_not_probed", "interrupt": "runtime_not_probed",
+				"approve": "acp_permission_not_observed", "deny": "acp_permission_not_observed",
+				"user_input": "acp_question_not_observed", "steer": "unsupported_by_agent",
+			},
 			AttachmentMode: AttachPathBestEffort,
 		}
 	default:
 		return &SessionCapabilities{
-			ControlMode:    ControlCompatibility,
-			Interrupt:      true,
-			AttachmentMode: AttachUnsupported,
+			ControlMode:        ControlCompatibility,
+			UnavailableReasons: map[string]string{"send": "agent_unavailable", "interrupt": "agent_unavailable"},
+			AttachmentMode:     AttachUnsupported,
 		}
 	}
 }
@@ -110,6 +136,16 @@ type SessionInfo struct {
 	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
 	PendingApproval  *ApprovalInfo        `json:"pending_approval,omitempty"`
 	PendingUserInput *UserInputInfo       `json:"pending_user_input,omitempty"`
+	ActiveTurn       *ActiveTurnBinding   `json:"active_turn,omitempty"`
+}
+
+// ActiveTurnBinding identifies the exact native turn that may be controlled.
+// Generation and ClientMsgID are daemon-owned and remain stable for the turn;
+// NativeRequestID is populated when the native controller returns one.
+type ActiveTurnBinding struct {
+	Generation      uint64 `json:"generation"`
+	ClientMsgID     string `json:"client_msg_id"`
+	NativeRequestID string `json:"native_request_id,omitempty"`
 }
 
 // ApprovalInfo describes a pending tool-call approval.
@@ -144,13 +180,30 @@ type UserInputInfo struct {
 // ControlEvent is a positive app-server status signal for immediate wire updates.
 type ControlEvent struct {
 	SessionID        string
+	AgentType        AgentType
 	Status           AgentStatus
 	Capabilities     *SessionCapabilities
 	PendingApproval  *ApprovalInfo
 	PendingUserInput *UserInputInfo
 	Class            string
 	EventID          string
+	Generation       uint64
+	ClientMsgID      string
+	NativeRequestID  string
+	Lifecycle        TurnLifecycle
+	ActiveTurn       *ActiveTurnBinding
+	ClearActiveTurn  bool
 }
+
+type TurnLifecycle string
+
+const (
+	TurnAccepted        TurnLifecycle = "accepted"
+	TurnTerminalSuccess TurnLifecycle = "terminal_success"
+	TurnTerminalFailure TurnLifecycle = "terminal_failure"
+	TurnInterrupted     TurnLifecycle = "interrupted"
+	TurnIndeterminate   TurnLifecycle = "indeterminate"
+)
 
 // HistoryMessage is a chat turn imported from the agent-native store.
 type HistoryMessage struct {
@@ -177,9 +230,33 @@ type OutputSink func(OutputEvent)
 // PromptRequest carries a user turn and any daemon-materialized local files.
 // OnComplete releases those temporary files after the resumed CLI process exits.
 type PromptRequest struct {
-	Prompt      string
-	Attachments []attach.LocalFile
-	OnComplete  func()
+	Prompt          string
+	Attachments     []attach.LocalFile
+	OnComplete      func()
+	Generation      uint64
+	ClientMsgID     string
+	OnLifecycle     func(TurnLifecycle, string)
+	OnNativeBound   func(string)
+	DeferAcceptance bool
+}
+
+type PromptAcceptanceAcker interface {
+	AcknowledgePrompt(sessionID string, generation uint64)
+	AbandonPrompt(sessionID string, generation uint64)
+}
+
+// ControlSinkAdapter publishes generation-bound native control events.
+type ControlSinkAdapter interface{ SetControlSink(func(ControlEvent)) }
+
+// UserInputResponder is implemented only by controllers with a positive
+// structured user-input request signal.
+type UserInputResponder interface {
+	RespondUserInput(requestID string, answers map[string][]string) (string, error)
+}
+
+// SteerAdapter is intentionally implemented only by Codex full control.
+type SteerAdapter interface {
+	Steer(sessionID, text string) error
 }
 
 // OutputAdapter is implemented by adapters that can stream resumed-agent output.

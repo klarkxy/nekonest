@@ -37,9 +37,9 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
                                         │ 发现 / 历史 / 执行 │
                                         └────────┬─────────┘
                                                  │ 本地存储与 CLI
-                    ┌────────────┬───────────┬───┴──────┬────────────┐
-                    │Claude Code │   Codex   │  Kilo    │ Kimi CLI   │ Grok Build
-                    └────────────┴───────────┴──────────┴────────────┴───────────
+                    ┌────────────┬───────────┬───┴────────┬────────────┐
+                    │Claude Code │   Codex   │ Kimi CLI   │ Grok Build │
+                    └────────────┴───────────┴────────────┴────────────┘
 ```
 
 家中电脑不需要公网 IP，也不需要开放入站端口。Daemon 通过出站 WebSocket 连接 VPS；手机只访问启用 HTTPS/WSS 的 VPS。
@@ -50,7 +50,7 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 - **可靠续写**：提示词具有独立的接受、提交与失败状态；断线重连不会把“传输成功”误当作“智能体已接收”。
 - **历史与流式输出**：合并原生历史、服务端持久化与实时输出，并保持稳定消息标识；CLI 标准错误只作本机诊断，不进入对话正文。
 - **图片与文档附件**：手机上传后由 Daemon 下载到本次任务临时目录，再按各 CLI 能力传入（最多 5 个、单个 ≤ 4 MB）。
-- **Codex 全控制**：在 `codex-cli >= 0.146.0` 上提供原生 app-server 发送、结构化问答、批准/拒绝、转向、中断、持久 FIFO 后续队列、图片/文件原子首回合与进程监督恢复；不可用时诚实降级到 `exec resume`。五个 agent 都只有在各自 starter 探测通过后，才可提供 agent 范围的原生新建。
+- **按能力控制 Agent**：Codex 仍是唯一全控制 Agent。每条可靠且已安装的发送路径都可使用 NekoNest 持久 FIFO（不是 Agent 原生队列）；审批、用户提问、新建、中断与附件均独立探测，缺失即关闭。
 - **持久传输模式**：每个窝只能固定为 `open` 或 `sealed`。新数据库默认 sealed；缺少模式元数据的旧数据库一次性认定并持久化为 open；不匹配时失败关闭。
 - **手机端降级防护**：PWA 按来源钉扎模式；sealed 来源不能静默变成 open，首次使用管理员明确选择的开放中继必须显式确认。
 - **移动端体验**：可安装 PWA、会话草稿、线程级或整项目的手机本地收起、经清理的 Markdown、断线恢复与可选 Web Push。
@@ -63,7 +63,6 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 |---|---|---|---|
 | Claude Code | `~/.claude/projects` | `claude --resume` 兼容续写 | 授权本次临时目录，并在提示词中提供本地路径 |
 | Codex | `~/.codex/sessions` | 通过 `codex app-server` **全控制**；`exec resume` 降级 | app-server 健康时原生图片 + 同回合落地文件路径 |
-| Kilo | Kilo / OpenCode 本地数据库 | `kilo run --session` 兼容续写 | 原生 `--file`（广告为 `path_best_effort`） |
 | Kimi CLI | `.kimi-code`，兼容 `.kimi` 旧布局 | `kimi --session` 兼容续写 | 在提示词中提供本地路径，能否读取取决于 CLI 文件权限 |
 | Grok Build | `~/.grok/sessions` | `grok --resume` 兼容续写 | 在提示词中提供本地路径；非交互安全模式 |
 
@@ -71,25 +70,25 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 
 图例：✅ 已实现并对手机端广告 · ⚙️ 已实现，但受运行状态、探测结果或降级路径限制 · ❌ 手机端未实现或不广告。
 
-| 能力 | Claude Code | Codex | Kilo | Kimi CLI | Grok Build |
-|---|---|---|---|---|---|
-| 发现 / 列表 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 所有权门槛 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 历史记录 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 发送 + 流式输出 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 中断 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 新建原生线程 | ⚙️ starter 探测 | ⚙️ app-server 健康 | ⚙️ ACP starter 探测 | ⚙️ ACP starter 探测 | ⚙️ starter 探测 |
-| 图片 / 文件附件 | ⚙️ 路径尽力读取 | ⚙️ 原生图片 + 同回合落地文件路径；降级时仅原生图片 | ⚙️ 原生 `--file`，但保守广告为尽力读取 | ⚙️ 路径尽力读取 | ⚙️ 路径尽力读取 |
-| 批准 / 拒绝 | ❌ | ⚙️ 仅 app-server | ❌ | ❌ | ❌ |
-| 转向当前回合 | ❌ | ⚙️ 仅 app-server | ❌ | ❌ | ❌ |
-| 后续提示词队列 | ❌ | ⚙️ app-server + 可写队列日志 | ❌ | ❌ | ❌ |
-| 等待状态信号 | ⚙️ 仅审批状态；手机不可操作 | ⚙️ app-server 审批 + 结构化问答 | ❌ | ❌ | ❌ |
+| 能力 | Claude Code | Codex | Kimi CLI | Grok Build |
+|---|---|---|---|---|
+| 发现 / 列表 | ✅ | ✅ | ✅ | ✅ |
+| 所有权门槛 | ✅ | ✅ | ✅ | ✅ |
+| 历史记录 | ✅ | ✅ | ✅ | ✅ |
+| 发送 + 流式输出 | ✅ | ✅ | ✅ | ✅ |
+| 中断 | ✅ | ✅ | ✅ | ✅ |
+| 新建原生线程 | ⚙️ starter 探测 | ⚙️ app-server 健康 | ⚙️ ACP starter 探测 | ⚙️ starter 探测 |
+| 图片 / 文件附件 | ⚙️ 路径尽力读取 | ⚙️ 原生图片 + 同回合落地文件路径；降级时仅原生图片 | ⚙️ 路径尽力读取 | ⚙️ 路径尽力读取 |
+| 批准 / 拒绝 | ❌ | ⚙️ 仅 app-server | ❌ | ❌ |
+| 转向当前回合 | ❌ | ⚙️ 仅 app-server | ❌ | ❌ |
+| NekoNest 持久 FIFO | ⚙️ CLI + 可写队列日志 | ⚙️ app-server 或 exec 降级 + 可写日志 | ⚙️ 已安装 CLI + 可写日志 | ⚙️ 已安装 CLI + 可写日志 |
+| 等待状态信号 | ❌ 无桥接正向信号时关闭 | ⚙️ app-server 审批 + 结构化问答 | ❌ 除非观察到合法 ACP 事件 | ❌ 除非观察到合法厂商事件 |
 
-受运行时限制的能力，只有在已安装 CLI / 控制路径通过探测后才会对手机端广告。新建原生线程属于设备级 `start_capabilities`，并不表示每个现有会话都有 `capabilities.spawn=true`。Codex app-server 不健康时降级为 `exec resume`；降级路径仍支持续写、流式输出、中断与图片输入，但不支持审批、转向、普通文件输入或新建原生线程。
+受运行时限制的能力，只有在已安装 CLI / 控制路径通过探测后才会对手机端广告。新建原生线程属于带独立 `attachment_mode` 的设备级 `start_capabilities`，并不表示每个现有会话都有 `capabilities.spawn=true`。协议 1.2 显式发送全部布尔能力与稳定 `unavailable_reasons`；新 PWA 只对确认来自 1.1 daemon 的能力表兼容推定发送/中断，来源未知时失败关闭。Codex app-server 不健康时降级为 `exec resume`；非 Codex `steer` 始终关闭。
 
 未安装某个 CLI，或本机没有该智能体的有效主线程时，不会影响其他智能体。
 
-线协议标识：`claude_code`、`codex`、`kilo`、`kimi_cli`、`grok_build`。
+现行线协议标识：`claude_code`、`codex`、`kimi_cli`、`grok_build`。协议 1.x 仍解析已退役的 `kilo` id，使混合版本节点失败关闭而不是断开连接；现行目录不会再广告它。
 
 **完整分 harness 能力矩阵**（现行标志、建线探测、附件接线、现行 vs v1）：[docs/agent-capability-matrix.zh-CN.md](docs/agent-capability-matrix.zh-CN.md) · [English](docs/agent-capability-matrix.md)。
 
@@ -247,7 +246,7 @@ pwa:     pnpm dev
 以下为稳定产品边界，不是待办清单：
 
 - 手机主要续写原生线程。任何受支持 agent 都只有在其原生 starter 已安装/探测通过时才可提供 agent 范围的 `start_thread`；手机在首条提示词创建原生线程前仅保留本地草稿，目标只能是 daemon 当前已发现项目目录并集。
-- Codex 是唯一全控制智能体（发送、批准/拒绝、中断、转向与完整原生附件）；其余四种即使宣告原生新建能力，也仍是兼容续写适配器。
+- Codex 是唯一全控制智能体（发送、批准/拒绝、中断、转向与完整原生附件）；其余三种即使宣告原生新建能力，也仍是兼容续写适配器。
 - 新窝默认 sealed；缺少模式元数据的旧数据库/配置一次性认定为 open。一个窝只有一种持久化模式，禁止自动降级。
 - Kimi CLI 与 Grok Build 当前只接收附件的本地路径，读取能力取决于对应 CLI 的文件权限。
 - Web Push 需要额外配置 VAPID；未配置时不发送真实推送。

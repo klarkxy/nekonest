@@ -83,6 +83,14 @@ GitHub Release。
 - 正式主机：Windows + Linux；macOS 更后  
 - 开放模式：VPS 可读应用明文  
 
+## 协议 1.2 能力验收
+
+1. 抓取实时与重连后的 `session_list`，确认两者都保留 Daemon 生产者版本，并显式包含全部布尔能力与 `unavailable_reasons`。
+2. 对隔离的 1.1 fixture 确认旧版发送/中断仍可用；移除生产者版本，或使用缺字段的 1.2，控件必须保持关闭。
+3. 在每条可靠且已安装路径排入两条提示词：成功按 FIFO 自动前进；失败/中断暂停后续；重启把未确认 running 项变成 `blocked_indeterminate`；显式跳过后继续且不重放该 `client_msg_id`。
+4. 原生开线程分别覆盖首提示词成功/失败 × 所有权有/无四象限；只有双正向可成为 `thread_owned`，长首轮不得被 PWA 计时器终止。
+5. 维护中的生产窝保持其已持久传输模式；sealed 验收只使用隔离的新数据目录，并扫描 Server 数据库/日志，确认无提示词、响应、路径、审批或附件明文。
+
 ## 相关
 
 - [故障排查](./troubleshooting.zh-CN.md)

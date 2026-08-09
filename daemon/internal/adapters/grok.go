@@ -37,6 +37,7 @@ type GrokBuildAdapter struct {
 	markerCache  *fileDiscoveryCache[[]string]
 	commander    *agentexec.GrokCommander
 	watches      pollWatchRegistry
+	turns        turnTracker
 }
 
 // NewGrokBuildAdapter creates a Grok Build adapter using the local session store.
@@ -46,13 +47,18 @@ func NewGrokBuildAdapter() *GrokBuildAdapter {
 	if grokHome == "" {
 		grokHome = filepath.Join(home, ".grok")
 	}
-	return &GrokBuildAdapter{
+	a := &GrokBuildAdapter{
 		sessionsDir:  filepath.Join(grokHome, "sessions"),
 		records:      make(map[string]grokSessionRecord),
 		summaryCache: newFileDiscoveryCache[grokDiscoveryResult](),
 		markerCache:  newFileDiscoveryCache[[]string](),
 		commander:    agentexec.NewGrokCommander(),
+		turns:        newTurnTracker(AgentGrokBuild),
 	}
+	a.commander.OnTurnEnd = func(nativeID string, exitCode int, interrupted bool) {
+		a.turns.finish(publicSessionID(AgentGrokBuild, nativeID), exitCode, interrupted)
+	}
+	return a
 }
 
 func (a *GrokBuildAdapter) Name() string { return string(AgentGrokBuild) }
@@ -68,7 +74,7 @@ func (a *GrokBuildAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapa
 	if err := a.commander.ProbeThreadStart(ctx); err != nil {
 		return ThreadStartCapability{Reason: err.Error()}
 	}
-	return ThreadStartCapability{Available: true}
+	return ThreadStartCapability{Available: true, ControlPath: "cli", AttachmentMode: AttachUnsupported}
 }
 
 func (a *GrokBuildAdapter) StartNativeThread(ctx context.Context, request ThreadStartRequest) (ThreadStartResult, error) {
@@ -80,6 +86,7 @@ func (a *GrokBuildAdapter) StartNativeThread(ctx context.Context, request Thread
 }
 
 func (a *GrokBuildAdapter) Close() error {
+	a.turns.detachAll()
 	a.watches.stopAll()
 	if a.commander != nil {
 		a.commander.StopAll()
@@ -680,22 +687,44 @@ func (a *GrokBuildAdapter) Watch(sessionID string) (<-chan *SessionInfo, error) 
 }
 
 func (a *GrokBuildAdapter) SendPrompt(sessionID string, request PromptRequest) error {
+	if !a.turns.begin(sessionID, request) {
+		return agentexec.ErrSessionBusy
+	}
 	nativeID, err := nativeSessionID(AgentGrokBuild, sessionID)
 	if err != nil {
+		a.turns.abort(sessionID, request.Generation)
 		return err
 	}
 	record, err := a.resolveRecord(nativeID)
 	if err != nil {
+		a.turns.abort(sessionID, request.Generation)
 		return err
 	}
-	return a.commander.SendPromptInDir(
+	err = a.commander.SendPromptInDir(
 		nativeID,
 		request.Prompt,
 		record.projectDir,
 		request.Attachments,
 		request.OnComplete,
 	)
+	if err != nil {
+		a.turns.abort(sessionID, request.Generation)
+		return err
+	}
+	if !request.DeferAcceptance {
+		a.turns.accepted(sessionID, request.Generation)
+	}
+	return nil
 }
+
+func (a *GrokBuildAdapter) AcknowledgePrompt(sessionID string, generation uint64) {
+	a.turns.accepted(sessionID, generation)
+}
+func (a *GrokBuildAdapter) AbandonPrompt(sessionID string, generation uint64) {
+	a.turns.abort(sessionID, generation)
+}
+
+func (a *GrokBuildAdapter) SetControlSink(sink func(ControlEvent)) { a.turns.setSink(sink) }
 
 func (a *GrokBuildAdapter) Approve(sessionID, approvalID string) error {
 	nativeID, err := nativeSessionID(AgentGrokBuild, sessionID)

@@ -88,28 +88,6 @@ func TestHeadlessStartRequiresPositivePromptOutput(t *testing.T) {
 	}
 }
 
-func TestKiloResumeArgsAttachEveryFileAndTerminateOptions(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "attachments")
-	first := filepath.Join(dir, "photo.png")
-	second := filepath.Join(dir, "notes.txt")
-	got := kiloResumeArgs("session", "--help", `D:\project`, []attach.LocalFile{
-		{Path: first, MIME: "image/png"},
-		{Path: second, MIME: "text/plain"},
-	})
-	want := []string{
-		"run",
-		"--session", "session",
-		"--format", "json",
-		"--dir", `D:\project`,
-		"--file", first,
-		"--file", second,
-		"--", "--help",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("kiloResumeArgs() = %#v, want %#v", got, want)
-	}
-}
-
 func TestGrokResumeArgs(t *testing.T) {
 	got := grokResumeArgs("native", "hello %!\nworld", `D:\repo`)
 	want := []string{
@@ -185,32 +163,28 @@ func TestGrokStreamingOutputIsBoundedAndBatched(t *testing.T) {
 func TestHeadlessCommandersDoNotForwardStderrAsAssistant(t *testing.T) {
 	grok := NewGrokCommander()
 	kimi := NewKimiCommander()
-	kilo := NewKiloCommander()
 	codex := NewCodexCommander()
 	claude := NewClaudeCommander()
-	var grokEvents, kimiEvents, kiloEvents, codexEvents, claudeEvents int
+	var grokEvents, kimiEvents, codexEvents, claudeEvents int
 	grok.OnAgentOutput = func(_, _, _, _ string) { grokEvents++ }
 	kimi.OnAgentOutput = func(_, _, _, _ string) { kimiEvents++ }
-	kilo.OnAgentOutput = func(_ string, _ uint64, _, _, _ string) { kiloEvents++ }
 	codex.OnAgentOutput = func(_, _, _ string) { codexEvents++ }
 	claude.OnAgentOutput = func(_, _, _ string) { claudeEvents++ }
 
 	grok.handleProcessLine("g", "stderr", "diagnostic")
 	kimi.handleProcessLine("k", "stderr", "resume notice")
-	kilo.handleProcessLine("o", 1, "stderr", "provider diagnostic")
 	codex.handleProcessLine(
 		"c",
 		"stderr",
 		"2026-07-29T04:48:01.778780Z WARN codex_core_skills::loader: ignoring invalid icon",
 	)
 	claude.handleProcessLine("a", "stderr", "plugin warning")
-	if grokEvents != 0 || kimiEvents != 0 || kiloEvents != 0 ||
+	if grokEvents != 0 || kimiEvents != 0 ||
 		codexEvents != 0 || claudeEvents != 0 {
 		t.Fatalf(
-			"stderr forwarded: grok=%d kimi=%d kilo=%d codex=%d claude=%d",
+			"stderr forwarded: grok=%d kimi=%d codex=%d claude=%d",
 			grokEvents,
 			kimiEvents,
-			kiloEvents,
 			codexEvents,
 			claudeEvents,
 		)
@@ -218,20 +192,18 @@ func TestHeadlessCommandersDoNotForwardStderrAsAssistant(t *testing.T) {
 
 	grok.handleProcessLine("g", "stdout", `{"type":"text","data":"ok"}`)
 	kimi.handleProcessLine("k", "stdout", `{"role":"assistant","content":"ok"}`)
-	kilo.handleProcessLine("o", 1, "stdout", `{"type":"text","text":"ok"}`)
 	codex.handleProcessLine("c", "stdout", `{"role":"assistant","content":"ok"}`)
 	claude.handleProcessLine(
 		"a",
 		"stdout",
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`,
 	)
-	if grokEvents != 1 || kimiEvents != 1 || kiloEvents != 1 ||
+	if grokEvents != 1 || kimiEvents != 1 ||
 		codexEvents != 1 || claudeEvents != 1 {
 		t.Fatalf(
-			"stdout not forwarded: grok=%d kimi=%d kilo=%d codex=%d claude=%d",
+			"stdout not forwarded: grok=%d kimi=%d codex=%d claude=%d",
 			grokEvents,
 			kimiEvents,
-			kiloEvents,
 			codexEvents,
 			claudeEvents,
 		)
@@ -307,26 +279,6 @@ func TestACPMessageChunksAccumulateBeforeOutput(t *testing.T) {
 		kimiEvents[0].id != "kimi-message" || kimiEvents[1].id != "kimi-message" {
 		t.Fatalf("Kimi ACP events = %#v", kimiEvents)
 	}
-
-	kilo := NewKiloCommander()
-	var kiloEvents []struct{ content, id string }
-	kilo.OnAgentOutput = func(_ string, _ uint64, _ string, content, id string) {
-		kiloEvents = append(kiloEvents, struct{ content, id string }{content, id})
-	}
-	kilo.handleACPUpdate("kilo-native", 7, map[string]any{
-		"sessionUpdate": "agent_message_chunk",
-		"messageId":     "kilo-message",
-		"content":       map[string]any{"type": "text", "text": "hello"},
-	})
-	kilo.handleACPUpdate("kilo-native", 7, map[string]any{
-		"sessionUpdate": "agent_message_chunk",
-		"messageId":     "kilo-message",
-		"content":       map[string]any{"type": "text", "text": " world"},
-	})
-	if len(kiloEvents) != 2 || kiloEvents[1].content != "hello world" ||
-		kiloEvents[0].id != "kilo-message" || kiloEvents[1].id != "kilo-message" {
-		t.Fatalf("Kilo ACP events = %#v", kiloEvents)
-	}
 }
 
 func TestACPMessageChunkFallbackIDsRemainStable(t *testing.T) {
@@ -353,17 +305,6 @@ func TestStopAllClearsACPChunkAccumulators(t *testing.T) {
 	kimi.StopAll()
 	if len(kimi.acpChunks) != 0 || len(kimi.acpIDs) != 0 {
 		t.Fatalf("Kimi ACP state survived StopAll: %#v %#v", kimi.acpChunks, kimi.acpIDs)
-	}
-
-	kilo := NewKiloCommander()
-	kilo.OnAgentOutput = func(_ string, _ uint64, _ string, _, _ string) {}
-	kilo.handleACPUpdate("kilo-native", 1, map[string]any{
-		"sessionUpdate": "agent_message_chunk",
-		"content":       map[string]any{"type": "text", "text": "partial"},
-	})
-	kilo.StopAll()
-	if len(kilo.acpChunks) != 0 || len(kilo.acpIDs) != 0 {
-		t.Fatalf("Kilo ACP state survived StopAll: %#v %#v", kilo.acpChunks, kilo.acpIDs)
 	}
 }
 

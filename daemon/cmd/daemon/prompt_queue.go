@@ -23,9 +23,11 @@ func promptQueuePath(configPath, deviceID string) string {
 }
 
 const (
-	promptQueueVersion            = 1
+	promptQueueVersion            = 2
+	promptQueueLegacyVersion      = 1
 	maxPromptQueuePerSession      = 20
-	maxCancelledQueuePerSession   = 256
+	compactQueueTombstonesAt      = 256
+	retainQueueTombstones         = 128
 	maxPromptQueueBytes           = 16 << 20
 	maxPromptQueueSessionIDBytes  = 512
 	maxPromptQueueClientMsgIDSize = 256
@@ -35,10 +37,13 @@ const (
 type promptQueueStatus string
 
 const (
-	promptQueueQueued    promptQueueStatus = "queued"
-	promptQueueRunning   promptQueueStatus = "running"
-	promptQueuePaused    promptQueueStatus = "paused"
-	promptQueueCancelled promptQueueStatus = "cancelled"
+	promptQueueQueued               promptQueueStatus = "queued"
+	promptQueueRunning              promptQueueStatus = "running"
+	promptQueueCompleted            promptQueueStatus = "completed"
+	promptQueueBlockedFailed        promptQueueStatus = "blocked_failed"
+	promptQueueBlockedInterrupted   promptQueueStatus = "blocked_interrupted"
+	promptQueueBlockedIndeterminate promptQueueStatus = "blocked_indeterminate"
+	promptQueueCancelled            promptQueueStatus = "cancelled"
 )
 
 // promptQueueItem is a durable queued prompt. SealedEnvelope is deliberately
@@ -97,13 +102,17 @@ func loadPromptQueue(path string) (*promptQueue, error) {
 	if err := json.Unmarshal(data, &disk); err != nil {
 		return nil, fmt.Errorf("parse prompt queue: %w", err)
 	}
-	if disk.Version != promptQueueVersion {
+	if disk.Version != promptQueueVersion && disk.Version != promptQueueLegacyVersion {
 		return nil, fmt.Errorf("unsupported prompt queue version %d", disk.Version)
 	}
 
-	changed := false
+	changed := disk.Version == promptQueueLegacyVersion
 	for _, item := range disk.Items {
-		if item.Status == promptQueueCancelled && (item.Prompt != "" || len(item.Attachments) > 0 || len(item.SealedEnvelope) > 0) {
+		if item.Status == promptQueueRunning || (disk.Version == promptQueueLegacyVersion && item.Status == "paused") {
+			item.Status = promptQueueBlockedIndeterminate
+			changed = true
+		}
+		if isPromptQueueTerminal(item.Status) && (item.Prompt != "" || len(item.Attachments) > 0 || len(item.SealedEnvelope) > 0) {
 			item.Prompt = ""
 			item.Attachments = nil
 			item.SealedEnvelope = nil
@@ -115,10 +124,6 @@ func loadPromptQueue(path string) (*promptQueue, error) {
 		key := promptQueueKey(item.SessionID, item.ClientMsgID)
 		if _, duplicate := queue.items[key]; duplicate {
 			return nil, fmt.Errorf("prompt queue contains duplicate client_msg_id")
-		}
-		if item.Status == promptQueueRunning {
-			item.Status = promptQueuePaused
-			changed = true
 		}
 		queue.items[key] = clonePromptQueueItem(item)
 		if item.Order > queue.nextID {
@@ -160,9 +165,9 @@ func validatePromptQueueItem(item promptQueueItem) error {
 	if item.Order == 0 || item.CreatedAt <= 0 {
 		return errors.New("order and created_at are required")
 	}
-	if item.Status == promptQueueCancelled {
+	if isPromptQueueTerminal(item.Status) {
 		if item.Prompt != "" || len(item.Attachments) > 0 || len(item.SealedEnvelope) > 0 {
-			return errors.New("cancelled prompt queue item must not retain prompt data")
+			return errors.New("terminal prompt queue item must not retain prompt data")
 		}
 		return nil
 	}
@@ -179,7 +184,8 @@ func validatePromptQueueItem(item promptQueueItem) error {
 		return errors.New("prompt data or sealed envelope is required")
 	}
 	switch item.Status {
-	case promptQueueQueued, promptQueueRunning, promptQueuePaused:
+	case promptQueueQueued, promptQueueRunning, promptQueueBlockedFailed,
+		promptQueueBlockedInterrupted, promptQueueBlockedIndeterminate:
 		return nil
 	default:
 		return fmt.Errorf("invalid status %q", item.Status)
@@ -231,12 +237,6 @@ func (q *promptQueue) enqueue(item promptQueueItem) (promptQueueItem, bool, erro
 	if current, exists := q.items[key]; exists {
 		return clonePromptQueueItem(current), false, nil
 	}
-	if q.cancelledCount(item.SessionID) >= maxCancelledQueuePerSession {
-		return promptQueueItem{}, false, fmt.Errorf(
-			"cancelled prompt tombstone limit reached for session (limit %d)",
-			maxCancelledQueuePerSession,
-		)
-	}
 	if q.activeCount(item.SessionID) >= maxPromptQueuePerSession {
 		return promptQueueItem{}, false, fmt.Errorf("prompt queue is full for session (limit %d)", maxPromptQueuePerSession)
 	}
@@ -246,7 +246,7 @@ func (q *promptQueue) enqueue(item promptQueueItem) (promptQueueItem, bool, erro
 	if err := validatePromptQueueItem(item); err != nil {
 		return promptQueueItem{}, false, err
 	}
-	next := clonePromptQueueItems(q.items)
+	next := compactPromptQueueTombstones(clonePromptQueueItems(q.items), item.SessionID)
 	next[key] = clonePromptQueueItem(item)
 	if err := q.persist(next); err != nil {
 		return promptQueueItem{}, false, err
@@ -284,7 +284,7 @@ func (q *promptQueue) claimNext(sessionID string) (promptQueueItem, bool, error)
 		if item.SessionID != sessionID {
 			continue
 		}
-		if item.Status == promptQueueRunning {
+		if item.Status == promptQueueRunning || isPromptQueueBlocked(item.Status) {
 			return promptQueueItem{}, false, nil
 		}
 		if item.Status == promptQueueQueued && (!found || item.Order < candidate.Order) {
@@ -308,8 +308,13 @@ func (q *promptQueue) markRunning(sessionID, clientMsgID string) error {
 	return q.transition(sessionID, clientMsgID, promptQueueQueued, promptQueueRunning)
 }
 
-// complete removes a running item only after its work has completed. The
-// caller's durable prompt journal remains the cross-restart delivery record.
+// releaseClaim is used only for a typed, positively pre-native-boundary busy
+// result. It never rewinds a prompt after the adapter may have accepted it.
+func (q *promptQueue) releaseClaim(sessionID, clientMsgID string) error {
+	return q.transition(sessionID, clientMsgID, promptQueueRunning, promptQueueQueued)
+}
+
+// complete converts a running item to a payload-free tombstone.
 func (q *promptQueue) complete(sessionID, clientMsgID string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -322,7 +327,10 @@ func (q *promptQueue) complete(sessionID, clientMsgID string) error {
 		return fmt.Errorf("cannot complete prompt queue item from %s", current.Status)
 	}
 	next := clonePromptQueueItems(q.items)
-	delete(next, key)
+	current.Status = promptQueueCompleted
+	clearPromptQueuePayload(&current)
+	next[key] = current
+	next = compactPromptQueueTombstones(next, sessionID)
 	if err := q.persist(next); err != nil {
 		return err
 	}
@@ -330,7 +338,7 @@ func (q *promptQueue) complete(sessionID, clientMsgID string) error {
 	return nil
 }
 
-func (q *promptQueue) pause(sessionID, clientMsgID string) error {
+func (q *promptQueue) block(sessionID, clientMsgID string, status promptQueueStatus) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	key := promptQueueKey(sessionID, clientMsgID)
@@ -338,11 +346,11 @@ func (q *promptQueue) pause(sessionID, clientMsgID string) error {
 	if !exists {
 		return errors.New("prompt queue item not found")
 	}
-	if current.Status != promptQueueQueued && current.Status != promptQueueRunning {
-		return fmt.Errorf("cannot pause prompt queue item from %s", current.Status)
+	if !isPromptQueueBlocked(status) || (current.Status != promptQueueQueued && current.Status != promptQueueRunning) {
+		return fmt.Errorf("cannot block prompt queue item from %s as %s", current.Status, status)
 	}
 	next := clonePromptQueueItems(q.items)
-	current.Status = promptQueuePaused
+	current.Status = status
 	next[key] = current
 	if err := q.persist(next); err != nil {
 		return err
@@ -362,24 +370,19 @@ func (q *promptQueue) cancel(sessionID, clientMsgID string) error {
 	if current.Status == promptQueueCancelled {
 		return nil
 	}
-	if current.Status != promptQueueQueued && current.Status != promptQueuePaused {
+	if current.Status != promptQueueQueued && !isPromptQueueBlocked(current.Status) {
 		return fmt.Errorf("cannot cancel prompt queue item from %s", current.Status)
 	}
 	next := clonePromptQueueItems(q.items)
 	current.Status = promptQueueCancelled
-	current.Prompt = ""
-	current.Attachments = nil
-	current.SealedEnvelope = nil
+	clearPromptQueuePayload(&current)
 	next[key] = current
+	next = compactPromptQueueTombstones(next, sessionID)
 	if err := q.persist(next); err != nil {
 		return err
 	}
 	q.items = next
 	return nil
-}
-
-func (q *promptQueue) resume(sessionID, clientMsgID string) error {
-	return q.transition(sessionID, clientMsgID, promptQueuePaused, promptQueueQueued)
 }
 
 func (q *promptQueue) transition(sessionID, clientMsgID string, from, to promptQueueStatus) error {
@@ -430,7 +433,7 @@ func (q *promptQueue) hasActive(sessionID string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for _, item := range q.items {
-		if item.SessionID == sessionID && item.Status != promptQueueCancelled {
+		if item.SessionID == sessionID && !isPromptQueueTerminal(item.Status) {
 			return true
 		}
 	}
@@ -448,16 +451,18 @@ func (q *promptQueue) running(sessionID string) (promptQueueItem, bool) {
 	return promptQueueItem{}, false
 }
 
-// pauseSession fails closed after an interrupted or failed active turn: no
-// following item may overtake it until an explicit resume command arrives.
-func (q *promptQueue) pauseSession(sessionID string) error {
+// blockSession fails closed after a terminal native outcome.
+func (q *promptQueue) blockSession(sessionID string, status promptQueueStatus) error {
+	if !isPromptQueueBlocked(status) {
+		return fmt.Errorf("invalid queue blocker status %s", status)
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	next := clonePromptQueueItems(q.items)
 	changed := false
 	for key, item := range next {
-		if item.SessionID == sessionID && (item.Status == promptQueueQueued || item.Status == promptQueueRunning) {
-			item.Status = promptQueuePaused
+		if item.SessionID == sessionID && item.Status == promptQueueRunning {
+			item.Status = status
 			next[key] = item
 			changed = true
 		}
@@ -472,15 +477,17 @@ func (q *promptQueue) pauseSession(sessionID string) error {
 	return nil
 }
 
-// resumeSession returns all paused entries to their original FIFO ordering.
+// resumeSession acknowledges failed/interrupted blockers and continues with
+// later FIFO items. Indeterminate blockers require explicit skip.
 func (q *promptQueue) resumeSession(sessionID string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	next := clonePromptQueueItems(q.items)
 	changed := false
 	for key, item := range next {
-		if item.SessionID == sessionID && item.Status == promptQueuePaused {
-			item.Status = promptQueueQueued
+		if item.SessionID == sessionID && (item.Status == promptQueueBlockedFailed || item.Status == promptQueueBlockedInterrupted) {
+			item.Status = promptQueueCompleted
+			clearPromptQueuePayload(&item)
 			next[key] = item
 			changed = true
 		}
@@ -488,6 +495,26 @@ func (q *promptQueue) resumeSession(sessionID string) error {
 	if !changed {
 		return nil
 	}
+	if err := q.persist(next); err != nil {
+		return err
+	}
+	q.items = next
+	return nil
+}
+
+func (q *promptQueue) skipIndeterminate(sessionID, clientMsgID string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	key := promptQueueKey(sessionID, clientMsgID)
+	current, exists := q.items[key]
+	if !exists || current.Status != promptQueueBlockedIndeterminate {
+		return errors.New("indeterminate queue blocker not found")
+	}
+	next := clonePromptQueueItems(q.items)
+	current.Status = promptQueueCompleted
+	clearPromptQueuePayload(&current)
+	next[key] = current
+	next = compactPromptQueueTombstones(next, sessionID)
 	if err := q.persist(next); err != nil {
 		return err
 	}
@@ -516,21 +543,42 @@ func (q *promptQueue) position(sessionID, clientMsgID string) int {
 func (q *promptQueue) activeCount(sessionID string) int {
 	count := 0
 	for _, item := range q.items {
-		if item.SessionID == sessionID && item.Status != promptQueueCancelled {
+		if item.SessionID == sessionID && !isPromptQueueTerminal(item.Status) {
 			count++
 		}
 	}
 	return count
 }
 
-func (q *promptQueue) cancelledCount(sessionID string) int {
-	count := 0
-	for _, item := range q.items {
-		if item.SessionID == sessionID && item.Status == promptQueueCancelled {
-			count++
+func isPromptQueueTerminal(status promptQueueStatus) bool {
+	return status == promptQueueCompleted || status == promptQueueCancelled
+}
+
+func isPromptQueueBlocked(status promptQueueStatus) bool {
+	return status == promptQueueBlockedFailed || status == promptQueueBlockedInterrupted || status == promptQueueBlockedIndeterminate
+}
+
+func clearPromptQueuePayload(item *promptQueueItem) {
+	item.Prompt = ""
+	item.Attachments = nil
+	item.SealedEnvelope = nil
+}
+
+func compactPromptQueueTombstones(items map[string]promptQueueItem, sessionID string) map[string]promptQueueItem {
+	var terminal []promptQueueItem
+	for _, item := range items {
+		if item.SessionID == sessionID && isPromptQueueTerminal(item.Status) {
+			terminal = append(terminal, item)
 		}
 	}
-	return count
+	if len(terminal) < compactQueueTombstonesAt {
+		return items
+	}
+	sort.Slice(terminal, func(i, j int) bool { return terminal[i].Order > terminal[j].Order })
+	for _, item := range terminal[retainQueueTombstones:] {
+		delete(items, promptQueueKey(item.SessionID, item.ClientMsgID))
+	}
+	return items
 }
 
 func (q *promptQueue) persist(items map[string]promptQueueItem) error {

@@ -12,7 +12,6 @@ export type AgentMeta = {
 export const KNOWN_AGENT_TYPES = [
   'claude_code',
   'codex',
-  'kilo',
   'kimi_cli',
   'grok_build'
 ] as const satisfies readonly KnownAgentType[]
@@ -33,14 +32,6 @@ export const AGENT_CATALOG: Readonly<Record<KnownAgentType, AgentMeta>> = {
     color: '#4FA879',
     softColor: '#E2F3EA',
     symbol: '🟢'
-  },
-  kilo: {
-    id: 'kilo',
-    label: 'Kilo',
-    avatar: '/agents/kilo.webp',
-    color: '#D96675',
-    softColor: '#FAE5E9',
-    symbol: '🔴'
   },
   kimi_cli: {
     id: 'kimi_cli',

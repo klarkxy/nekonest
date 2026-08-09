@@ -11,8 +11,9 @@ phone:
 Phone PWA <-> VPS Server <-> outbound Host Daemon (Windows/Linux) <-> local agent CLI/store
 ```
 
-The supported wire identifiers are `claude_code`, `codex`, `kilo`,
-`kimi_cli`, and `grok_build`.
+The active supported wire identifiers are `claude_code`, `codex`, `kimi_cli`,
+and `grok_build`. Protocol 1.x may still parse the retired legacy `kilo` id for
+backward compatibility, but current daemon/PWA catalogs must not advertise it.
 
 **Shipped v0.1** behavior is described by `README.md` / operator docs under
 `docs/` (except the v1 contract). **Target v1.0.0** product meaning is defined
@@ -45,10 +46,10 @@ Keep these product boundaries intact unless the user explicitly changes them
   `thread_indeterminate`. Navigate the phone to
   the session only after `thread_owned`.
 - **Agent roles (v1):** Codex is the only full-control agent (send, approve/deny,
-  interrupt, steer, full image+file attachments). Claude Code, Kilo, Kimi CLI,
-  and Grok Build are compatibility-resume adapters (discover, ownership,
-  history, send/stream, interrupt, attachments per advertised capability). All
-  five may advertise agent-scoped `spawn` only after their native starter is
+  interrupt, steer, full image+file attachments). Claude Code, Kimi CLI, and
+  Grok Build are compatibility-resume adapters (discover, ownership, history,
+  send/stream, interrupt, attachments per advertised capability). All four may
+  advertise agent-scoped `spawn` only after their native starter is
   installed and probed; this does **not** imply approval, steer, queue, or any
   other full-control capability.
 - **Transport (v1):** sealed E2E is the default for new nests; open relay is

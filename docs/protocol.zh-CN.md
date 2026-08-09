@@ -15,7 +15,7 @@ JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致
 
 | 字段 | 规则 |
 |---|---|
-| `protocol_version` | `major.minor`（当前 **1.1**）。主版本不匹配则拒绝；次版本向后兼容（忽略未知可选字段，缺省能力标志为 false）。 |
+| `protocol_version` | `major.minor`（当前 **1.2**）。主版本不匹配则拒绝；次版本向后兼容。1.2 PWA 仅在确认能力生产者为 1.1 或更旧时兼容推定发送/中断；来源未知时失败关闭。 |
 | `transport_mode` | 全窝统一 `sealed` \| `open`。一窝一种持久化模式；**禁止** sealed→open 自动降级。新数据库默认 sealed；无元数据旧库一次性认定为 open。 |
 
 首帧（daemon 的 `register_device`、手机的 `subscribe`）**必须**带上述字段。之后每一帧都按已协商的主版本、传输模式和明确的「路由/应用正文」策略校验：sealed 模式的应用帧必须有 `sealed_payload`，open 模式拒绝它，混合正文始终拒绝。Server 在 `auth_response` / `subscribe_ack` 返回协商结果。稳定错误码：`version_mismatch`、`transport_mode_mismatch`、`invalid_envelope`。
@@ -60,9 +60,11 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 |---|---|
 | `claude_code` | Claude Code |
 | `codex` | Codex |
-| `kilo` | Kilo |
 | `kimi_cli` | Kimi CLI |
 | `grok_build` | Grok Build |
+
+协议 1.x 还会为解析兼容接受已退役的 `kilo` 值；现行 daemon 与 PWA
+不会广告、发现、新建或显示它。
 
 新增智能体需适配器 + 注册表、server 类型、PWA 目录/资源、schema、测试与文档一致。
 
@@ -89,22 +91,26 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 | `status` | `running` \| `idle` \| `waiting_user` \| `waiting_approval` \| `error` |
 | `summary`, `last_activity` | 列表 UX |
 | `project_dir` / `project` | 目录分组 |
+| `capabilities` | 新 Daemon 显式发送全部布尔值；缺省字段按 false/unsupported |
 | `pending_approval` | 可选工具审批结构 |
 | `pending_user_input` | 可选的 Codex 结构化提问请求；与审批相互独立 |
+| `active_turn` | 当前可控制回合：daemon `generation`、`client_msg_id` 与可选原生 request id；`null` 表示清除 |
 
 ### SessionCapabilities
 
 | 字段 | 说明 |
 |---|---|
 | `control_mode` | `app_server` \| `exec_resume` \| `compatibility` |
-| `approve`、`deny`、`interrupt`、`steer`、`queue`、`spawn` | 布尔值；缺省为 false。只有已安装并探测通过的原生 starter、且目录获准时 `spawn` 才可为 true；它不代表任何其他控制能力。 |
+| `send`、`approve`、`deny`、`interrupt`、`steer`、`queue`、`spawn`、`user_input` | 布尔值；缺省为 false。只有已安装并探测通过的原生 starter、且目录获准时 `spawn` 才可为 true；任何标志都不隐含其他能力。 |
 | `attachment_mode` | `native_image_and_file` \| `native_image` \| `path_best_effort` \| `unsupported` |
+| `control_path`、`control_version` | 已知时填写探测到的原生机制/版本 |
+| `unavailable_reasons` | 按 `send/approve/deny/interrupt/steer/queue/spawn/user_input/attachment` 提供稳定原因码 |
 
 各 harness 现行盖章值：[agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)。
 
 ### `session_list` 开线程能力目录
 
-`session_list.payload.start_capabilities` 是可选的设备级目录。缺省时禁用设备级新建；在 minor 版本迁移期间，旧 daemon 仅可通过会话中明确的 `capabilities.spawn=true` 保留 Codex 新建入口。每项含 `agent_type`、`available`、`spawn`，以及可选的展示 `reason`、`control_path` / `control_version`。仅当 `available=true` 且 `spawn=true` 时，PWA 才可提供本地草稿；目录必须来自 daemon 当前原生发现项目目录的并集，绝不可输入任意路径。
+`session_list.payload.start_capabilities` 是可选的设备级目录。缺省时禁用设备级新建；在 minor 版本迁移期间，旧 daemon 仅可通过会话中明确的 `capabilities.spawn=true` 保留 Codex 新建入口。每项含 `agent_type`、`available`、`spawn`、`attachment_mode`，以及可选的展示 `reason`、`control_path` / `control_version`。仅当 `available=true` 且 `spawn=true` 时，PWA 才可提供本地草稿；目录必须来自 daemon 当前原生发现项目目录的并集，绝不可输入任意路径。
 
 ### 原生开线程载荷
 
@@ -163,7 +169,7 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 | `send_prompt` | 手机 → … → daemon：用户提示词（+ 附件） |
 | `prompt_status_query` | 查询投递状态 |
 | `prompt_not_seen` | 对端无此 id 记录 |
-| `prompt_queued` | 已持久进入 Codex FIFO，但尚未得到原生 `turn/start` 接受 |
+| `prompt_queued` | 已持久进入 NekoNest FIFO，但尚未越过原生 Agent 接受边界 |
 | `prompt_accepted` | 原生 agent 控制路径已正向接受（outbox 不清除） |
 | `prompt_committed` | journal 已提交；此时清除持久 outbox |
 | `prompt_failed` | 可见失败 |
@@ -179,12 +185,13 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 | type | 作用 |
 |---|---|
 | `approve` / `deny` | 工具审批（有能力时为 Codex app-server） |
-| `interrupt` | 停止运行中的工作 |
+| `interrupt` | 停止运行中的工作；payload 必须回传当前 `active_turn.generation` 与 `active_turn.client_msg_id` |
 | `steer` | 回合中修正（Codex） |
 | `respond_user_input` / `user_input_result` | Codex 结构化问答响应与终态 |
-| `queue_update` | FIFO 快照，含 queued/running/paused 条目 |
+| `queue_update` | FIFO 快照，含 `queued/running/completed` 与 `blocked_failed/blocked_interrupted/blocked_indeterminate` 状态 |
 | `cancel_prompt` / `prompt_cancelled` | 取消尚未开始的队列条目 |
-| `resume_prompt_queue` | 显式恢复按会话暂停的队列 |
+| `resume_prompt_queue` | 只恢复 failed/interrupted blocker 后续项；blocker 原提示绝不重放 |
+| `skip_prompt_queue_item` | 强警告后显式 tombstone 不确定 blocker，再继续后续项 |
 | `start_thread` / `thread_*` | agent 范围的手机本地草稿：在获准的已发现目录用首条提示词原生开线程 |
 | `pair_*` / `key_package` / `phone_revoked` | 配对与 E2E 密钥分发 |
 | `attention_event` | 通用、适合密封模式推送的事件类别 |

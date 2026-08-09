@@ -25,7 +25,7 @@ const s = (p: Partial<AgentSession> & Pick<AgentSession, 'id' | 'agent_type'>): 
 
 describe('agent helpers', () => {
   it('labels icons colors', () => {
-    expect(agentLabel('kilo')).toBe('Kilo')
+    expect(agentLabel('grok_build')).toBe('Grok Build')
     expect(agentIcon('claude_code')).toBe('🟠')
     expect(agentColor('codex')).toMatch(/^#/)
     expect(getAgentMeta('kimi_cli').avatar).toBe('/agents/kimi-cli.webp')
@@ -69,17 +69,17 @@ describe('agent helpers', () => {
   it('groupSessionsByAgent order', () => {
     const groups = groupSessionsByAgent([
       s({ id: '1', agent_type: 'codex', last_activity: 1 }),
-      s({ id: '2', agent_type: 'kilo', last_activity: 2 }),
+      s({ id: '2', agent_type: 'kimi_cli', last_activity: 2 }),
       s({ id: '3', agent_type: 'claude_code', last_activity: 3 }),
       s({ id: '4', agent_type: 'other', last_activity: 4 })
     ])
-    expect(groups.map(g => g.type)).toEqual(['claude_code', 'codex', 'kilo', 'other'])
+    expect(groups.map(g => g.type)).toEqual(['claude_code', 'codex', 'kimi_cli', 'other'])
   })
 
   it('projectDisplay', () => {
-    expect(projectDisplay(s({ id: '1', agent_type: 'kilo' }))).toBeNull()
+    expect(projectDisplay(s({ id: '1', agent_type: 'grok_build' }))).toBeNull()
     const p = projectDisplay(
-      s({ id: '1', agent_type: 'kilo', project_dir: 'D:\\nekonest\\app' })
+      s({ id: '1', agent_type: 'grok_build', project_dir: 'D:\\nekonest\\app' })
     )
     expect(p?.name).toBe('app')
   })

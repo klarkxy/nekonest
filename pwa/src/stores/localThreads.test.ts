@@ -55,7 +55,7 @@ describe('local thread drafts', () => {
 
   it('does not persist an operation when send-time project validation is stale', () => {
     const store = useLocalThreadsStore()
-    const draft = store.createDraft('device-a', 'kilo', 'D:/stale', 'stale')
+    const draft = store.createDraft('device-a', 'grok_build', 'D:/stale', 'stale')
     const result = bindStartOperationIfAllowed(
       draft.agentType,
       draft.projectDir,
@@ -63,7 +63,7 @@ describe('local thread drafts', () => {
         id: 'native-a', device_id: 'device-a', agent_type: 'codex', status: 'idle',
         summary: '', last_activity: 1, project_dir: 'D:/current'
       }],
-      [{ agent_type: 'kilo', available: true, spawn: true }],
+      [{ agent_type: 'grok_build', available: true, spawn: true }],
       () => store.bindStartOperation(draft.id, 'must_not_persist')
     )
 

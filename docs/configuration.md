@@ -197,6 +197,12 @@ Agent-specific attachment wiring (native image flags vs path-in-prompt) is summa
 
 ---
 
+## Capability and queue runtime notes
+
+- No agent CLI is installed or upgraded by NekoNest. A missing executable may leave native history browsable while `send`, `interrupt`, `queue`, and `spawn` are false with reason `cli_missing`.
+- Queue v2 lives beside the daemon config and is security-sensitive. Back it up together with the daemon config before upgrades. Do not start an older daemon while a v2 queue has active or blocked items.
+- Claude bridge-only capabilities are not configured by this release: the self-contained Bun/SDK packaging gate did not pass, so the existing Claude CLI fallback remains active and no Node/Bun runtime is required.
+
 ## Related docs
 
 - [Security model](./security.md)

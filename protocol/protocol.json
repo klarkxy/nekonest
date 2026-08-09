@@ -42,6 +42,7 @@
         "cancel_prompt",
         "prompt_cancelled",
         "resume_prompt_queue",
+        "skip_prompt_queue_item",
         "start_thread",
         "thread_starting",
         "thread_owned",
@@ -170,6 +171,7 @@
     },
     "AgentType": {
       "type": "string",
+      "description": "Active ids are claude_code, codex, kimi_cli, and grok_build; kilo is retained only for protocol 1.x parse compatibility and must not be advertised by current catalogs",
       "enum": ["claude_code", "codex", "kilo", "kimi_cli", "grok_build"]
     },
     "SessionCapabilities": {
@@ -181,12 +183,20 @@
           "type": "string",
           "enum": ["app_server", "exec_resume", "compatibility"]
         },
+        "send": { "type": "boolean" },
         "approve": { "type": "boolean" },
         "deny": { "type": "boolean" },
         "interrupt": { "type": "boolean" },
         "steer": { "type": "boolean" },
         "queue": { "type": "boolean" },
         "spawn": { "type": "boolean" },
+        "user_input": { "type": "boolean" },
+        "control_path": { "type": "string" },
+        "control_version": { "type": "string" },
+        "unavailable_reasons": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
         "attachment_mode": {
           "type": "string",
           "enum": [
@@ -218,7 +228,11 @@
           "description": "Concrete unavailable or disabled reason for UI display."
         },
         "control_path": { "type": "string", "description": "Native mechanism, for example app_server, cli, or acp." },
-        "control_version": { "type": "string", "description": "Optional probed native control protocol or CLI version." }
+        "control_version": { "type": "string", "description": "Optional probed native control protocol or CLI version." },
+        "attachment_mode": {
+          "type": "string",
+          "enum": ["native_image_and_file", "native_image", "path_best_effort", "unsupported"]
+        }
       }
     },
     "SessionListPayload": {
@@ -261,7 +275,24 @@
             "parameters": { "type": "object" }
           }
         },
-        "pending_user_input": { "$ref": "#/definitions/PendingUserInput" }
+        "pending_user_input": { "$ref": "#/definitions/PendingUserInput" },
+        "active_turn": {
+          "description": "Exact daemon-owned turn binding that must be echoed by interrupt commands; null clears a previously advertised binding.",
+          "anyOf": [
+            { "$ref": "#/definitions/ActiveTurnBinding" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "ActiveTurnBinding": {
+      "type": "object",
+      "required": ["generation", "client_msg_id"],
+      "additionalProperties": false,
+      "properties": {
+        "generation": { "type": "integer", "minimum": 1 },
+        "client_msg_id": { "type": "string", "minLength": 1 },
+        "native_request_id": { "type": "string" }
       }
     },
     "PendingUserInput": {

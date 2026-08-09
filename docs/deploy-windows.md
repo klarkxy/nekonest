@@ -19,7 +19,6 @@ Supported agents (summary):
 |---|---|---|---|
 | Claude Code | `~/.claude/projects` | `claude --resume` | Authorize temp dir; paths in prompt |
 | Codex | `~/.codex/sessions` | `codex exec resume` | Native image args; other files via restricted dir + paths |
-| Kilo | Kilo / OpenCode local DB | `kilo run --session` | Native `--file` |
 | Kimi CLI | `.kimi-code` (legacy `.kimi`) | `kimi --session` | Local paths in prompt; CLI permissions apply |
 | Grok Build | `~/.grok/sessions` | `grok --resume` | Local paths in prompt; non-interactive safe mode |
 
@@ -107,7 +106,7 @@ This widens local attack surface—use deliberately.
 
 ## 5. Day-to-day usage
 
-1. On the PC, use Claude Code / Codex / Kilo / Kimi CLI / Grok Build normally so threads exist.  
+1. On the PC, use Claude Code / Codex / Kimi CLI / Grok Build normally so threads exist.
 2. Daemon reports the last 7 days of native activity, with running/waiting threads always visible; normal periodic discovery runs about 30 seconds after the prior scan completes.
 3. Phone: **directory → agent → thread**, then send prompts or attachments.  
 4. Threads without a project directory appear under **未分类**.  

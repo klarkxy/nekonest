@@ -24,6 +24,7 @@ export class NekoWebSocket {
   private intentionalClose = false
   private status: ConnectionStatus = 'disconnected'
   private sessionReady = false
+  private protocolVersion: string = PROTOCOL_VERSION
   private onReady: Array<() => void> = []
   /** Invalidates callbacks from sockets that have already been replaced. */
   private generation = 0
@@ -53,6 +54,7 @@ export class NekoWebSocket {
 
     this.intentionalClose = false
     this.sessionReady = false
+    this.protocolVersion = PROTOCOL_VERSION
     this.pendingSubscription = null
     this.setStatus('connecting')
 
@@ -87,6 +89,15 @@ export class NekoWebSocket {
           const msg: NekoMessage = JSON.parse(event.data)
           if (msg.type === 'subscribe_ack') {
             if (!this.isCurrentSubscriptionAck(msg, generation)) return
+            const negotiated = String(msg.payload?.protocol_version || msg.protocol_version || '').trim()
+            if (!isSupportedNegotiatedProtocol(negotiated)) {
+              this.pendingSubscription = null
+              this.sessionReady = false
+              this.setStatus('transport_error')
+              socket.close()
+              return
+            }
+            this.protocolVersion = negotiated
             if (!this.sessionReady) {
               this.pendingSubscription = null
               this.sessionReady = true
@@ -155,6 +166,7 @@ export class NekoWebSocket {
       if (generation === this.generation) {
         this.ws = null
         this.sessionReady = false
+        this.protocolVersion = PROTOCOL_VERSION
         this.pendingSubscription = null
         this.setStatus('transport_error')
       }
@@ -252,7 +264,7 @@ export class NekoWebSocket {
       msg.timestamp = Math.floor(Date.now() / 1000)
     }
     if (!msg.protocol_version) {
-      msg.protocol_version = PROTOCOL_VERSION
+      msg.protocol_version = this.protocolVersion
     }
     if (!msg.transport_mode) {
       try {
@@ -312,6 +324,10 @@ export class NekoWebSocket {
     return this.status
   }
 
+  getProtocolVersion(): string {
+    return this.protocolVersion
+  }
+
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN && this.sessionReady
   }
@@ -324,6 +340,7 @@ export class NekoWebSocket {
       this.reconnectTimer = null
     }
     this.sessionReady = false
+    this.protocolVersion = PROTOCOL_VERSION
     this.pendingSubscription = null
     this.onReady = []
     const socket = this.ws
@@ -362,6 +379,13 @@ export class NekoWebSocket {
       this.connect()
     }, delay)
   }
+}
+
+function isSupportedNegotiatedProtocol(value: string): boolean {
+  const match = /^(\d+)\.(\d+)$/.exec(value)
+  if (!match) return false
+  const current = PROTOCOL_VERSION.split('.').map(Number)
+  return Number(match[1]) === current[0] && Number(match[2]) <= current[1]
 }
 
 let instance: NekoWebSocket | null = null

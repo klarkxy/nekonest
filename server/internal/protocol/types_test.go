@@ -53,6 +53,24 @@ func TestNekoMessageJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAgentSessionActiveTurnRoundTrip(t *testing.T) {
+	session := AgentSession{
+		ID: "session", DeviceID: "device", AgentType: AgentCodex, Status: AgentRunning,
+		ActiveTurn: &ActiveTurnBinding{Generation: 12, ClientMsgID: "message-12", NativeRequestID: "turn-12"},
+	}
+	raw, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out AgentSession
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ActiveTurn == nil || out.ActiveTurn.Generation != 12 || out.ActiveTurn.ClientMsgID != "message-12" || out.ActiveTurn.NativeRequestID != "turn-12" {
+		t.Fatalf("active turn = %#v", out.ActiveTurn)
+	}
+}
+
 func TestSealedPayloadJSONRoundTrip(t *testing.T) {
 	m := &NekoMessage{
 		ProtocolVersion: "1.0",
@@ -163,6 +181,21 @@ func TestValidateFrameForTransport(t *testing.T) {
 	unknown.Type = "future_application"
 	if err := ValidateFrameForTransport(&unknown, TransportSealed); err == nil {
 		t.Fatal("unknown message type was accepted")
+	}
+}
+
+func TestSkipPromptQueueItemIsApplicationData(t *testing.T) {
+	if got := BodyPolicy(MsgSkipPromptQueueItem); got != MessageBodyApplication {
+		t.Fatalf("skip_prompt_queue_item policy = %v", got)
+	}
+	msg := &NekoMessage{
+		ProtocolVersion: CurrentProtocolVersion,
+		TransportMode:   TransportSealed,
+		Type:            MsgSkipPromptQueueItem,
+		Payload:         map[string]any{"client_msg_id": "private"},
+	}
+	if err := ValidateFrameForTransport(msg, TransportSealed); err == nil {
+		t.Fatal("sealed plaintext skip_prompt_queue_item was accepted")
 	}
 }
 

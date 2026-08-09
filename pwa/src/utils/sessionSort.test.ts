@@ -6,7 +6,7 @@ const s = (id: string, extra: Partial<AgentSession> = {}): AgentSession =>
   ({
     id,
     device_id: 'd',
-    agent_type: 'kilo',
+    agent_type: 'grok_build',
     status: 'idle',
     summary: id,
     last_activity: 0,

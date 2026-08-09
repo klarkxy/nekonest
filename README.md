@@ -38,9 +38,9 @@ NekoNest is a self-hosted bridge: the VPS handles authentication, pairing, relay
                                         │ journal / exec   │
                                         └────────┬─────────┘
                                                  │ local store + CLI
-                    ┌────────────┬───────────┬───┴──────┬────────────┐
-                    │Claude Code │   Codex   │  Kilo    │ Kimi CLI   │ Grok Build
-                    └────────────┴───────────┴──────────┴────────────┴───────────
+                    ┌────────────┬───────────┬───┴────────┬────────────┐
+                    │Claude Code │   Codex   │ Kimi CLI   │ Grok Build │
+                    └────────────┴───────────┴────────────┴────────────┘
 ```
 
 The home PC needs neither a public IP nor inbound ports. The daemon opens an outbound WebSocket to the VPS; the phone only talks to the HTTPS/WSS nest.
@@ -51,7 +51,7 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 - **Reliable resume** — independent accepted / committed / failed delivery states; transport success is not agent acceptance.
 - **History + streaming** — merge native history, server durability, and live output with stable message ids; CLI stderr stays diagnostic.
 - **Attachments** — phone upload → daemon per-run temp dir → agent-specific wiring (max 5 files, 4 MB each).
-- **Codex full control** — on `codex-cli >= 0.146.0`, native app-server send, structured questions, approve/deny, steer, interrupt, a durable FIFO follow-up queue, atomic image/file first turns, and supervised recovery; honest `exec resume` fallback when unavailable. All five agents may expose an agent-scoped native start only after their own starter probe succeeds.
+- **Capability-gated agent control** — Codex remains the only full-control agent. Every reliable installed send path may use NekoNest's durable FIFO (not an agent-native queue); approval, user input, start, interrupt, and attachments remain independently probed and default closed.
 - **Persistent transport mode** — one immutable `open` or `sealed` mode per nest. New databases default to sealed; legacy databases without mode metadata are persisted as open; mismatches fail closed.
 - **Phone-side downgrade guard** — the PWA pins mode per origin; a sealed origin cannot silently become open, and first use of an intentional open relay requires explicit confirmation.
 - **Mobile UX** — installable PWA, drafts, per-thread or whole-project phone-local archive, sanitized Markdown, reconnect outbox, optional Web Push.
@@ -64,7 +64,6 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 |---|---|---|---|
 | Claude Code | `~/.claude/projects` | Compatibility resume via `claude --resume` | Authorize run temp dir; paths in prompt |
 | Codex | `~/.codex/sessions` | **Full control** via `codex app-server`; `exec resume` fallback | Native images and files when app-server is healthy |
-| Kilo | Kilo / OpenCode local DB | Compatibility resume via `kilo run --session` | Native `--file` (advertised `path_best_effort`) |
 | Kimi CLI | `.kimi-code` (legacy `.kimi`) | Compatibility resume via `kimi --session` | Paths in prompt; CLI file permissions apply |
 | Grok Build | `~/.grok/sessions` | Compatibility resume via `grok --resume` | Paths in prompt; non-interactive safe mode |
 
@@ -72,25 +71,25 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 
 Legend: ✅ implemented and advertised · ⚙️ implemented with a runtime, probe, or fallback limitation · ❌ not implemented/advertised on the phone path.
 
-| Capability | Claude Code | Codex | Kilo | Kimi CLI | Grok Build |
-|---|---|---|---|---|---|
-| Discover / list | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Ownership gate | ✅ | ✅ | ✅ | ✅ | ✅ |
-| History | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Send + stream | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Interrupt | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Start native thread | ⚙️ starter probe | ⚙️ healthy app-server | ⚙️ ACP starter probe | ⚙️ ACP starter probe | ⚙️ starter probe |
-| Image / file attachments | ⚙️ path best-effort | ⚙️ native image + same-turn materialized file path; fallback is image-only | ⚙️ native `--file`, conservatively advertised best-effort | ⚙️ path best-effort | ⚙️ path best-effort |
-| Approve / deny | ❌ | ⚙️ app-server only | ❌ | ❌ | ❌ |
-| Steer active turn | ❌ | ⚙️ app-server only | ❌ | ❌ | ❌ |
-| Follow-up queue | ❌ | ⚙️ app-server + writable queue journal | ❌ | ❌ | ❌ |
-| Waiting-state signals | ⚙️ approval status only; no phone action | ⚙️ approval + structured user input via app-server | ❌ | ❌ | ❌ |
+| Capability | Claude Code | Codex | Kimi CLI | Grok Build |
+|---|---|---|---|---|
+| Discover / list | ✅ | ✅ | ✅ | ✅ |
+| Ownership gate | ✅ | ✅ | ✅ | ✅ |
+| History | ✅ | ✅ | ✅ | ✅ |
+| Send + stream | ✅ | ✅ | ✅ | ✅ |
+| Interrupt | ✅ | ✅ | ✅ | ✅ |
+| Start native thread | ⚙️ starter probe | ⚙️ healthy app-server | ⚙️ ACP starter probe | ⚙️ starter probe |
+| Image / file attachments | ⚙️ path best-effort | ⚙️ native image + same-turn materialized file path; fallback is image-only | ⚙️ path best-effort | ⚙️ path best-effort |
+| Approve / deny | ❌ | ⚙️ app-server only | ❌ | ❌ |
+| Steer active turn | ❌ | ⚙️ app-server only | ❌ | ❌ |
+| NekoNest durable FIFO | ⚙️ CLI + writable queue journal | ⚙️ app-server or exec fallback + writable journal | ⚙️ installed CLI + writable journal | ⚙️ installed CLI + writable journal |
+| Waiting-state signals | ❌ without a bridge signal | ⚙️ approval + structured user input via app-server | ❌ unless a valid ACP event is observed | ❌ unless a valid vendor event is observed |
 
-Runtime-gated rows are advertised only after the installed CLI/control path passes its probe. Native thread start is a device-level `start_capabilities` entry, not a promise that every existing session has `capabilities.spawn=true`. Codex falls back to `exec resume` when app-server is unhealthy; that fallback keeps resume, stream, interrupt, and image input, but not approval, steer, ordinary-file input, or native thread start.
+Runtime-gated rows are advertised only after the installed CLI/control path passes its probe. Native thread start is a device-level `start_capabilities` entry with its own `attachment_mode`, not a promise that every existing session has `capabilities.spawn=true`. Protocol 1.2 sends every boolean explicitly plus stable `unavailable_reasons`; a new PWA infers legacy send/interrupt only from a confirmed 1.1 daemon producer. Unknown sources fail closed. Codex falls back to `exec resume` when app-server is unhealthy; non-Codex `steer` remains disabled.
 
 A missing CLI or empty store for one agent does not disable the others.
 
-Wire ids: `claude_code`, `codex`, `kilo`, `kimi_cli`, `grok_build`.
+Active wire ids: `claude_code`, `codex`, `kimi_cli`, `grok_build`. Protocol 1.x still parses the retired `kilo` id so mixed-version peers fail closed instead of breaking the connection; current catalogs never advertise it.
 
 **Full per-harness matrix** (live flags, start probes, attachment wiring, live vs v1): [docs/agent-capability-matrix.md](docs/agent-capability-matrix.md) · [中文](docs/agent-capability-matrix.zh-CN.md).
 
@@ -248,7 +247,7 @@ Details: [docs/development.md](docs/development.md).
 These are stable product limits, not a todo list:
 
 - Phone primarily resumes native threads. Any supported agent may expose agent-scoped `start_thread` only after its native starter is installed/probed; the phone keeps a local draft until its first prompt creates the native thread in the daemon's current union of discovered project directories.
-- Codex is the only full-control agent (send, approve/deny, interrupt, steer, and full native attachments); the other four remain compatibility-resume adapters even when they advertise native thread start.
+- Codex is the only full-control agent (send, approve/deny, interrupt, steer, and full native attachments); the other three remain compatibility-resume adapters even when they advertise native thread start.
 - New nests default to sealed; existing databases/configs without mode metadata are classified once as open. One nest has one persisted mode and never downgrades automatically.
 - Kimi CLI and Grok Build receive attachment **paths** in the prompt; reads depend on CLI permissions.
 - Web Push needs VAPID; without it, no real push is sent.

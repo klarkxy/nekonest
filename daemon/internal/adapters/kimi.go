@@ -46,6 +46,7 @@ type KimiCLIAdapter struct {
 	indexCache  *fileDiscoveryCache[map[string]kimiIndexRecord]
 	commander   *agentexec.KimiCommander
 	watches     pollWatchRegistry
+	turns       turnTracker
 }
 
 // NewKimiCLIAdapter creates a Kimi adapter with migration-compatible roots.
@@ -59,14 +60,19 @@ func NewKimiCLIAdapter() *KimiCLIAdapter {
 		strings.TrimSpace(os.Getenv("KIMI_SHARE_DIR")),
 		filepath.Join(home, ".kimi"),
 	)
-	return &KimiCLIAdapter{
+	a := &KimiCLIAdapter{
 		currentHome: currentHome,
 		legacyHomes: legacyHomes,
 		records:     make(map[string]kimiSessionRecord),
 		stateCache:  newFileDiscoveryCache[map[string]interface{}](),
 		indexCache:  newFileDiscoveryCache[map[string]kimiIndexRecord](),
 		commander:   agentexec.NewKimiCommander(),
+		turns:       newTurnTracker(AgentKimiCLI),
 	}
+	a.commander.OnTurnEnd = func(nativeID string, exitCode int, interrupted bool) {
+		a.turns.finish(publicSessionID(AgentKimiCLI, nativeID), exitCode, interrupted)
+	}
+	return a
 }
 
 func (a *KimiCLIAdapter) Name() string { return string(AgentKimiCLI) }
@@ -82,18 +88,19 @@ func (a *KimiCLIAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapabi
 	if err := a.commander.ProbeThreadStart(ctx); err != nil {
 		return ThreadStartCapability{Reason: err.Error()}
 	}
-	return ThreadStartCapability{Available: true}
+	return ThreadStartCapability{Available: true, ControlPath: "acp", ControlVersion: "1", AttachmentMode: AttachUnsupported}
 }
 
 func (a *KimiCLIAdapter) StartNativeThread(ctx context.Context, request ThreadStartRequest) (ThreadStartResult, error) {
 	if a.commander == nil {
 		return ThreadStartResult{}, fmt.Errorf("Kimi commander is unavailable")
 	}
-	nativeID, created, promptAccepted, err := a.commander.StartThread(ctx, request.ProjectDir, request.Prompt)
-	return ThreadStartResult{SessionID: publicSessionID(AgentKimiCLI, nativeID), Created: created, PromptAccepted: promptAccepted}, err
+	nativeID, created, promptAccepted, promptResult, err := a.commander.StartThread(ctx, request.ProjectDir, request.Prompt)
+	return ThreadStartResult{SessionID: publicSessionID(AgentKimiCLI, nativeID), Created: created, PromptAccepted: promptAccepted, PromptResult: promptResult}, err
 }
 
 func (a *KimiCLIAdapter) Close() error {
+	a.turns.detachAll()
 	a.watches.stopAll()
 	if a.commander != nil {
 		a.commander.StopAll()
@@ -675,16 +682,29 @@ func (a *KimiCLIAdapter) Watch(sessionID string) (<-chan *SessionInfo, error) {
 }
 
 func (a *KimiCLIAdapter) SendPrompt(sessionID string, request PromptRequest) error {
+	if !a.turns.begin(sessionID, request) {
+		return agentexec.ErrSessionBusy
+	}
 	nativeID, err := nativeSessionID(AgentKimiCLI, sessionID)
 	if err != nil {
+		a.turns.abort(sessionID, request.Generation)
 		return err
 	}
 	record, err := a.resolveRecord(nativeID)
 	if err != nil {
+		a.turns.abort(sessionID, request.Generation)
 		return err
 	}
 	if record.legacy {
-		return a.commander.SendLegacyPromptInDir(
+		err = a.commander.SendLegacyPromptInDir(
+			nativeID,
+			request.Prompt,
+			record.projectDir,
+			request.Attachments,
+			request.OnComplete,
+		)
+	} else {
+		err = a.commander.SendPromptInDir(
 			nativeID,
 			request.Prompt,
 			record.projectDir,
@@ -692,14 +712,24 @@ func (a *KimiCLIAdapter) SendPrompt(sessionID string, request PromptRequest) err
 			request.OnComplete,
 		)
 	}
-	return a.commander.SendPromptInDir(
-		nativeID,
-		request.Prompt,
-		record.projectDir,
-		request.Attachments,
-		request.OnComplete,
-	)
+	if err != nil {
+		a.turns.abort(sessionID, request.Generation)
+		return err
+	}
+	if !request.DeferAcceptance {
+		a.turns.accepted(sessionID, request.Generation)
+	}
+	return nil
 }
+
+func (a *KimiCLIAdapter) AcknowledgePrompt(sessionID string, generation uint64) {
+	a.turns.accepted(sessionID, generation)
+}
+func (a *KimiCLIAdapter) AbandonPrompt(sessionID string, generation uint64) {
+	a.turns.abort(sessionID, generation)
+}
+
+func (a *KimiCLIAdapter) SetControlSink(sink func(ControlEvent)) { a.turns.setSink(sink) }
 
 func (a *KimiCLIAdapter) Approve(sessionID, approvalID string) error {
 	nativeID, err := nativeSessionID(AgentKimiCLI, sessionID)

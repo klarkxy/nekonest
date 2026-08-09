@@ -208,6 +208,7 @@ func main() {
 	client := connection.NewClient(ctx, initialCfg.ServerURL, deviceID, token, daemonTransport)
 	acceptedPrompts := newPromptAcceptanceCache(maxAcceptedPromptIDs)
 	sessionSends := newSessionLockMap()
+	activeTurns := newActiveTurnRegistry()
 
 	// Wire every adapter through one normalized output stream.
 	adapterRegistry.SetOutputSink(func(event adapters.OutputEvent) {
@@ -221,83 +222,139 @@ func main() {
 			event.MessageID,
 		)
 	})
+	var turnGenerations atomic.Uint64
 	var dispatchQueued func(string)
-	if adapter, ok := adapterRegistry.Get("codex"); ok {
-		if codex, ok := adapter.(*adapters.CodexAdapter); ok {
-			codex.SetControlSink(func(event adapters.ControlEvent) {
-				sendControlEvent(client, deviceID, event)
-				if queueAvailable && event.SessionID != "" {
-					switch event.Class {
-					case "completed":
-						if running, ok := durableQueue.running(event.SessionID); ok {
-							if err := durableQueue.complete(event.SessionID, running.ClientMsgID); err != nil {
-								log.Printf("[daemon] complete queued prompt: %v", err)
-							}
-						}
-						sendQueueUpdate(client, deviceID, event.SessionID, durableQueue)
-						if dispatchQueued != nil {
-							go dispatchQueued(event.SessionID)
-						}
-					case "failed", "interrupted", "cancelled", "canceled":
-						if err := durableQueue.pauseSession(event.SessionID); err != nil {
-							log.Printf("[daemon] pause queued prompts: %v", err)
-						}
-						sendQueueUpdate(client, deviceID, event.SessionID, durableQueue)
-					}
-				}
-				requestForceDiscover()
-			})
-			codex.SetRecoverySink(requestForceDiscover)
-			dispatchQueued = func(sessionID string) {
-				unlock := sessionSends.lock(sessionID)
-				defer unlock()
-				if !queueAvailable || !codex.AppServerHealthy() || codex.HasActiveTurn(sessionID) {
-					return
-				}
-				item, ok, claimErr := durableQueue.claimNext(sessionID)
-				if claimErr != nil {
-					log.Printf("[daemon] claim queued prompt: %v", claimErr)
-					return
-				}
-				if !ok {
-					return
-				}
-				sendQueueUpdate(client, deviceID, sessionID, durableQueue)
-
-				prompt, refs, err := queuedPromptPayload(deviceID, sessionID, item)
-				if err == nil && len(refs) > 0 {
-					var files []attach.LocalFile
-					var suffix string
-					var attDir string
-					attDir, files, suffix, err = attach.Materialize(currentConfig().ServerURL, sessionID, refs)
-					if err == nil {
-						if prompt == "" {
-							prompt = "(user sent attachments)"
-						}
-						prompt += suffix
-						defer func() {
-							if err != nil {
-								_ = os.RemoveAll(attDir)
-							}
-						}()
-						if err = dispatchQueuedPrompt(codex, commandJournal, acceptedPrompts, client, deviceID, item, prompt, files, attDir); err == nil {
-							return
-						}
-					}
-				} else if err == nil {
-					err = dispatchQueuedPrompt(codex, commandJournal, acceptedPrompts, client, deviceID, item, prompt, nil, "")
-					if err == nil {
-						return
-					}
-				}
-				log.Printf("[daemon] dispatch queued prompt session=%s client_msg_id=%s: %v", sessionID, item.ClientMsgID, err)
-				if pauseErr := durableQueue.pauseSession(sessionID); pauseErr != nil {
-					log.Printf("[daemon] pause failed queued prompt: %v", pauseErr)
-				}
-				sendQueueUpdate(client, deviceID, sessionID, durableQueue)
-				sendPromptIndeterminate(client, deviceID, sessionID, item.ClientMsgID, "queued prompt was paused before a safe native acceptance: "+err.Error())
+	var handleControlEvent func(adapters.ControlEvent)
+	handleControlEvent = func(event adapters.ControlEvent) {
+		lifecycle := event.Lifecycle
+		if lifecycle == "" {
+			switch event.Class {
+			case "completed":
+				lifecycle = adapters.TurnTerminalSuccess
+			case "failed":
+				lifecycle = adapters.TurnTerminalFailure
+			case "interrupted", "cancelled", "canceled":
+				lifecycle = adapters.TurnInterrupted
 			}
 		}
+		event.Lifecycle = lifecycle
+		terminal := lifecycle == adapters.TurnTerminalSuccess || lifecycle == adapters.TurnTerminalFailure ||
+			lifecycle == adapters.TurnInterrupted || lifecycle == adapters.TurnIndeterminate
+		if terminal {
+			binding, ready, matched := activeTurns.terminalForEvent(event)
+			if !matched {
+				log.Printf("[daemon] ignoring stale terminal control event session=%s generation=%d client_msg_id=%s native_request_id=%s", event.SessionID, event.Generation, event.ClientMsgID, event.NativeRequestID)
+				return
+			}
+			if !ready {
+				return
+			}
+			event.Generation = binding.Generation
+			event.ClientMsgID = binding.ClientMsgID
+			if event.NativeRequestID == "" {
+				event.NativeRequestID = binding.NativeRequestID
+			}
+			if activeTurns.clearMatching(event.SessionID, binding.Generation, binding.ClientMsgID, binding.NativeRequestID) {
+				event.ClearActiveTurn = true
+			}
+		}
+		if sessionUpdate, attention := controlEventWirePlan(event); sessionUpdate || attention {
+			sendControlEvent(client, deviceID, event)
+		}
+		if queueAvailable && event.SessionID != "" {
+			if running, ok := durableQueue.running(event.SessionID); ok && (event.ClientMsgID == "" || event.ClientMsgID == running.ClientMsgID) {
+				switch lifecycle {
+				case adapters.TurnTerminalSuccess:
+					if err := durableQueue.complete(event.SessionID, running.ClientMsgID); err != nil {
+						log.Printf("[daemon] complete queued prompt: %v", err)
+					}
+				case adapters.TurnTerminalFailure:
+					if err := durableQueue.block(event.SessionID, running.ClientMsgID, promptQueueBlockedFailed); err != nil {
+						log.Printf("[daemon] block failed prompt: %v", err)
+					}
+				case adapters.TurnInterrupted:
+					if err := durableQueue.block(event.SessionID, running.ClientMsgID, promptQueueBlockedInterrupted); err != nil {
+						log.Printf("[daemon] block interrupted prompt: %v", err)
+					}
+				case adapters.TurnIndeterminate:
+					if err := durableQueue.block(event.SessionID, running.ClientMsgID, promptQueueBlockedIndeterminate); err != nil {
+						log.Printf("[daemon] block indeterminate prompt: %v", err)
+					}
+				}
+				sendQueueUpdate(client, deviceID, event.SessionID, durableQueue)
+				if lifecycle == adapters.TurnTerminalSuccess && dispatchQueued != nil {
+					go dispatchQueued(event.SessionID)
+				}
+			}
+		}
+		requestForceDiscover()
+	}
+	adapterRegistry.SetControlSink(handleControlEvent)
+	if adapter, ok := adapterRegistry.Get("codex"); ok {
+		if codex, ok := adapter.(*adapters.CodexAdapter); ok {
+			codex.SetRecoverySink(requestForceDiscover)
+		}
+	}
+	dispatchQueued = func(sessionID string) {
+		unlock := sessionSends.lock(sessionID)
+		defer unlock()
+		if !queueAvailable {
+			return
+		}
+		target := pickAdapterForSession(sessionID, adapterList)
+		if target == nil {
+			return
+		}
+		if codex, ok := target.(*adapters.CodexAdapter); ok && (!codex.AppServerHealthy() || codex.HasActiveTurn(sessionID)) {
+			return
+		}
+		item, ok, claimErr := durableQueue.claimNext(sessionID)
+		if claimErr != nil || !ok {
+			if claimErr != nil {
+				log.Printf("[daemon] claim queued prompt: %v", claimErr)
+			}
+			return
+		}
+		sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+		if target.Name() != item.AgentType {
+			_ = durableQueue.block(sessionID, item.ClientMsgID, promptQueueBlockedIndeterminate)
+			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+			return
+		}
+		prompt, refs, dispatchErr := queuedPromptPayload(deviceID, sessionID, item)
+		var files []attach.LocalFile
+		attDir := ""
+		if dispatchErr == nil && len(refs) > 0 {
+			var suffix string
+			attDir, files, suffix, dispatchErr = attach.Materialize(currentConfig().ServerURL, sessionID, refs)
+			if dispatchErr == nil {
+				if prompt == "" {
+					prompt = "(user sent attachments)"
+				}
+				prompt += suffix
+			}
+		}
+		crossedNativeBoundary := false
+		if dispatchErr == nil {
+			crossedNativeBoundary, dispatchErr = dispatchQueuedPrompt(target, commandJournal, acceptedPrompts, client, deviceID, item, prompt, files, attDir, turnGenerations.Add(1), activeTurns, handleControlEvent)
+		}
+		if dispatchErr == nil {
+			return
+		}
+		if attDir != "" && !crossedNativeBoundary {
+			_ = os.RemoveAll(attDir)
+		}
+		log.Printf("[daemon] dispatch queued prompt session=%s client_msg_id=%s: %v", sessionID, item.ClientMsgID, dispatchErr)
+		if errors.Is(dispatchErr, agentexec.ErrSessionBusy) {
+			if err := durableQueue.releaseClaim(sessionID, item.ClientMsgID); err != nil {
+				log.Printf("[daemon] release pre-boundary busy queue claim: %v", err)
+			}
+			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+			return
+		}
+		_ = durableQueue.block(sessionID, item.ClientMsgID, promptQueueBlockedIndeterminate)
+		sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+		sendPromptIndeterminate(client, deviceID, sessionID, item.ClientMsgID, "queued prompt became indeterminate before a safe native acceptance: "+dispatchErr.Error())
 	}
 
 	// Session discovery state
@@ -374,7 +431,7 @@ func main() {
 			go publishCatalogKeyForPhone(currentConfig(), payload)
 			return
 		case "send_prompt":
-			// Serialize sends per session (prevents double codex/kilo process).
+			// Serialize sends per session (prevents duplicate native processes).
 			unlock := sessionSends.lock(sessionID)
 			defer unlock()
 
@@ -444,10 +501,13 @@ func main() {
 				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "session not found on this PC")
 				return
 			}
-			if codex, ok := targetAdapter.(*adapters.CodexAdapter); ok && queueAvailable && codex.AppServerHealthy() &&
-				(codex.HasActiveTurn(sessionID) || durableQueue.hasActive(sessionID)) {
+			queueCapable := queueAvailable
+			if codex, ok := targetAdapter.(*adapters.CodexAdapter); ok {
+				queueCapable = queueAvailable && codex.AppServerHealthy()
+			}
+			if queueCapable {
 				queued := promptQueueItem{
-					SessionID: sessionID, ClientMsgID: clientMsgID, AgentType: string(adapters.AgentCodex),
+					SessionID: sessionID, ClientMsgID: clientMsgID, AgentType: targetAdapter.Name(),
 				}
 				if len(sealedPromptWire) > 0 {
 					queued.SealedEnvelope = sealedPromptWire
@@ -464,6 +524,9 @@ func main() {
 				}
 				sendPromptQueued(client, deviceID, sessionID, clientMsgID, durableQueue.position(sessionID, stored.ClientMsgID))
 				sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+				if dispatchQueued != nil {
+					go dispatchQueued(sessionID)
+				}
 				return
 			}
 
@@ -517,13 +580,47 @@ func main() {
 				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "prompt was not executed because its durable dispatch record could not be written: "+err.Error())
 				return
 			}
+			generation := turnGenerations.Add(1)
+			if !activeTurns.bind(sessionID, generation, clientMsgID) {
+				if journalErr := commandJournal.rollbackDispatching(sessionID, clientMsgID); journalErr != nil {
+					log.Printf("[daemon] rollback active-turn conflict failed: %v", journalErr)
+					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate+"; active turn conflict")
+				} else {
+					sendPromptFailed(client, deviceID, sessionID, clientMsgID, "this session already has a controllable turn")
+				}
+				return
+			}
+			var completeOnce sync.Once
+			onComplete := func() {
+				completeOnce.Do(func() {
+					if releaseFiles != nil {
+						releaseFiles()
+					}
+					if activeTurns.completeMatching(sessionID, generation, clientMsgID) {
+						sendControlEvent(client, deviceID, adapters.ControlEvent{
+							SessionID: sessionID, AgentType: adapters.AgentType(targetAdapter.Name()), ClearActiveTurn: true,
+						})
+					}
+				})
+			}
 			request := adapters.PromptRequest{
 				Prompt:      prompt,
 				Attachments: localAttachments,
-				OnComplete:  releaseFiles,
+				OnComplete:  onComplete,
+				Generation:  generation,
+				ClientMsgID: clientMsgID,
+				OnNativeBound: func(nativeRequestID string) {
+					activeTurns.setNativeRequestID(sessionID, generation, clientMsgID, nativeRequestID)
+				},
 			}
 			if err := targetAdapter.SendPrompt(sessionID, request); err != nil {
 				log.Printf("[daemon] send_prompt error via %s: %v", targetAdapter.Name(), err)
+				activeTurns.clearMatching(sessionID, generation, clientMsgID, "")
+				if errors.Is(err, adapters.ErrPromptBoundaryIndeterminate) {
+					// A timed-out or malformed native RPC may still be using the
+					// materialized files. Retain them rather than breaking that turn.
+					runOwnsFiles = true
+				}
 				if errors.Is(err, agentexec.ErrSessionBusy) {
 					// Busy is checked before an adapter starts a new process,
 					// so this rejection is known not to have crossed the agent
@@ -559,10 +656,30 @@ func main() {
 				// The resumed process now owns the temporary files and invokes
 				// OnComplete only after its output readers and process exit.
 				runOwnsFiles = true
+				if binding, ok := activeTurns.current(sessionID); ok {
+					sendControlEvent(client, deviceID, adapters.ControlEvent{
+						SessionID: sessionID, AgentType: adapters.AgentType(targetAdapter.Name()),
+						Status: adapters.StatusRunning, ActiveTurn: binding,
+					})
+				}
 				if err := commandJournal.markAccepted(sessionID, clientMsgID); err != nil {
 					log.Printf("[daemon] persist prompt acceptance failed session=%s client_msg_id=%s: %v", sessionID, clientMsgID, err)
+					if activeTurns.abandonAcceptance(sessionID, generation, clientMsgID) {
+						sendControlEvent(client, deviceID, adapters.ControlEvent{
+							SessionID: sessionID, AgentType: adapters.AgentType(targetAdapter.Name()), ClearActiveTurn: true,
+						})
+					}
 					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate+"; acceptance journal update failed")
 					return
+				}
+				pendingTerminal, completed := activeTurns.accept(sessionID, generation, clientMsgID)
+				if completed {
+					sendControlEvent(client, deviceID, adapters.ControlEvent{
+						SessionID: sessionID, AgentType: adapters.AgentType(targetAdapter.Name()), ClearActiveTurn: true,
+					})
+				}
+				if pendingTerminal != nil {
+					handleControlEvent(*pendingTerminal)
 				}
 				accepted := acceptedPrompt{prompt: boundedPromptEcho(originalPrompt)}
 				acceptedPrompts.add(sessionID, clientMsgID, accepted)
@@ -652,8 +769,8 @@ func main() {
 				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "prompt queue unavailable")
 				return
 			}
-			queued, exists := durableQueue.item(sessionID, clientMsgID)
-			if !exists || queued.AgentType != string(adapters.AgentCodex) {
+			_, exists := durableQueue.item(sessionID, clientMsgID)
+			if !exists {
 				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "queued prompt not found")
 				return
 			}
@@ -677,11 +794,24 @@ func main() {
 			}
 			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 			if dispatchQueued != nil {
-				if adapter, ok := adapterRegistry.Get("codex"); ok {
-					if codex, ok := adapter.(*adapters.CodexAdapter); ok && !codex.HasActiveTurn(sessionID) {
-						go dispatchQueued(sessionID)
-					}
-				}
+				go dispatchQueued(sessionID)
+			}
+
+		case "skip_prompt_queue_item":
+			unlock := sessionSends.lock(sessionID)
+			defer unlock()
+			clientMsgID, _ := payload["client_msg_id"].(string)
+			if !queueAvailable || strings.TrimSpace(clientMsgID) == "" {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "indeterminate queue blocker required")
+				return
+			}
+			if err := durableQueue.skipIndeterminate(sessionID, clientMsgID); err != nil {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, err.Error())
+				return
+			}
+			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+			if dispatchQueued != nil {
+				go dispatchQueued(sessionID)
 			}
 
 		case "approve":
@@ -732,6 +862,13 @@ func main() {
 			requestForceDiscover()
 
 		case "interrupt":
+			unlock := sessionSends.lock(sessionID)
+			defer unlock()
+			generation, clientMsgID, bindingErr := parseActiveTurnCommand(payload)
+			if bindingErr != nil || !activeTurns.matches(sessionID, generation, clientMsgID) {
+				sendDaemonError(client, deviceID, sessionID, "interrupt rejected: active turn changed or is no longer controllable")
+				return
+			}
 			if targetAdapter == nil {
 				sendDaemonError(client, deviceID, sessionID, "no adapter for session")
 				return
@@ -742,12 +879,12 @@ func main() {
 			} else {
 				log.Printf("[daemon] interrupted session %s", sessionID)
 				if queueAvailable {
-					if _, codex := targetAdapter.(*adapters.CodexAdapter); codex {
-						if err := durableQueue.pauseSession(sessionID); err != nil {
-							log.Printf("[daemon] pause queue after interrupt: %v", err)
+					if running, ok := durableQueue.running(sessionID); ok {
+						if err := durableQueue.block(sessionID, running.ClientMsgID, promptQueueBlockedInterrupted); err != nil {
+							log.Printf("[daemon] block queue after interrupt: %v", err)
 						}
-						sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 					}
+					sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 				}
 			}
 
@@ -1002,6 +1139,28 @@ func main() {
 				if s.Capabilities == nil {
 					s.Capabilities = adapters.DefaultCapabilities(s.AgentType)
 				}
+				owner, ownerExists := adapterRegistry.Get(string(s.AgentType))
+				available := ownerExists && owner != nil && owner.IsAvailable()
+				if !available {
+					s.Capabilities.Send = false
+					s.Capabilities.Interrupt = false
+					s.Capabilities.Queue = false
+					s.Capabilities.UnavailableReasons = mergeCapabilityReasons(
+						s.Capabilities.UnavailableReasons,
+						map[string]string{"send": "cli_missing", "interrupt": "cli_missing", "queue": "cli_missing"},
+					)
+				} else if s.AgentType != adapters.AgentCodex {
+					s.Capabilities.Send = true
+					s.Capabilities.Interrupt = true
+					s.Capabilities.ControlPath = "cli"
+					s.Capabilities.UnavailableReasons = removeCapabilityReasons(
+						s.Capabilities.UnavailableReasons, "send", "interrupt",
+					)
+					s.Capabilities.Queue = queueAvailable
+					if !queueAvailable {
+						s.Capabilities.UnavailableReasons = mergeCapabilityReasons(s.Capabilities.UnavailableReasons, map[string]string{"queue": "queue_journal_unavailable"})
+					}
+				}
 				if s.AgentType == adapters.AgentCodex {
 					if codexApp != nil {
 						codexApp.ApplyAppServerOverlay(s)
@@ -1009,13 +1168,16 @@ func main() {
 					if codexAppHealthy {
 						s.Capabilities = &adapters.SessionCapabilities{
 							ControlMode:    adapters.ControlAppServer,
+							Send:           true,
 							Approve:        true,
 							Deny:           true,
 							Interrupt:      true,
 							Steer:          true,
 							Queue:          queueAvailable,
 							Spawn:          true,
+							UserInput:      true,
 							AttachmentMode: adapters.AttachNativeImageAndFile,
+							ControlPath:    "app_server",
 						}
 					}
 				}
@@ -1027,6 +1189,7 @@ func main() {
 
 			// Build new session map
 			newSessions := make(map[string]*adapters.SessionInfo)
+			overlayActiveTurns(allSessions, activeTurns)
 			for _, s := range allSessions {
 				newSessions[s.ID] = s
 			}
@@ -1038,7 +1201,7 @@ func main() {
 				} else {
 					for id, newS := range newSessions {
 						oldS, ok := lastSessions[id]
-						if !ok || oldS.Status != newS.Status || oldS.Summary != newS.Summary || oldS.ProjectDir != newS.ProjectDir || pendingApprovalChanged(oldS, newS) || pendingUserInputChanged(oldS, newS) || sessionCapabilitiesChanged(oldS, newS) {
+						if !ok || oldS.Status != newS.Status || oldS.Summary != newS.Summary || oldS.ProjectDir != newS.ProjectDir || pendingApprovalChanged(oldS, newS) || pendingUserInputChanged(oldS, newS) || sessionCapabilitiesChanged(oldS, newS) || !reflect.DeepEqual(oldS.ActiveTurn, newS.ActiveTurn) {
 							changed = true
 							break
 						}
@@ -1055,7 +1218,7 @@ func main() {
 
 			// Always report on force (reconnect) or when local list changed
 			if changed {
-				report, buildErr := buildDaemonApplicationMessage(deviceID, "", "", "session_list", map[string]interface{}{
+				report, buildErr := buildDaemonApplicationMessage(client.ProtocolVersion(), deviceID, "", "", "session_list", map[string]interface{}{
 					// Convert at the wire boundary: unix last_activity + device_id
 					"sessions":           sessionsToWire(deviceID, allSessions),
 					"start_capabilities": startCapabilities,
@@ -1232,13 +1395,60 @@ func sessionCapabilitiesChanged(oldS, newS *adapters.SessionInfo) bool {
 		return oldCaps != newCaps
 	}
 	return oldCaps.ControlMode != newCaps.ControlMode ||
+		oldCaps.Send != newCaps.Send ||
 		oldCaps.Approve != newCaps.Approve ||
 		oldCaps.Deny != newCaps.Deny ||
 		oldCaps.Interrupt != newCaps.Interrupt ||
 		oldCaps.Steer != newCaps.Steer ||
 		oldCaps.Queue != newCaps.Queue ||
 		oldCaps.Spawn != newCaps.Spawn ||
-		oldCaps.AttachmentMode != newCaps.AttachmentMode
+		oldCaps.UserInput != newCaps.UserInput ||
+		oldCaps.AttachmentMode != newCaps.AttachmentMode ||
+		oldCaps.ControlPath != newCaps.ControlPath ||
+		oldCaps.ControlVersion != newCaps.ControlVersion ||
+		!reflect.DeepEqual(oldCaps.UnavailableReasons, newCaps.UnavailableReasons)
+}
+
+func mergeCapabilityReasons(current, additions map[string]string) map[string]string {
+	merged := make(map[string]string, len(current)+len(additions))
+	for key, value := range current {
+		merged[key] = value
+	}
+	for key, value := range additions {
+		merged[key] = value
+	}
+	return merged
+}
+
+func removeCapabilityReasons(current map[string]string, keys ...string) map[string]string {
+	clean := mergeCapabilityReasons(current, nil)
+	for _, key := range keys {
+		delete(clean, key)
+	}
+	return clean
+}
+
+func completeCapabilityReasons(caps *adapters.SessionCapabilities) map[string]string {
+	reasons := mergeCapabilityReasons(caps.UnavailableReasons, nil)
+	set := func(key, fallback string, enabled bool) {
+		if enabled {
+			delete(reasons, key)
+			return
+		}
+		if strings.TrimSpace(reasons[key]) == "" {
+			reasons[key] = fallback
+		}
+	}
+	set("send", "unsupported_by_control_path", caps.Send)
+	set("approve", "unsupported_by_control_path", caps.Approve)
+	set("deny", "unsupported_by_control_path", caps.Deny)
+	set("interrupt", "unsupported_by_control_path", caps.Interrupt)
+	set("steer", "unsupported_by_agent", caps.Steer)
+	set("queue", "queue_not_available", caps.Queue)
+	set("spawn", "start_not_available", caps.Spawn)
+	set("user_input", "user_input_not_available", caps.UserInput)
+	set("attachment", "attachment_not_available", caps.AttachmentMode != adapters.AttachUnsupported)
+	return reasons
 }
 
 // sessionsToWire converts internal discovery models into the public protocol shape
@@ -1263,6 +1473,7 @@ func sessionsToWire(deviceID string, sessions []*adapters.SessionInfo) []map[str
 		if caps == nil {
 			caps = adapters.DefaultCapabilities(s.AgentType)
 		}
+		reasons := completeCapabilityReasons(caps)
 		item := map[string]interface{}{
 			"id":            s.ID,
 			"device_id":     deviceID,
@@ -1271,14 +1482,19 @@ func sessionsToWire(deviceID string, sessions []*adapters.SessionInfo) []map[str
 			"summary":       s.Summary,
 			"last_activity": s.LastActivity.Unix(),
 			"capabilities": map[string]interface{}{
-				"control_mode":    string(caps.ControlMode),
-				"approve":         caps.Approve,
-				"deny":            caps.Deny,
-				"interrupt":       caps.Interrupt,
-				"steer":           caps.Steer,
-				"queue":           caps.Queue,
-				"spawn":           caps.Spawn,
-				"attachment_mode": string(caps.AttachmentMode),
+				"control_mode":        string(caps.ControlMode),
+				"send":                caps.Send,
+				"approve":             caps.Approve,
+				"deny":                caps.Deny,
+				"interrupt":           caps.Interrupt,
+				"steer":               caps.Steer,
+				"queue":               caps.Queue,
+				"spawn":               caps.Spawn,
+				"user_input":          caps.UserInput,
+				"attachment_mode":     string(caps.AttachmentMode),
+				"control_path":        caps.ControlPath,
+				"control_version":     caps.ControlVersion,
+				"unavailable_reasons": reasons,
 			},
 		}
 		if s.ProjectDir != "" {
@@ -1294,6 +1510,9 @@ func sessionsToWire(deviceID string, sessions []*adapters.SessionInfo) []map[str
 		}
 		if s.PendingUserInput != nil {
 			item["pending_user_input"] = s.PendingUserInput
+		}
+		if s.ActiveTurn != nil {
+			item["active_turn"] = s.ActiveTurn
 		}
 		out = append(out, item)
 	}
@@ -1323,6 +1542,7 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 	}
 
 	ts := time.Now().Unix()
+	protocolVersion := client.ProtocolVersion()
 	inner := map[string]interface{}{
 		"message": map[string]interface{}{
 			"id":        msgID,
@@ -1338,7 +1558,7 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 	}
 
 	msg := map[string]interface{}{
-		"protocol_version": "1.1",
+		"protocol_version": protocolVersion,
 		"transport_mode":   daemonTransport,
 		"type":             "session_message",
 		"device_id":        deviceID,
@@ -1353,7 +1573,7 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 			return
 		}
 		aad := sealed.AADFields{
-			ProtocolVersion: "1.1",
+			ProtocolVersion: protocolVersion,
 			TransportMode:   "sealed",
 			Type:            "session_message",
 			DeviceID:        deviceID,
@@ -1411,53 +1631,81 @@ func sendControlEvent(client *connection.Client, deviceID string, event adapters
 	if client == nil || event.SessionID == "" {
 		return
 	}
+	sendSessionUpdate, sendAttention := controlEventWirePlan(event)
+	if !sendSessionUpdate && !sendAttention {
+		return
+	}
+	// session_update is intentionally partial and the relay cannot merge sealed
+	// payloads. Force an authoritative catalog snapshot after every state update
+	// so a reconnect observes the exact active-turn generation (or its clear).
+	if sendSessionUpdate {
+		defer requestForceDiscover()
+	}
 	ts := time.Now().Unix()
-	session := map[string]interface{}{
-		"id": event.SessionID, "device_id": deviceID, "agent_type": "codex",
-		"status": string(event.Status), "last_activity": ts,
+	protocolVersion := client.ProtocolVersion()
+	agentType := string(event.AgentType)
+	if agentType == "" {
+		agentType = "codex"
 	}
-	if event.PendingApproval != nil {
-		session["pending_approval"] = event.PendingApproval
-	}
-	if event.PendingUserInput != nil {
-		session["pending_user_input"] = event.PendingUserInput
-	}
-	if event.Capabilities != nil {
-		session["capabilities"] = event.Capabilities
-	}
-	inner := map[string]interface{}{"session": session}
-	msg := map[string]interface{}{
-		"protocol_version": "1.1", "transport_mode": daemonTransport,
-		"type": "session_update", "device_id": deviceID,
-		"session_id": event.SessionID, "timestamp": ts,
-	}
-	if daemonTransport == "sealed" {
-		if daemonSealedKeys == nil {
-			log.Printf("[daemon] refusing plaintext session_update in sealed mode")
-			return
+	if sendSessionUpdate {
+		session := map[string]interface{}{
+			"id": event.SessionID, "device_id": deviceID, "agent_type": agentType,
+			"last_activity": ts,
 		}
-		plain, err := json.Marshal(inner)
-		if err != nil {
-			return
+		if event.Status != "" {
+			session["status"] = string(event.Status)
 		}
-		aad := sealed.AADFields{
-			ProtocolVersion: "1.1", TransportMode: "sealed", Type: "session_update",
-			DeviceID: deviceID, SessionID: event.SessionID, Timestamp: ts,
+		if event.PendingApproval != nil {
+			session["pending_approval"] = event.PendingApproval
 		}
-		wire, err := daemonSealedKeys.SealSession(event.SessionID, deviceID, "phones", aad, plain)
-		if err != nil {
-			log.Printf("[daemon] seal session_update: %v", err)
-			return
+		if event.PendingUserInput != nil {
+			session["pending_user_input"] = event.PendingUserInput
 		}
-		msg["sealed_payload"] = wire
-	} else {
-		msg["payload"] = inner
+		if event.Capabilities != nil {
+			session["capabilities"] = event.Capabilities
+		}
+		if event.ActiveTurn != nil {
+			session["active_turn"] = event.ActiveTurn
+		} else if event.ClearActiveTurn {
+			session["active_turn"] = nil
+		}
+		inner := map[string]interface{}{"session": session}
+		msg := map[string]interface{}{
+			"protocol_version": protocolVersion, "transport_mode": daemonTransport,
+			"type": "session_update", "device_id": deviceID,
+			"session_id": event.SessionID, "timestamp": ts,
+		}
+		if daemonTransport == "sealed" {
+			if daemonSealedKeys == nil {
+				log.Printf("[daemon] refusing plaintext session_update in sealed mode")
+				return
+			}
+			plain, err := json.Marshal(inner)
+			if err != nil {
+				return
+			}
+			aad := sealed.AADFields{
+				ProtocolVersion: protocolVersion, TransportMode: "sealed", Type: "session_update",
+				DeviceID: deviceID, SessionID: event.SessionID, Timestamp: ts,
+			}
+			sealedPayload, err := daemonSealedKeys.SealSession(event.SessionID, deviceID, "phones", aad, plain)
+			if err != nil {
+				log.Printf("[daemon] seal session_update: %v", err)
+				return
+			}
+			msg["sealed_payload"] = sealedPayload
+		} else {
+			msg["payload"] = inner
+		}
+		if err := client.Send(msg); err != nil {
+			log.Printf("[daemon] send session_update: %v", err)
+		}
 	}
-	if err := client.Send(msg); err != nil {
-		log.Printf("[daemon] send session_update: %v", err)
+	if !sendAttention {
+		return
 	}
 	attention := map[string]interface{}{
-		"protocol_version": "1.1", "transport_mode": daemonTransport,
+		"protocol_version": protocolVersion, "transport_mode": daemonTransport,
 		"type": "attention_event", "device_id": deviceID,
 		"session_id": event.SessionID, "timestamp": ts,
 		"payload": map[string]interface{}{
@@ -1469,6 +1717,12 @@ func sendControlEvent(client *connection.Client, deviceID string, event adapters
 	}
 }
 
+func controlEventWirePlan(event adapters.ControlEvent) (sessionUpdate, attention bool) {
+	sessionUpdate = event.Status != "" || event.PendingApproval != nil || event.PendingUserInput != nil || event.Capabilities != nil || event.ActiveTurn != nil || event.ClearActiveTurn
+	attention = event.EventID != "" && event.Class != ""
+	return sessionUpdate, attention
+}
+
 func sendUserInputResult(client *connection.Client, deviceID, sessionID, requestID, status, message string) {
 	payload := map[string]interface{}{"request_id": requestID, "status": status}
 	if message != "" {
@@ -1478,13 +1732,14 @@ func sendUserInputResult(client *connection.Client, deviceID, sessionID, request
 }
 
 func buildDaemonApplicationMessage(
+	protocolVersion string,
 	deviceID, sessionID, clientMsgID, msgType string,
 	payload map[string]interface{},
 	useCatalog bool,
 ) (map[string]interface{}, error) {
 	ts := time.Now().Unix()
 	msg := map[string]interface{}{
-		"protocol_version": "1.1", "transport_mode": daemonTransport,
+		"protocol_version": protocolVersion, "transport_mode": daemonTransport,
 		"type": msgType, "device_id": deviceID, "timestamp": ts,
 	}
 	if sessionID != "" {
@@ -1505,7 +1760,7 @@ func buildDaemonApplicationMessage(
 		return nil, err
 	}
 	aad := sealed.AADFields{
-		ProtocolVersion: "1.1", TransportMode: "sealed", Type: msgType,
+		ProtocolVersion: protocolVersion, TransportMode: "sealed", Type: msgType,
 		DeviceID: deviceID, SessionID: sessionID, ClientMsgID: clientMsgID, Timestamp: ts,
 	}
 	var wire *sealed.WireSealed
@@ -1527,7 +1782,7 @@ func sendDaemonApplication(
 	payload map[string]interface{},
 	useCatalog bool,
 ) {
-	msg, err := buildDaemonApplicationMessage(deviceID, sessionID, clientMsgID, msgType, payload, useCatalog)
+	msg, err := buildDaemonApplicationMessage(client.ProtocolVersion(), deviceID, sessionID, clientMsgID, msgType, payload, useCatalog)
 	if err != nil {
 		log.Printf("[daemon] build %s: %v", msgType, err)
 		return
@@ -1885,7 +2140,7 @@ func queuedPromptPayloadFromMap(payload map[string]interface{}) (string, []attac
 // records dispatching immediately before the native RPC and accepts only after
 // that RPC positively returns; no exec-resume fallback can cross this boundary.
 func dispatchQueuedPrompt(
-	codex *adapters.CodexAdapter,
+	target adapters.Adapter,
 	journal *promptJournal,
 	accepted *promptAcceptanceCache,
 	client *connection.Client,
@@ -1894,7 +2149,10 @@ func dispatchQueuedPrompt(
 	prompt string,
 	files []attach.LocalFile,
 	attachmentDir string,
-) error {
+	generation uint64,
+	activeTurns *activeTurnRegistry,
+	handleControlEvent func(adapters.ControlEvent),
+) (bool, error) {
 	cleanup := func() {
 		if attachmentDir != "" {
 			if err := os.RemoveAll(attachmentDir); err != nil {
@@ -1904,24 +2162,89 @@ func dispatchQueuedPrompt(
 	}
 	if err := journal.markDispatching(item.SessionID, item.ClientMsgID, item.Prompt); err != nil {
 		cleanup()
-		return fmt.Errorf("persist queued dispatch: %w", err)
+		return false, fmt.Errorf("persist queued dispatch: %w", err)
 	}
-	if err := codex.SendQueuedPrompt(item.SessionID, adapters.PromptRequest{
-		Prompt: prompt, Attachments: files, OnComplete: cleanup,
-	}); err != nil {
+	if activeTurns == nil || !activeTurns.bind(item.SessionID, generation, item.ClientMsgID) {
 		cleanup()
+		if journalErr := journal.rollbackDispatching(item.SessionID, item.ClientMsgID); journalErr != nil {
+			return false, fmt.Errorf("active turn conflict and journal rollback failed: %w", journalErr)
+		}
+		return false, agentexec.ErrSessionBusy
+	}
+	var completeOnce sync.Once
+	onComplete := func() {
+		completeOnce.Do(func() {
+			cleanup()
+			if activeTurns.completeMatching(item.SessionID, generation, item.ClientMsgID) {
+				sendControlEvent(client, deviceID, adapters.ControlEvent{
+					SessionID: item.SessionID, AgentType: adapters.AgentType(item.AgentType), ClearActiveTurn: true,
+				})
+			}
+		})
+	}
+	request := adapters.PromptRequest{
+		Prompt: prompt, Attachments: files, OnComplete: onComplete,
+		Generation: generation, ClientMsgID: item.ClientMsgID, DeferAcceptance: true,
+		OnNativeBound: func(nativeRequestID string) {
+			activeTurns.setNativeRequestID(item.SessionID, generation, item.ClientMsgID, nativeRequestID)
+		},
+	}
+	var sendErr error
+	if codex, ok := target.(*adapters.CodexAdapter); ok {
+		request.DeferAcceptance = false // Codex app-server owns its proven event ordering.
+		sendErr = codex.SendQueuedPrompt(item.SessionID, request)
+	} else {
+		sendErr = target.SendPrompt(item.SessionID, request)
+	}
+	if sendErr != nil {
+		activeTurns.clearMatching(item.SessionID, generation, item.ClientMsgID, "")
+		if errors.Is(sendErr, agentexec.ErrSessionBusy) {
+			cleanup()
+			if journalErr := journal.rollbackDispatching(item.SessionID, item.ClientMsgID); journalErr != nil {
+				return false, fmt.Errorf("pre-boundary busy but journal rollback failed: %w", journalErr)
+			}
+			return false, sendErr
+		}
 		if journalErr := journal.markIndeterminate(item.SessionID, item.ClientMsgID); journalErr != nil {
 			log.Printf("[daemon] mark queued prompt indeterminate: %v", journalErr)
 		}
-		return err
+		// A non-busy controller error cannot prove that the native boundary was
+		// not crossed. Retain attachments and fail closed.
+		return true, sendErr
+	}
+	if binding, ok := activeTurns.current(item.SessionID); ok {
+		sendControlEvent(client, deviceID, adapters.ControlEvent{
+			SessionID: item.SessionID, AgentType: adapters.AgentType(item.AgentType),
+			Status: adapters.StatusRunning, ActiveTurn: binding,
+		})
 	}
 	if err := journal.markAccepted(item.SessionID, item.ClientMsgID); err != nil {
-		return fmt.Errorf("persist queued acceptance: %w", err)
+		if acker, ok := target.(adapters.PromptAcceptanceAcker); ok {
+			acker.AbandonPrompt(item.SessionID, generation)
+		}
+		if activeTurns.abandonAcceptance(item.SessionID, generation, item.ClientMsgID) {
+			sendControlEvent(client, deviceID, adapters.ControlEvent{
+				SessionID: item.SessionID, AgentType: adapters.AgentType(item.AgentType), ClearActiveTurn: true,
+			})
+		}
+		return true, fmt.Errorf("persist queued acceptance: %w", err)
+	}
+	pendingTerminal, completed := activeTurns.accept(item.SessionID, generation, item.ClientMsgID)
+	if completed {
+		sendControlEvent(client, deviceID, adapters.ControlEvent{
+			SessionID: item.SessionID, AgentType: adapters.AgentType(item.AgentType), ClearActiveTurn: true,
+		})
+	}
+	if pendingTerminal != nil && handleControlEvent != nil {
+		handleControlEvent(*pendingTerminal)
+	}
+	if acker, ok := target.(adapters.PromptAcceptanceAcker); ok {
+		acker.AcknowledgePrompt(item.SessionID, generation)
 	}
 	acceptedPrompt := acceptedPrompt{prompt: boundedPromptEcho(item.Prompt)}
 	accepted.add(item.SessionID, item.ClientMsgID, acceptedPrompt)
 	sendPromptAccepted(client, deviceID, item.SessionID, item.ClientMsgID, acceptedPrompt)
-	return nil
+	return true, nil
 }
 
 func sendPromptQueued(client *connection.Client, deviceID, sessionID, clientMsgID string, position int) {
@@ -1944,16 +2267,13 @@ func sendQueueUpdate(client *connection.Client, deviceID, sessionID string, queu
 	wireItems := make([]map[string]interface{}, 0, len(items))
 	paused := false
 	for _, item := range items {
-		if item.Status == promptQueueCancelled {
+		if isPromptQueueTerminal(item.Status) {
 			continue
 		}
-		if item.Status == promptQueuePaused {
+		if isPromptQueueBlocked(item.Status) {
 			paused = true
 		}
 		status := string(item.Status)
-		if item.Status == promptQueueRunning {
-			status = "starting"
-		}
 		wireItems = append(wireItems, map[string]interface{}{
 			"client_msg_id": item.ClientMsgID, "position": queue.position(sessionID, item.ClientMsgID), "status": status,
 		})
@@ -1972,7 +2292,7 @@ func sendPromptAccepted(
 		"client_msg_id": clientMsgID,
 		"prompt":        accepted.prompt,
 	}
-	msg, err := buildDaemonApplicationMessage(deviceID, sessionID, clientMsgID, "prompt_accepted", payload, false)
+	msg, err := buildDaemonApplicationMessage(client.ProtocolVersion(), deviceID, sessionID, clientMsgID, "prompt_accepted", payload, false)
 	if err != nil {
 		return err
 	}
@@ -1995,7 +2315,7 @@ func sendPromptIndeterminate(client *connection.Client, deviceID, sessionID, cli
 
 func sendPromptNotSeen(client *connection.Client, deviceID, sessionID, clientMsgID string) {
 	msg := map[string]interface{}{
-		"protocol_version": "1.1",
+		"protocol_version": client.ProtocolVersion(),
 		"transport_mode":   daemonTransport,
 		"type":             "prompt_not_seen",
 		"device_id":        deviceID,
@@ -2016,7 +2336,7 @@ func sendPromptFailure(
 	deviceID, sessionID, clientMsgID, message, outcome string,
 	retryAllowed bool,
 ) {
-	msg, err := buildDaemonApplicationMessage(deviceID, sessionID, clientMsgID, "prompt_failed", map[string]interface{}{
+	msg, err := buildDaemonApplicationMessage(client.ProtocolVersion(), deviceID, sessionID, clientMsgID, "prompt_failed", map[string]interface{}{
 		"client_msg_id": clientMsgID,
 		"error":         message,
 		"message":       message,
@@ -2037,13 +2357,13 @@ func sendPromptFailure(
 }
 
 func sendThreadResult(client *connection.Client, deviceID, agentType, opID, msgType, threadID string, promptAccepted bool, errMsg string) {
-	msg := buildThreadResultMessage(deviceID, agentType, opID, msgType, threadID, promptAccepted, errMsg)
+	msg := buildThreadResultMessage(client.ProtocolVersion(), deviceID, agentType, opID, msgType, threadID, promptAccepted, errMsg)
 	if err := client.Send(msg); err != nil {
 		log.Printf("[daemon] send %s failed: %v", msgType, err)
 	}
 }
 
-func buildThreadResultMessage(deviceID, agentType, opID, msgType, threadID string, promptAccepted bool, errMsg string) map[string]interface{} {
+func buildThreadResultMessage(protocolVersion, deviceID, agentType, opID, msgType, threadID string, promptAccepted bool, errMsg string) map[string]interface{} {
 	ts := time.Now().Unix()
 	payload := map[string]interface{}{
 		"agent_type":      agentType,
@@ -2061,7 +2381,7 @@ func buildThreadResultMessage(deviceID, agentType, opID, msgType, threadID strin
 		payload["reason"] = errMsg
 	}
 	msg := map[string]interface{}{
-		"protocol_version": "1.1",
+		"protocol_version": protocolVersion,
 		"transport_mode":   daemonTransport,
 		"type":             msgType,
 		"device_id":        deviceID,
@@ -2080,7 +2400,7 @@ func buildThreadResultMessage(deviceID, agentType, opID, msgType, threadID strin
 				degradeSealedThreadResult(msg)
 			} else {
 				aad := sealed.AADFields{
-					ProtocolVersion: "1.1",
+					ProtocolVersion: protocolVersion,
 					TransportMode:   "sealed",
 					Type:            msgType,
 					DeviceID:        deviceID,
@@ -2116,7 +2436,7 @@ func degradeSealedThreadResult(msg map[string]interface{}) {
 func daemonInboundApplicationType(msgType string) bool {
 	switch msgType {
 	case "send_prompt", "approve", "deny", "respond_user_input", "interrupt", "steer",
-		"cancel_prompt", "resume_prompt_queue", "start_thread", "fetch_history":
+		"cancel_prompt", "resume_prompt_queue", "skip_prompt_queue_item", "start_thread", "fetch_history":
 		return true
 	default:
 		return false
@@ -2208,7 +2528,7 @@ func decodeInboundApplicationCommand(deviceID, sessionID string, msg map[string]
 func sendInboundDecodeFailure(client *connection.Client, deviceID, sessionID, msgType string, msg map[string]interface{}, cause error) {
 	clientMsgID, _ := msg["client_msg_id"].(string)
 	switch msgType {
-	case "send_prompt", "cancel_prompt", "resume_prompt_queue":
+	case "send_prompt", "cancel_prompt", "resume_prompt_queue", "skip_prompt_queue_item":
 		sendPromptFailed(client, deviceID, sessionID, clientMsgID, "authenticated command could not be decoded")
 	case "respond_user_input":
 		sendUserInputResult(client, deviceID, sessionID, "", "indeterminate", "authenticated command could not be decoded")
@@ -2230,8 +2550,8 @@ func openSealedCommand(deviceID, sessionID string, msg map[string]interface{}, s
 	if err != nil {
 		return nil, err
 	}
-	var wire sealed.WireSealed
-	if err := json.Unmarshal(raw, &wire); err != nil {
+	var sealedFrame sealed.WireSealed
+	if err := json.Unmarshal(raw, &sealedFrame); err != nil {
 		return nil, err
 	}
 	ts, _ := msg["timestamp"].(float64)
@@ -2241,24 +2561,28 @@ func openSealedCommand(deviceID, sessionID string, msg map[string]interface{}, s
 			clientMsgID, _ = p["client_msg_id"].(string)
 		}
 	}
+	protocolVersion, _ := msg["protocol_version"].(string)
+	if protocolVersion == "" {
+		return nil, errors.New("protocol_version required for sealed AAD")
+	}
 	aad := sealed.AADFields{
-		ProtocolVersion: "1.1",
+		ProtocolVersion: protocolVersion,
 		TransportMode:   "sealed",
 		Type:            messageType,
 		DeviceID:        deviceID,
 		SessionID:       sessionID,
 		ClientMsgID:     clientMsgID,
-		KeyScope:        wire.KeyScope,
-		KeyEpoch:        wire.Epoch,
-		SenderID:        wire.SenderID,
-		Sequence:        wire.Sequence,
+		KeyScope:        sealedFrame.KeyScope,
+		KeyEpoch:        sealedFrame.Epoch,
+		SenderID:        sealedFrame.SenderID,
+		Sequence:        sealedFrame.Sequence,
 		Timestamp:       int64(ts),
 	}
 	var pt []byte
-	if wire.KeyScope == "session" {
-		pt, err = daemonSealedKeys.OpenSession(sessionID, &wire, aad)
+	if sealedFrame.KeyScope == "session" {
+		pt, err = daemonSealedKeys.OpenSession(sessionID, &sealedFrame, aad)
 	} else {
-		pt, err = daemonSealedKeys.OpenCatalog(&wire, aad)
+		pt, err = daemonSealedKeys.OpenCatalog(&sealedFrame, aad)
 	}
 	if err != nil {
 		return nil, err
@@ -2438,7 +2762,7 @@ func sendDaemonError(client *connection.Client, deviceID, sessionID, message str
 		return
 	}
 	msg := map[string]interface{}{
-		"protocol_version": "1.1",
+		"protocol_version": client.ProtocolVersion(),
 		"transport_mode":   daemonTransport,
 		"type":             "error",
 		"device_id":        deviceID,
