@@ -11,7 +11,12 @@ export default async function globalSetup() {
         host: '127.0.0.1',
         // Windows has reserved the default Vite 5173 range on this host.
         port: 4173,
-        strictPort: true
+        strictPort: true,
+        proxy: {
+          '/health': {
+            target: process.env.NEKONEST_DEV_API
+          }
+        }
       }
     })
     await vite.listen()

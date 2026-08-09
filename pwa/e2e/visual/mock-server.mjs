@@ -9,6 +9,7 @@ import {
   MAIN_SESSION_ID,
   NATIVE_THREAD_ID,
   SCENARIO_NAMES,
+  START_CAPABILITIES,
   devicesFor,
   messagesFor,
   scenarioBehavior,
@@ -63,6 +64,16 @@ const server = createServer(async (request, response) => {
     return
   }
 
+  if (url.pathname === '/health') {
+    sendJSON(response, 200, {
+      status: 'ok',
+      transport_mode: 'open',
+      server_version: APP_VERSION,
+      protocol_version: '1.0'
+    })
+    return
+  }
+
   if (url.pathname === '/__e2e/scenario' && request.method === 'POST') {
     try {
       const body = await readJSON(request)
@@ -101,7 +112,7 @@ const server = createServer(async (request, response) => {
       sendJSON(response, state.behavior.sessionsStatus, { error: 'visual fixture error' })
       return
     }
-    sendJSON(response, 200, { sessions: state.sessions })
+    sendJSON(response, 200, { sessions: state.sessions, start_capabilities: START_CAPABILITIES })
     return
   }
 
@@ -238,7 +249,7 @@ webSockets.on('connection', socket => {
       sendFrame(socket, {
         type: 'session_list',
         device_id: deviceId,
-        payload: { sessions: state.sessions }
+        payload: { sessions: state.sessions, start_capabilities: START_CAPABILITIES }
       })
       if (state.name === 'session-streaming') {
         setTimeout(() => {

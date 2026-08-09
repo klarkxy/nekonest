@@ -100,21 +100,39 @@ test.describe('390px primary visual matrix', () => {
     await capture(page, 'device-full-tree.png')
   })
 
-  test('device project tools survive collapse and start a local draft', async ({ page, request }) => {
+  test('device harness controls survive collapse and start the matching local draft', async ({ page, request }) => {
     await openScenario(page, request, 'device-full', devicePath)
     const project = page.locator('.project-group').filter({ hasText: 'nekonest' }).first()
     const projectHeader = project.locator('.project-header')
-    const startPicker = project.getByLabel('在 nekonest 新建线团')
+    const codexStart = project.getByRole('button', { name: '使用 Codex 在“nekonest”里新建线团' })
+    const claudeStart = project.getByRole('button', { name: '使用 Claude Code 在“nekonest”里新建线团' })
+    const kimiStart = project.getByRole('button', { name: '使用 Kimi CLI 在“nekonest”里新建线团' })
+    const kiloStart = project.getByRole('button', { name: /Kilo：不可用/ })
 
-    await expect(startPicker).toBeVisible()
+    await expect(codexStart).toBeVisible()
+    await expect(claudeStart).toBeVisible()
+    await expect(kimiStart).toBeVisible()
+    await expect(
+      project.locator('.agent-group').filter({ hasText: 'Kimi CLI' }).getByText('0 条线团')
+    ).toBeVisible()
+    await expect(kiloStart).toBeVisible()
+    await expect(kiloStart).toBeDisabled()
+    await expect(project.getByText('ACP starter probe failed', { exact: true })).toBeVisible()
+
+    await page.getByLabel('猫娘', { exact: true }).selectOption('kimi_cli')
+    await expect(page.locator('.project-group')).toHaveCount(2)
+    await expect(page.locator('.project-group').filter({ hasText: 'nekonest' })).toContainText('0 条线团')
+    await expect(page.locator('.project-group').filter({ hasText: 'mobile-demo' })).toContainText('Kimi CLI')
+    await page.getByLabel('猫娘', { exact: true }).selectOption('')
+
     await projectHeader.click()
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'false')
-    await expect(startPicker).toBeHidden()
+    await expect(codexStart).toBeHidden()
     await projectHeader.click()
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'true')
-    await expect(startPicker).toBeVisible()
+    await expect(codexStart).toBeVisible()
 
-    await startPicker.selectOption('codex')
+    await codexStart.click()
     await expect(page).toHaveURL(/\/session\/local_draft_/)
   })
 
@@ -162,7 +180,8 @@ test.describe('390px primary visual matrix', () => {
     })
     await projectHeader.click()
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'false')
-    await expect(projectAction).toBeHidden()
+    await expect(projectAction).toBeVisible()
+    await expect(archivedProject.locator('.project-body')).toBeHidden()
     await capture(page, 'device-collapsed.png')
   })
 

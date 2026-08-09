@@ -70,6 +70,7 @@ export async function seedApp(page: Page, options: SeedOptions = {}) {
   await page.addInitScript(({ authenticated, bindings, locale, theme, localThread, fixedNow }) => {
     localStorage.clear()
     sessionStorage.clear()
+    localStorage.setItem(`nekonest_open_transport_consent:${location.origin}`, 'confirmed')
     localStorage.setItem('nekonest_locale', locale)
     localStorage.setItem('nekonest_theme', theme)
     if (authenticated) {

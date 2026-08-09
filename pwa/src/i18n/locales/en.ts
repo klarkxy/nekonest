@@ -185,7 +185,12 @@ export default {
     newThreadPickerAria: 'Create a new thread in {project}',
     newThreadForAgent: 'New {agent} thread',
     newThreadUnavailable: '{agent}: unavailable — {reason}',
-    startUnavailableDefault: 'not available on this device',
+    newThreadAction: 'New',
+    newThreadTitle: 'New {agent} thread in “{project}”',
+    newThreadAria: 'Start a new {agent} thread in “{project}”',
+    startOffline: 'the host is offline',
+    startCatalogUnavailable: 'the host has not reported start support for this harness',
+    startUnavailableDefault: 'this harness has no available native starter',
     draftBadge: 'Draft',
     draftSummary: 'Unsent new thread'
   },

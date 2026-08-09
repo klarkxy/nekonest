@@ -62,6 +62,14 @@ const compatibilityCapabilities = {
   attachment_mode: 'path_best_effort'
 }
 
+export const START_CAPABILITIES = [
+  { agent_type: 'claude_code', available: true, spawn: true },
+  { agent_type: 'codex', available: true, spawn: true },
+  { agent_type: 'kilo', available: false, spawn: false, reason: 'ACP starter probe failed' },
+  { agent_type: 'kimi_cli', available: true, spawn: true },
+  { agent_type: 'grok_build', available: false, spawn: false, reason: 'CLI missing' }
+]
+
 export function devicesFor(name) {
   if (name === 'devices-empty') return []
   const offline = name === 'device-offline'

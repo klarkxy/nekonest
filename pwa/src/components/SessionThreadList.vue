@@ -80,6 +80,26 @@
             </svg>
           </span>
         </button>
+        <button
+          type="button"
+          class="archive-btn project-archive-btn"
+          :class="{ on: isProjectArchived(project) }"
+          :title="isProjectArchived(project) ? t('threadList.unarchiveProjectTitle') : t('threadList.archiveProjectTitle')"
+          :aria-label="isProjectArchived(project)
+            ? t('threadList.unarchiveProjectAria', { project: project.label })
+            : t('threadList.archiveProjectAria', { project: project.label })"
+          @click.stop="toggleProjectArchive(project)"
+        >
+          <svg v-if="isProjectArchived(project)" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 9H4.5V5.5M4.8 9A7.5 7.5 0 1 1 6.7 17.4" />
+            <path d="m4.8 9 3-3" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4.5 8.5h15v10a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-10Z" />
+            <path d="M8 8.5V5h8v3.5M9 13h6" />
+          </svg>
+          <span class="sr-only">{{ isProjectArchived(project) ? t('threadList.unarchive') : t('threadList.archive') }}</span>
+        </button>
       </div>
 
       <div
@@ -87,54 +107,7 @@
         :id="projectPanelId(project.key)"
         class="project-body"
       >
-        <div class="project-tools">
-          <button
-            type="button"
-            class="archive-btn project-archive-btn"
-            :class="{ on: isProjectArchived(project) }"
-            :title="isProjectArchived(project) ? t('threadList.unarchiveProjectTitle') : t('threadList.archiveProjectTitle')"
-            :aria-label="isProjectArchived(project)
-              ? t('threadList.unarchiveProjectAria', { project: project.label })
-              : t('threadList.archiveProjectAria', { project: project.label })"
-            @click.stop="toggleProjectArchive(project)"
-          >
-            <svg v-if="isProjectArchived(project)" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 9H4.5V5.5M4.8 9A7.5 7.5 0 1 1 6.7 17.4" />
-              <path d="m4.8 9 3-3" />
-            </svg>
-            <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4.5 8.5h15v10a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-10Z" />
-              <path d="M8 8.5V5h8v3.5M9 13h6" />
-            </svg>
-            <span class="sr-only">{{ isProjectArchived(project) ? t('threadList.unarchive') : t('threadList.archive') }}</span>
-          </button>
-          <label
-            v-if="projectStartOptions(project).length"
-            class="project-start-picker"
-          >
-            <span class="sr-only">{{ t('threadList.newThreadPickerAria', { project: project.label }) }}</span>
-            <select
-              :aria-label="t('threadList.newThreadPickerAria', { project: project.label })"
-              :disabled="!deviceOnline"
-              @change="onNewThread(project, $event)"
-            >
-              <option value="">{{ t('threadList.newThreadPicker') }}</option>
-              <option
-                v-for="option in projectStartOptions(project)"
-                :key="option.agentType"
-                :value="option.agentType"
-                :disabled="!option.enabled"
-              >{{ option.enabled
-                ? t('threadList.newThreadForAgent', { agent: option.label })
-                : t('threadList.newThreadUnavailable', {
-                  agent: option.label,
-                  reason: option.reason || t('threadList.startUnavailableDefault')
-                })
-              }}</option>
-            </select>
-          </label>
-        </div>
-          <section
+        <section
           v-for="agent in project.agents"
           :key="agent.key"
           class="agent-group"
@@ -146,22 +119,48 @@
               :id="agentHeadingId(agent.key)"
               type="button"
               class="agent-header"
-              :aria-expanded="!prefs.isCollapsed(agentNodeKey(project.key, agent.type))"
-              :aria-controls="agentPanelId(agent.key)"
-              @click="prefs.toggleCollapse(agentNodeKey(project.key, agent.type))"
+              :aria-expanded="agent.sessions.length
+                ? !prefs.isCollapsed(agentNodeKey(project.key, agent.type))
+                : undefined"
+              :aria-controls="agent.sessions.length ? agentPanelId(agent.key) : undefined"
+              :disabled="agent.sessions.length === 0"
+              @click="agent.sessions.length && prefs.toggleCollapse(agentNodeKey(project.key, agent.type))"
             >
-              <span class="agent-mark" aria-hidden="true"></span>
+              <img
+                class="agent-avatar"
+                :src="agent.avatar"
+                alt=""
+                width="42"
+                height="42"
+                @error="onAvatarError"
+              />
               <span class="agent-copy">
                 <span class="agent-title">{{ agent.label }}</span>
+                <span
+                  class="agent-subtitle"
+                  :class="{ 'agent-subtitle--unavailable': agentStartUnavailable(project, agent) }"
+                >{{ agentSubtitle(project, agent) }}</span>
               </span>
-              <span class="agent-count">{{ agent.sessions.length }}</span>
-              <span class="agent-chevron" aria-hidden="true">
+              <span v-if="agent.sessions.length" class="agent-chevron" aria-hidden="true">
                 {{ prefs.isCollapsed(agentNodeKey(project.key, agent.type)) ? '▸' : '▾' }}
               </span>
+            </button>
+            <button
+              v-if="agentStartOption(project, agent)"
+              type="button"
+              class="agent-add-btn"
+              :disabled="!deviceOnline || !agentStartOption(project, agent)?.enabled"
+              :title="agentStartTitle(project, agent)"
+              :aria-label="agentStartAria(project, agent)"
+              @click.stop="onNewThread(project, agent.type)"
+            >
+              <span aria-hidden="true">＋</span>
+              {{ t('threadList.newThreadAction') }}
             </button>
           </div>
 
           <div
+            v-if="agent.sessions.length"
             v-show="!prefs.isCollapsed(agentNodeKey(project.key, agent.type))"
             :id="agentPanelId(agent.key)"
             class="agent-body"
@@ -237,6 +236,12 @@
 import { computed, ref, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink, useRouter } from 'vue-router'
+import {
+  KNOWN_AGENT_TYPES,
+  UNKNOWN_AGENT_META,
+  agentOrder,
+  getAgentMeta
+} from '@/config/agents'
 import { sessionDetailLocation } from '@/router/navigation'
 import { useSessionPrefsStore } from '@/stores/sessionPrefs'
 import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
@@ -295,9 +300,8 @@ const agentOptions = computed(() => {
 const visibleProjects = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   const agent = agentFilter.value
-  const filtered = mergedSessions.value.filter(session => {
+  const visibleSessions = mergedSessions.value.filter(session => {
     if (!prefs.showArchived && prefs.isArchived(session.id)) return false
-    if (agent && String(session.agent_type || '').trim() !== agent) return false
     if (!q) return true
     // Agent filtering is the top select; search is for thread/folder text only.
     const hay = [
@@ -311,11 +315,62 @@ const visibleProjects = computed(() => {
       .toLowerCase()
     return hay.includes(q)
   })
+  const filtered = visibleSessions.filter(session => {
+    return !agent || String(session.agent_type || '').trim() === agent
+  })
   // Product rule: always recent activity first (no manual reorder).
-  return buildSessionTree(filtered, list => sortSessionsByMode(list, 'recent'))
+  const projects = buildSessionTree(filtered, list => sortSessionsByMode(list, 'recent'))
+  if (!agent) return addStartHarnesses(projects)
+
+  // Keep a searched/filter-matching discovered directory available when the
+  // selected harness has no thread there yet but is advertised as startable.
+  const existing = new Set(projects.map(project => project.key))
+  const baseProjects = buildSessionTree(visibleSessions)
+  const baseOrder = new Map(baseProjects.map((project, index) => [project.key, index]))
+  for (const project of baseProjects) {
+    if (existing.has(project.key)) continue
+    if (q && ![project.label, project.path, project.key].some(value => value.toLowerCase().includes(q))) {
+      continue
+    }
+    projects.push({ ...project, sessionCount: 0, agents: [] })
+  }
+  return addStartHarnesses(projects)
+    .filter(project => project.agents.length > 0)
+    .sort((a, b) => (baseOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER)
+      - (baseOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER))
 })
 
 type ProjectStartOption = { agentType: AgentType; label: string; enabled: boolean; reason?: string }
+
+function addStartHarnesses(projects: SessionTreeProject[]): SessionTreeProject[] {
+  return projects.map(project => {
+    const existing = new Set(project.agents.map(agent => agent.type))
+    const additions = projectStartOptions(project)
+      .filter(option => option.enabled && !existing.has(option.agentType))
+      .filter(option => !agentFilter.value || option.agentType === agentFilter.value)
+      .map<SessionTreeAgent>(option => {
+        const meta = getAgentMeta(option.agentType)
+        return {
+          key: `${project.key}::${option.agentType}`,
+          type: option.agentType,
+          label: meta.label,
+          avatar: meta.avatar,
+          color: meta.color,
+          softColor: meta.softColor,
+          lastActivity: project.lastActivity,
+          sessions: []
+        }
+      })
+    if (additions.length === 0) return project
+    return {
+      ...project,
+      agents: [...project.agents, ...additions].sort((a, b) => {
+        const order = agentOrder(a.type) - agentOrder(b.type)
+        return order || a.label.localeCompare(b.label)
+      })
+    }
+  })
+}
 
 function projectStartOptions(project: SessionTreeProject): ProjectStartOption[] {
   // A new native thread may only target a path already discovered by the daemon.
@@ -329,10 +384,64 @@ function projectStartOptions(project: SessionTreeProject): ProjectStartOption[] 
     .map(option => ({ ...option, label: agentLabel(option.agentType) }))
 }
 
-function onNewThread(project: SessionTreeProject, event: Event) {
-  const select = event.target as HTMLSelectElement
-  const agentType = select.value as AgentType
-  select.value = ''
+function agentStartOption(
+  project: SessionTreeProject,
+  agent: SessionTreeAgent
+): ProjectStartOption | null {
+  if (!KNOWN_AGENT_TYPES.some(agentType => agentType === agent.type)) return null
+  const advertised = projectStartOptions(project)
+    .find(option => option.agentType === agent.type)
+  if (advertised) return advertised
+
+  // Older daemons omit the device-level catalog. Keep the control attached to
+  // its harness, but fail closed and explain why it cannot start yet.
+  const path = (project.path || '').trim()
+  if (!path || project.uncategorized) return null
+  if (!props.sessions.some(session => projectKeyFromDir(session.project_dir) === project.key)) {
+    return null
+  }
+  return {
+    agentType: agent.type,
+    label: agent.label,
+    enabled: false,
+    reason: t('threadList.startCatalogUnavailable')
+  }
+}
+
+function agentStartReason(project: SessionTreeProject, agent: SessionTreeAgent): string {
+  if (!deviceOnline.value) return t('threadList.startOffline')
+  return agentStartOption(project, agent)?.reason || t('threadList.startUnavailableDefault')
+}
+
+function agentStartUnavailable(project: SessionTreeProject, agent: SessionTreeAgent): boolean {
+  const option = agentStartOption(project, agent)
+  return Boolean(option && (!deviceOnline.value || !option.enabled))
+}
+
+function agentSubtitle(project: SessionTreeProject, agent: SessionTreeAgent): string {
+  return agentStartUnavailable(project, agent)
+    ? agentStartReason(project, agent)
+    : t('threadList.agentThreads', { n: agent.sessions.length })
+}
+
+function agentStartTitle(project: SessionTreeProject, agent: SessionTreeAgent): string {
+  const option = agentStartOption(project, agent)
+  return option?.enabled && deviceOnline.value
+    ? t('threadList.newThreadTitle', { agent: agent.label, project: project.label })
+    : t('threadList.newThreadUnavailable', {
+        agent: agent.label,
+        reason: agentStartReason(project, agent)
+      })
+}
+
+function agentStartAria(project: SessionTreeProject, agent: SessionTreeAgent): string {
+  const option = agentStartOption(project, agent)
+  return option?.enabled && deviceOnline.value
+    ? t('threadList.newThreadAria', { agent: agent.label, project: project.label })
+    : agentStartTitle(project, agent)
+}
+
+function onNewThread(project: SessionTreeProject, agentType: AgentType) {
   const path = (project.path || '').trim()
   if (!path || !deviceOnline.value || !projectStartOptions(project).some(
     option => option.agentType === agentType && option.enabled
@@ -394,6 +503,16 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
     '--agent-color': agent.color,
     '--agent-soft-color': agent.softColor
   } as CSSProperties
+}
+
+function onAvatarError(event: Event) {
+  const image = event.currentTarget as HTMLImageElement
+  if (image.dataset.fallbackApplied === '1') {
+    image.hidden = true
+    return
+  }
+  image.dataset.fallbackApplied = '1'
+  image.src = UNKNOWN_AGENT_META.avatar
 }
 
 </script>
@@ -492,6 +611,11 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
 }
 
 .project-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding-right: 8px;
   background: var(--neko-surface-solid);
 }
 
@@ -512,41 +636,13 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
   transition: background-color 180ms ease, transform 160ms ease;
 }
 
-.project-tools {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--neko-line);
-}
-
-.project-tools .project-archive-btn {
+.project-archive-btn {
   flex: 0 0 auto;
-}
-
-.project-start-picker {
-  min-width: 0;
-  flex: 1;
-}
-
-.project-start-picker select {
-  width: 100%;
-  min-height: 44px;
-  border: 1px solid var(--neko-line);
-  border-radius: 9px;
-  background: var(--neko-surface-muted);
-  color: var(--neko-ink-soft);
-  padding: 0 10px;
-  font: inherit;
-  font-size: 12px;
-}
-
-.project-start-picker select:disabled {
-  opacity: 0.55;
 }
 
 .project-header:focus-visible,
 .agent-header:focus-visible,
+.agent-add-btn:focus-visible,
 .session-main:focus-visible,
 .archive-btn:focus-visible {
   outline: 2px solid var(--neko-primary);
@@ -632,7 +728,7 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
 }
 
 .project-body {
-  padding: 0 12px 8px;
+  padding: 3px 12px 8px;
   border-top: 1px solid var(--neko-line);
 }
 
@@ -644,7 +740,12 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  min-height: 58px;
+  padding: 4px 0;
+  border-radius: 13px;
+  background:
+    radial-gradient(circle at 8% 50%, var(--agent-soft-color), transparent 62%);
 }
 
 .agent-header {
@@ -652,15 +753,19 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
   width: 100%;
   min-width: 0;
   align-items: center;
-  gap: 8px;
-  min-height: 42px;
-  padding: 7px 2px;
+  gap: 10px;
+  min-height: 50px;
+  padding: 4px 2px;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
   font: inherit;
   text-align: left;
+}
+
+.agent-header:disabled {
+  cursor: default;
 }
 
 .session-item.draft {
@@ -679,15 +784,24 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
   vertical-align: middle;
 }
 
-.agent-mark {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
-  border-radius: 50%;
-  background: var(--agent-color);
+.agent-avatar {
+  display: block;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border: 2px solid color-mix(in srgb, var(--agent-color) 52%, var(--neko-surface-solid));
+  border-radius: 14px 14px 17px 10px;
+  background: var(--agent-soft-color);
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--agent-color) 20%, transparent);
+  object-fit: cover;
 }
 
-.agent-copy { flex: 1; }
+.agent-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
 
 .agent-title {
   color: var(--neko-ink);
@@ -695,15 +809,54 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
   font-weight: 650;
 }
 
-.agent-count {
-  min-width: 20px;
-  padding: 2px 6px;
-  border-radius: 6px;
-  color: var(--neko-ink-faint);
-  background: var(--neko-surface-muted);
+.agent-subtitle {
+  margin-top: 1px;
+  color: color-mix(in srgb, var(--agent-color) 58%, var(--neko-ink-soft));
   font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.agent-subtitle--unavailable {
+  overflow: hidden;
+  max-width: 11rem;
+  color: var(--neko-danger-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-add-btn {
+  display: inline-flex;
+  min-width: 66px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--agent-color) 40%, var(--neko-line));
+  border-radius: 12px 12px 15px 9px;
+  color: color-mix(in srgb, var(--agent-color) 76%, var(--neko-ink));
+  background: color-mix(in srgb, var(--agent-soft-color) 72%, var(--neko-surface-solid));
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--agent-color) 12%, transparent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 160ms ease, filter 180ms ease, opacity 180ms ease;
+}
+
+.agent-add-btn > span {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.agent-add-btn:disabled {
+  border-style: dashed;
+  box-shadow: none;
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .agent-body {
@@ -843,10 +996,15 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
   .session-main:hover {
     background: color-mix(in srgb, var(--agent-color) 12%, transparent);
   }
+
+  .agent-add-btn:not(:disabled):hover {
+    filter: saturate(1.08) brightness(0.98);
+  }
 }
 
 .project-header:active,
 .agent-header:active,
+.agent-add-btn:not(:disabled):active,
 .session-main:active,
 .archive-btn:active {
   transform: scale(0.985);
@@ -854,6 +1012,7 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
 
 @media (prefers-reduced-motion: reduce) {
   .project-header,
+  .agent-add-btn,
   .archive-btn,
   .chevron {
     transition: none;
@@ -861,6 +1020,7 @@ function agentStyle(agent: SessionTreeAgent): CSSProperties {
 
   .project-header:active,
   .agent-header:active,
+  .agent-add-btn:not(:disabled):active,
   .session-main:active,
   .archive-btn:active {
     transform: none;
