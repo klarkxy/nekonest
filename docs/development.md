@@ -152,6 +152,30 @@ codegraph sync
 codegraph status
 ```
 
+### Live acceptance after local verification
+
+Local tests are a preflight, not final proof, when behavior depends on the real
+VPS, reverse proxy, PWA service worker/cache, outbound daemon connection, native
+agent stores, reconnect timing, or runtime CPU/I/O/memory. For the maintained
+live nest, the default completion path is:
+
+1. Pass the local module suites and review the final diff.
+2. Merge and push the approved commit; build all deployable artifacts from that
+   exact commit, not from a dirty worktree.
+3. Inspect the live service/process configuration instead of assuming the sample
+   user, port, path, or launcher in the docs.
+4. Verify artifact hashes, preserve Server/PWA and daemon rollback copies, then
+   update both sides.
+5. Run the applicable [live E2E smoke](./e2e-smoke.md), including public health,
+   daemon reconnect, current PWA asset/version, and the changed user workflow.
+6. For discovery, scheduling, reconnect, process-control, or cache changes, also
+   collect a representative post-deploy runtime sample and check that memory and
+   handles do not grow continuously.
+
+Skip deployment only when the task is explicitly scoped as local-only / no-deploy
+or the operator has not authorized access to the target environment. Deployment
+does not imply a tag or GitHub Release.
+
 ## PWA i18n and theme
 
 - Locales: `pwa/src/i18n/locales/zh-CN.ts` (default) and `en.ts` — keep key sets identical (`pnpm test` includes parity check).

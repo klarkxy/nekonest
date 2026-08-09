@@ -4,6 +4,14 @@
 
 Acceptance path after deploy or deploy-sensitive changes. Product target: [v1-product.md](./v1-product.md). Release cut: [release.md](./release.md). Migration: [migration-v1.md](./migration-v1.md).
 
+Run this checklist against the **updated live build**, not only a local mock or
+pre-deploy binary. For runtime-affecting maintenance of the maintained nest,
+deployment plus the relevant checks below is the default final acceptance unless
+the task explicitly says local-only / no-deploy. Record the exact commit and
+artifact hashes, preserve rollback copies before replacement, and include public
+health, daemon reconnect, and the changed user workflow in the evidence. A deploy
+does not by itself authorize a tag or GitHub Release.
+
 ## Modes
 
 | Mode | Env | When |

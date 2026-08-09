@@ -117,12 +117,19 @@ Add-MpPreference -ExclusionProcess "nekonest-daemon.exe"
 
 ## 6. 升级
 
-1. 编译新的 `nekonest-daemon.exe`。  
-2. 停止正在运行的 daemon。  
-3. 替换 exe。  
-4. **保留** `%USERPROFILE%\.nekonest\config.json`（及 journal/lock 旁系文件）。  
-5. 再启动；在手机上确认 online。  
-6. 冒烟：[e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md)。  
+1. 合并/推送已批准改动，并从这个确切提交构建新的 `nekonest-daemon.exe`；记录
+   SHA-256 并核验 `-version`。
+2. 读取正在运行进程的真实路径、命令行/配置路径以及启动器或计划任务；不得假定文档
+   示例路径或默认 profile 就是现状。
+3. 确认只有一个 daemon 占用该配置，停止这个 PID；放入新二进制前，把旧 EXE 移到
+   唯一回滚文件名。
+4. **保持**实际 `config.json`、prompt journal、lock 同目录文件和原生 agent 存储不变；
+   替换前后比较配置哈希。
+5. 通过原有启动器启动；若新进程不能持续运行，恢复回滚 EXE 并用同一启动器重启。
+6. 确认新 PID、部署哈希、出站 WSS 连接、Server 侧 daemon 重连及手机端**在线**，
+   再跑 [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md)。
+7. 若改动涉及发现/缓存/调度，须跨多个发现周期采样 CPU、原生存储读取吞吐、工作集与
+   句柄，并与部署前基线比较，不能只凭构建或测试成功验收。
 
 更改 `device_id` / `token` 需重新注册（新凭据）并重启进程；热更不会在进程中途切换身份。
 

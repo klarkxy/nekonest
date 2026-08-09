@@ -308,5 +308,14 @@ Use `docs/e2e-smoke.md` for deployment-sensitive changes. The root `Makefile`
 is a Unix-oriented convenience; on Windows, prefer the explicit module commands
 above.
 
+For changes whose acceptance depends on the real VPS, PWA service-worker/cache,
+host daemon, native agent stores, reconnect behavior, or runtime resource use,
+local suites are preflight rather than final acceptance. Unless the user
+explicitly scopes the work to local-only / no-deploy, finish the maintained live
+nest path: merge and push the approved commit, build from that exact commit,
+preserve rollback copies, update Server/PWA and the current host daemon, then run
+the applicable live checks in `docs/e2e-smoke.md`. Do not infer permission to tag
+or publish a GitHub Release from this deployment default.
+
 In the final handoff, state which files changed, which verification commands
 passed, and any checks that could not be run.

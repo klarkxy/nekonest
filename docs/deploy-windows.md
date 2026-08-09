@@ -117,12 +117,21 @@ Attachment limits: max **5** files, **4 MB** each; see [configuration.md](./conf
 
 ## 6. Upgrade
 
-1. Build a new `nekonest-daemon.exe`.  
-2. Stop the running daemon.  
-3. Replace the exe.  
-4. **Keep** `%USERPROFILE%\.nekonest\config.json` (and journal/lock siblings).  
-5. Start again; confirm online on the phone.  
-6. Smoke: [e2e-smoke.md](./e2e-smoke.md).
+1. Merge/push the approved change and build a new `nekonest-daemon.exe` from
+   that exact commit. Record its SHA-256 and verify `-version`.
+2. Inspect the actual running process path, command line/config path, and launcher
+   or scheduled task. Do not assume the example path or default profile.
+3. Verify exactly one daemon owns that config, stop that PID, and move the old
+   executable to a unique rollback filename before placing the new binary.
+4. **Keep** the active `config.json`, prompt journal, lock siblings, and native
+   agent stores unchanged; compare the config hash before and after replacement.
+5. Start through the existing launcher. If the new process does not remain alive,
+   restore the rollback executable and start it through the same launcher.
+6. Confirm a new PID, deployed hash, outbound WSS connection, Server-side daemon
+   reconnect, and phone **online** state. Run [e2e-smoke.md](./e2e-smoke.md).
+7. For discovery/cache/scheduler changes, sample CPU, native-store read throughput,
+   working set, and handles across multiple discovery cycles; compare with the
+   pre-deploy baseline rather than relying on build/test success.
 
 Changing `device_id` / `token` requires re-register (new credentials) and a process restart; hot-reload does not swap identity mid-process.
 

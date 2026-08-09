@@ -59,13 +59,28 @@ gh release create vX.Y.Z --title "vX.Y.Z" --notes-file release-notes.md
 
 v0.x defaults to **source + build instructions**; prebuilt binaries are optional, not required. Release notes should link README quick start and deploy docs (EN + ZH).
 
-## 4. Optional: production update
+## 4. Production update and live acceptance
 
 A tag is not a deploy.
 
-1. Rebuild server + PWA; deploy to VPS; preserve `data/`  
-2. Rebuild daemon on Windows; replace exe; preserve `%USERPROFILE%\.nekonest\config.json`  
-3. Run [e2e-smoke.md](./e2e-smoke.md) again  
+For source-only releases, production deployment may still be omitted deliberately.
+For runtime-affecting maintenance of the configured live nest, however, local
+tests are not final acceptance unless the task was explicitly scoped local-only.
+
+1. Merge and push the approved commit; rebuild Server, PWA, and daemon from that
+   exact commit.
+2. Inspect the live systemd unit and daemon process/launcher before changing
+   files; sample values in deploy docs are not authoritative for an existing host.
+3. Verify artifact hashes and create rollback copies. Preserve `/opt/nekonest/data`,
+   Server environment files, and `%USERPROFILE%\.nekonest\config.json`.
+4. Update Server/PWA and the Windows daemon, then confirm public health, systemd
+   stability, daemon reconnect, and current PWA asset/version.
+5. Run the changed workflow through [e2e-smoke.md](./e2e-smoke.md). Capture
+   post-deploy CPU/I/O/memory/handle evidence when runtime load was part of the fix.
+
+Deployment does not authorize a tag, GitHub Release, or unrelated production
+change. Report the deployed commit, rollback locations, and any check that could
+not be completed.
 
 ## Do not
 

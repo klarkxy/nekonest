@@ -158,11 +158,22 @@ server {
 
 ## 6. Upgrade
 
-1. Build new `nekonest-server` and `pwa/dist` from a release tag or `main`.
-2. Replace binary and `pwa-dist/` on the VPS.
-3. **Preserve** `/opt/nekonest/data` (SQLite + attachments).
-4. `sudo systemctl restart nekonest`
-5. Re-run smoke checks.
+1. Merge/push the approved change and build `nekonest-server` plus `pwa/dist`
+   from that exact commit. Record local SHA-256 hashes.
+2. Read the live unit before assuming paths or identity:
+   `systemctl show nekonest -p ExecStart -p WorkingDirectory -p User -p Group`.
+   Existing installs may use a different user or port than the example above.
+3. Upload to a unique staging directory, verify remote SHA-256 hashes and archive
+   integrity, and prepare unique new/rollback paths. Refuse to overwrite an
+   existing rollback path.
+4. Preserve `/opt/nekonest/data`, environment files, and attachments. Move the
+   current Server/PWA into the rollback directory before switching the staged
+   files into place.
+5. Restart `nekonest`; if restart or the live unit's loopback health endpoint
+   fails, restore both Server and PWA from the rollback directory and restart.
+6. Verify loopback and public `/health`, `systemctl is-active`, `NRestarts`, the
+   deployed hashes, current PWA asset/version, and daemon reconnect. Then run the
+   applicable [E2E smoke](./e2e-smoke.md).
 
 Tags are not auto-deployed; production updates are operator-driven ([release.md](./release.md)).
 

@@ -158,11 +158,19 @@ server {
 
 ## 6. 升级
 
-1. 从 release tag 或 `main` 重新编译 `nekonest-server` 与 `pwa/dist`。  
-2. 在 VPS 替换二进制与 `pwa-dist/`。  
-3. **保留** `/opt/nekonest/data`（SQLite + 附件）。  
-4. `sudo systemctl restart nekonest`  
-5. 再跑冒烟检查。  
+1. 合并/推送已批准改动，并从这个确切提交构建 `nekonest-server` 与 `pwa/dist`；
+   记录本地 SHA-256。
+2. 不得先假定路径或运行身份；先读取线上 unit：
+   `systemctl show nekonest -p ExecStart -p WorkingDirectory -p User -p Group`。
+   已有安装可能使用不同于上方示例的用户或端口。
+3. 上传到唯一暂存目录，核对远端 SHA-256 与归档完整性，并准备唯一的新路径/回滚路径；
+   若回滚路径已存在则拒绝覆盖。
+4. 保留 `/opt/nekonest/data`、环境文件和附件；切换暂存文件前，把现有 Server/PWA
+   移入回滚目录。
+5. 重启 `nekonest`；若重启或线上 unit 实际 loopback 健康端点失败，同时恢复回滚目录
+   中的 Server 与 PWA 并再次启动。
+6. 核验 loopback 与公网 `/health`、`systemctl is-active`、`NRestarts`、部署哈希、
+   当前 PWA 资源/版本和 daemon 重连，再跑适用的 [E2E 冒烟](./e2e-smoke.zh-CN.md)。
 
 标签不会自动部署；生产更新由运维执行（[release.zh-CN.md](./release.zh-CN.md)）。
 
