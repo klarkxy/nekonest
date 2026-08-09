@@ -11,6 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,39 +24,77 @@ import (
 )
 
 // CodexAppServer is a long-lived stdio JSON-RPC client for codex app-server.
-// Protocol baseline: codex-cli 0.144.x (initialize -> thread/start -> turn/start).
+// Full-control protocol baseline: codex-cli 0.146.0.
 // Approvals are server->client JSON-RPC requests; the client answers with result frames.
 type CodexAppServer struct {
 	mu          sync.Mutex
+	initMu      sync.Mutex
+	eventMu     sync.Mutex
 	cmd         *exec.Cmd
 	stdin       io.WriteCloser
 	stdout      *bufio.Reader
 	cancel      context.CancelFunc
 	nextID      atomic.Int64
 	pending     map[string]chan rpcResult
+	generation  uint64
 	running     bool
 	initialized bool
+	stopping    bool
 	binPath     string
 	onNotify    func(method string, params json.RawMessage)
 	onRequest   func(req ServerRequest)
+	onExit      func(AppServerExit)
+	versionOnce sync.Once
+	version     string
+	versionOK   bool
+	versionErr  error
+	probeOnce   sync.Once
+	probe       map[string]bool
 
-	activeTurn   map[string]string
-	turnStatus   map[string]string
-	threadAlias  map[string]string
-	pendingAppr  map[string]*PendingApproval
-	resolvedAppr map[string]resolvedApproval
-	wireByThread map[string]string
+	activeTurn    map[string]string
+	turnStatus    map[string]string
+	terminalTurns map[string]struct{}
+	threadAlias   map[string]string
+	pendingAppr   map[string]*PendingApproval
+	resolvedAppr  map[string]resolvedApproval
+	pendingInput  map[string]*PendingUserInput
+	resolvedInput map[string]resolvedUserInput
+	wireByThread  map[string]string
 }
 
 const resolvedApprovalLimit = 512
+const terminalTurnLimit = 512
+
+const MinimumCodexFullControlVersion = "0.146.0"
+
+var codexVersionPattern = regexp.MustCompile(`(?i)codex-cli\s+(\d+)\.(\d+)\.(\d+)`)
 
 // ErrNoPendingApproval distinguishes an unknown/stale approval id from a
 // tracked decision failure. Callers may safely try a session alias fallback
 // only for this error.
 var ErrNoPendingApproval = errors.New("no pending app-server approval")
 
+var ErrNoPendingUserInput = errors.New("no pending app-server user input")
+var ErrUserInputExpired = errors.New("app-server user input expired")
+var ErrAppServerExited = errors.New("codex app-server exited")
+var ErrAppServerClosed = errors.New("codex app-server closed")
+
+// AppServerExit describes one unexpected process-generation failure. Sessions
+// contains only public/wire identifiers whose live turns or pending requests
+// were invalidated with that generation.
+type AppServerExit struct {
+	Generation uint64
+	Sessions   []string
+	Err        error
+}
+
 type resolvedApproval struct {
 	accepted   bool
+	resolvedAt time.Time
+}
+
+type resolvedUserInput struct {
+	status     string
 	resolvedAt time.Time
 }
 
@@ -95,6 +136,45 @@ type PendingApproval struct {
 	CreatedAt   time.Time
 }
 
+type UserInputOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+type UserInputQuestion struct {
+	ID       string            `json:"id"`
+	Header   string            `json:"header"`
+	Question string            `json:"question"`
+	Options  []UserInputOption `json:"options,omitempty"`
+	IsOther  bool              `json:"is_other,omitempty"`
+	IsSecret bool              `json:"is_secret,omitempty"`
+}
+
+// PendingUserInput preserves the 0.146 requestUserInput schema independently
+// from approvals. Secret answers are never retained in this object.
+type PendingUserInput struct {
+	RequestID        string
+	ItemID           string
+	ThreadID         string
+	TurnID           string
+	WireID           string
+	Questions        []UserInputQuestion
+	AutoResolutionMS *uint64
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
+}
+
+type UserInputSnapshot struct {
+	RequestID        string
+	ItemID           string
+	ThreadID         string
+	TurnID           string
+	WireID           string
+	Questions        []UserInputQuestion
+	AutoResolutionMS *uint64
+	ExpiresAt        time.Time
+}
+
 // ApprovalSnapshot is the phone-facing pending approval shape.
 type ApprovalSnapshot struct {
 	ID          string
@@ -108,14 +188,17 @@ type ApprovalSnapshot struct {
 // NewCodexAppServer prepares a controller (does not start until Ensure).
 func NewCodexAppServer() *CodexAppServer {
 	return &CodexAppServer{
-		pending:      make(map[string]chan rpcResult),
-		activeTurn:   make(map[string]string),
-		turnStatus:   make(map[string]string),
-		threadAlias:  make(map[string]string),
-		pendingAppr:  make(map[string]*PendingApproval),
-		resolvedAppr: make(map[string]resolvedApproval),
-		wireByThread: make(map[string]string),
-		binPath:      "codex",
+		pending:       make(map[string]chan rpcResult),
+		activeTurn:    make(map[string]string),
+		turnStatus:    make(map[string]string),
+		terminalTurns: make(map[string]struct{}),
+		threadAlias:   make(map[string]string),
+		pendingAppr:   make(map[string]*PendingApproval),
+		resolvedAppr:  make(map[string]resolvedApproval),
+		pendingInput:  make(map[string]*PendingUserInput),
+		resolvedInput: make(map[string]resolvedUserInput),
+		wireByThread:  make(map[string]string),
+		binPath:       "codex",
 	}
 }
 
@@ -133,6 +216,14 @@ func (c *CodexAppServer) SetRequestHandler(fn func(req ServerRequest)) {
 	c.onRequest = fn
 }
 
+// SetExitHandler receives unexpected process exits after all state owned by
+// that process generation has been invalidated.
+func (c *CodexAppServer) SetExitHandler(fn func(AppServerExit)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onExit = fn
+}
+
 // Available reports whether the codex binary exposes app-server.
 func (c *CodexAppServer) Available() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -144,6 +235,51 @@ func (c *CodexAppServer) Available() bool {
 		return strings.Contains(s, "app-server") || strings.Contains(s, "generate-json-schema")
 	}
 	return strings.Contains(s, "app-server") || strings.Contains(s, "json")
+}
+
+// CodexVersion returns the installed CLI version and whether it meets the
+// full-control baseline. Results are cached for the daemon lifetime.
+func (c *CodexAppServer) CodexVersion() (string, bool, error) {
+	c.versionOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		command, args, err := resolveLaunch(c.binPath, []string{"--version"})
+		if err != nil {
+			c.versionErr = err
+			return
+		}
+		out, err := exec.CommandContext(ctx, command, args...).CombinedOutput()
+		if err != nil {
+			c.versionErr = fmt.Errorf("codex --version: %w", err)
+			return
+		}
+		c.version, c.versionOK, c.versionErr = parseCodexVersion(string(out))
+	})
+	return c.version, c.versionOK, c.versionErr
+}
+
+func (c *CodexAppServer) FullControlCompatible() bool {
+	return c.ProbeMethods()["full_control"]
+}
+
+func parseCodexVersion(output string) (string, bool, error) {
+	match := codexVersionPattern.FindStringSubmatch(strings.TrimSpace(output))
+	if len(match) != 4 {
+		return "", false, fmt.Errorf("unrecognized codex version output %q", strings.TrimSpace(output))
+	}
+	parts := [3]int{}
+	for index := range parts {
+		value, err := strconv.Atoi(match[index+1])
+		if err != nil {
+			return "", false, err
+		}
+		parts[index] = value
+	}
+	minimum := [3]int{0, 146, 0}
+	ok := parts[0] > minimum[0] ||
+		(parts[0] == minimum[0] && parts[1] > minimum[1]) ||
+		(parts[0] == minimum[0] && parts[1] == minimum[1] && parts[2] >= minimum[2])
+	return fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2]), ok, nil
 }
 
 // Initialized reports whether initialize completed on the current process.
@@ -162,6 +298,10 @@ func (c *CodexAppServer) Ensure() error {
 }
 func (c *CodexAppServer) ensureProcess() error {
 	c.mu.Lock()
+	if c.stopping {
+		c.mu.Unlock()
+		return ErrAppServerClosed
+	}
 	if c.running {
 		c.mu.Unlock()
 		return nil
@@ -190,36 +330,43 @@ func (c *CodexAppServer) ensureProcess() error {
 	c.stdin = stdin
 	c.stdout = bufio.NewReader(stdout)
 	c.cancel = cancel
+	c.generation++
+	generation := c.generation
 	c.running = true
 	c.initialized = false
 	c.pending = make(map[string]chan rpcResult)
 	c.activeTurn = make(map[string]string)
 	c.turnStatus = make(map[string]string)
+	c.terminalTurns = make(map[string]struct{})
 	c.pendingAppr = make(map[string]*PendingApproval)
-	go c.readLoop()
+	c.resolvedAppr = make(map[string]resolvedApproval)
+	c.pendingInput = make(map[string]*PendingUserInput)
+	c.resolvedInput = make(map[string]resolvedUserInput)
+	reader := c.stdout
+	go c.readLoop(generation, reader)
 	go func() {
-		_ = cmd.Wait()
-		c.mu.Lock()
-		c.running = false
-		c.initialized = false
-		for id, ch := range c.pending {
-			ch <- rpcResult{Error: fmt.Errorf("app-server exited")}
-			close(ch)
-			delete(c.pending, id)
-		}
-		c.mu.Unlock()
+		waitErr := cmd.Wait()
+		c.handleProcessExit(generation, cmd, waitErr)
 	}()
-	log.Printf("[codex-app-server] started pid=%d", cmd.Process.Pid)
+	log.Printf("[codex-app-server] started pid=%d generation=%d", cmd.Process.Pid, generation)
 	c.mu.Unlock()
 	return nil
 }
 
 func (c *CodexAppServer) ensureInitialized() error {
+	c.initMu.Lock()
+	defer c.initMu.Unlock()
+
 	c.mu.Lock()
 	if c.initialized {
 		c.mu.Unlock()
 		return nil
 	}
+	if c.stopping {
+		c.mu.Unlock()
+		return ErrAppServerClosed
+	}
+	generation := c.generation
 	c.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -230,6 +377,13 @@ func (c *CodexAppServer) ensureInitialized() error {
 			"title":   "NekoNest",
 			"version": buildinfo.Version,
 		},
+		// requestUserInput and collaboration-mode discovery are part of the
+		// 0.146 experimental app-server surface. Opt in explicitly so a Plan
+		// turn resumed from a native thread can actually emit the structured
+		// server request that NekoNest advertises.
+		"capabilities": map[string]any{
+			"experimentalApi": true,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("codex app-server initialize: %w", err)
@@ -238,31 +392,138 @@ func (c *CodexAppServer) ensureInitialized() error {
 	_ = c.writeNotification("notifications/initialized", map[string]any{})
 
 	c.mu.Lock()
+	if !c.running || c.generation != generation {
+		c.mu.Unlock()
+		return ErrAppServerExited
+	}
 	c.initialized = true
 	c.mu.Unlock()
-	log.Printf("[codex-app-server] initialized")
+	log.Printf("[codex-app-server] initialized generation=%d", generation)
 	return nil
 }
 
 // Close stops the app-server process.
 func (c *CodexAppServer) Close() error {
+	c.eventMu.Lock()
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.running {
+	c.stopping = true
+	if !c.running && c.cmd == nil {
+		c.mu.Unlock()
+		c.eventMu.Unlock()
 		return nil
 	}
-	if c.cancel != nil {
-		c.cancel()
+	cancel := c.cancel
+	stdin := c.stdin
+	cmd := c.cmd
+	pending := c.invalidateProcessStateLocked()
+	c.mu.Unlock()
+	c.eventMu.Unlock()
+	failRPCs(pending, ErrAppServerClosed)
+	if cancel != nil {
+		cancel()
 	}
-	if c.stdin != nil {
-		_ = c.stdin.Close()
+	if stdin != nil {
+		_ = stdin.Close()
 	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
+	return nil
+}
+
+func (c *CodexAppServer) handleProcessExit(generation uint64, cmd *exec.Cmd, waitErr error) {
+	c.eventMu.Lock()
+	c.mu.Lock()
+	if c.generation != generation || c.cmd != cmd {
+		c.mu.Unlock()
+		c.eventMu.Unlock()
+		return
+	}
+	if c.stopping {
+		pending := c.invalidateProcessStateLocked()
+		c.mu.Unlock()
+		c.eventMu.Unlock()
+		failRPCs(pending, ErrAppServerClosed)
+		return
+	}
+	sessions := c.affectedSessionsLocked()
+	pending := c.invalidateProcessStateLocked()
+	handler := c.onExit
+	exitErr := ErrAppServerExited
+	if waitErr != nil {
+		exitErr = fmt.Errorf("%w: %v", ErrAppServerExited, waitErr)
+	}
+	c.mu.Unlock()
+	failRPCs(pending, exitErr)
+	if handler != nil {
+		handler(AppServerExit{Generation: generation, Sessions: sessions, Err: exitErr})
+	}
+	c.eventMu.Unlock()
+	log.Printf("[codex-app-server] unexpected exit generation=%d affected_sessions=%d: %v", generation, len(sessions), exitErr)
+}
+
+func (c *CodexAppServer) invalidateProcessStateLocked() map[string]chan rpcResult {
+	pending := c.pending
+	c.pending = make(map[string]chan rpcResult)
 	c.running = false
 	c.initialized = false
-	return nil
+	c.cmd = nil
+	c.stdin = nil
+	c.stdout = nil
+	c.cancel = nil
+	c.activeTurn = make(map[string]string)
+	c.turnStatus = make(map[string]string)
+	c.terminalTurns = make(map[string]struct{})
+	c.pendingAppr = make(map[string]*PendingApproval)
+	c.resolvedAppr = make(map[string]resolvedApproval)
+	c.pendingInput = make(map[string]*PendingUserInput)
+	c.resolvedInput = make(map[string]resolvedUserInput)
+	return pending
+}
+
+func failRPCs(pending map[string]chan rpcResult, err error) {
+	for _, ch := range pending {
+		ch <- rpcResult{Error: err}
+		close(ch)
+	}
+}
+
+func (c *CodexAppServer) affectedSessionsLocked() []string {
+	affected := make(map[string]struct{})
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		canon := c.resolveThreadIDLocked(id)
+		if wire := c.wireByThread[canon]; wire != "" {
+			id = wire
+		}
+		affected[id] = struct{}{}
+	}
+	for id := range c.activeTurn {
+		add(id)
+	}
+	for _, approval := range c.pendingAppr {
+		if approval.WireID != "" {
+			add(approval.WireID)
+		} else {
+			add(approval.ThreadID)
+		}
+	}
+	for _, input := range c.pendingInput {
+		if input.WireID != "" {
+			add(input.WireID)
+		} else {
+			add(input.ThreadID)
+		}
+	}
+	result := make([]string, 0, len(affected))
+	for id := range affected {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // Call issues a JSON-RPC request and waits for the matching response.
@@ -689,6 +950,122 @@ func (c *CodexAppServer) PendingApprovalFor(sessionOrThreadID string) *ApprovalS
 	}
 }
 
+// PendingUserInputFor returns the newest structured question request for a session.
+func (c *CodexAppServer) PendingUserInputFor(sessionOrThreadID string) *UserInputSnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := strings.TrimSpace(sessionOrThreadID)
+	canon := c.resolveThreadIDLocked(id)
+	var best *PendingUserInput
+	for _, pending := range c.pendingInput {
+		if pending.ThreadID == id || pending.WireID == id || pending.ThreadID == canon || pending.WireID == canon {
+			if best == nil || pending.CreatedAt.After(best.CreatedAt) {
+				best = pending
+			}
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	questions := append([]UserInputQuestion(nil), best.Questions...)
+	return &UserInputSnapshot{
+		RequestID:        best.RequestID,
+		ItemID:           best.ItemID,
+		ThreadID:         best.ThreadID,
+		TurnID:           best.TurnID,
+		WireID:           best.WireID,
+		Questions:        questions,
+		AutoResolutionMS: best.AutoResolutionMS,
+		ExpiresAt:        best.ExpiresAt,
+	}
+}
+
+// RespondUserInput sends the exact 0.146 question_id -> {answers: []} shape.
+// The resolved cache stores status only, never answer text (including secrets).
+func (c *CodexAppServer) RespondUserInput(requestID string, answers map[string][]string) (string, error) {
+	requestID = strings.TrimSpace(requestID)
+	c.mu.Lock()
+	if resolved, ok := c.resolvedInput[requestID]; ok {
+		c.mu.Unlock()
+		return resolved.status, nil
+	}
+	pending := c.pendingInput[requestID]
+	if pending == nil {
+		for _, candidate := range c.pendingInput {
+			if candidate.RequestID == requestID || candidate.ItemID == requestID {
+				pending = candidate
+				break
+			}
+		}
+	}
+	if pending == nil {
+		c.mu.Unlock()
+		return "stale", fmt.Errorf("%w %q", ErrNoPendingUserInput, requestID)
+	}
+	if !pending.ExpiresAt.IsZero() && !time.Now().Before(pending.ExpiresAt) {
+		delete(c.pendingInput, pending.RequestID)
+		c.rememberResolvedInputLocked(pending, "expired")
+		c.mu.Unlock()
+		return "expired", ErrUserInputExpired
+	}
+	valid := make(map[string]bool, len(pending.Questions))
+	for _, question := range pending.Questions {
+		valid[question.ID] = true
+	}
+	resultAnswers := make(map[string]any, len(answers))
+	for questionID, values := range answers {
+		if !valid[questionID] {
+			c.mu.Unlock()
+			return "rejected", fmt.Errorf("unknown question id %q", questionID)
+		}
+		resultAnswers[questionID] = map[string]any{"answers": append([]string(nil), values...)}
+	}
+	for questionID := range valid {
+		if _, ok := resultAnswers[questionID]; !ok {
+			c.mu.Unlock()
+			return "rejected", fmt.Errorf("answer required for question %q", questionID)
+		}
+	}
+	delete(c.pendingInput, pending.RequestID)
+	c.mu.Unlock()
+
+	if err := c.Respond(pending.RequestID, map[string]any{"answers": resultAnswers}); err != nil {
+		c.mu.Lock()
+		c.rememberResolvedInputLocked(pending, "indeterminate")
+		c.mu.Unlock()
+		return "indeterminate", err
+	}
+	c.mu.Lock()
+	c.rememberResolvedInputLocked(pending, "accepted")
+	c.mu.Unlock()
+	return "accepted", nil
+}
+
+func (c *CodexAppServer) rememberResolvedInputLocked(pending *PendingUserInput, status string) {
+	if pending == nil {
+		return
+	}
+	if c.resolvedInput == nil {
+		c.resolvedInput = make(map[string]resolvedUserInput)
+	}
+	resolved := resolvedUserInput{status: status, resolvedAt: time.Now()}
+	for _, id := range []string{pending.RequestID, pending.ItemID} {
+		if id != "" {
+			c.resolvedInput[id] = resolved
+		}
+	}
+	for len(c.resolvedInput) > resolvedApprovalLimit {
+		oldestID := ""
+		var oldest time.Time
+		for id, candidate := range c.resolvedInput {
+			if oldestID == "" || candidate.resolvedAt.Before(oldest) {
+				oldestID, oldest = id, candidate.resolvedAt
+			}
+		}
+		delete(c.resolvedInput, oldestID)
+	}
+}
+
 // HasPendingApproval reports whether approvalID is tracked.
 func (c *CodexAppServer) HasPendingApproval(approvalID string) bool {
 	c.mu.Lock()
@@ -792,6 +1169,9 @@ func (c *CodexAppServer) SetActiveTurn(threadID, turnID string) {
 	if threadID == "" || turnID == "" {
 		return
 	}
+	if _, terminal := c.terminalTurns[turnID]; terminal {
+		return
+	}
 	canon := c.resolveThreadIDLocked(threadID)
 	if canon == "" {
 		canon = threadID
@@ -813,6 +1193,9 @@ func (c *CodexAppServer) setStartingTurn(threadID, turnID string) {
 	threadID = strings.TrimSpace(threadID)
 	turnID = strings.TrimSpace(turnID)
 	if threadID == "" || turnID == "" {
+		return
+	}
+	if _, terminal := c.terminalTurns[turnID]; terminal {
 		return
 	}
 	if c.activeTurnIDLocked(threadID) == turnID && strings.EqualFold(c.lastTurnStatusLocked(threadID), "inProgress") {
@@ -856,6 +1239,12 @@ func (c *CodexAppServer) completeTurn(threadID, turnID, status string) {
 	if current != "" && turnID != "" && turnID != current {
 		return
 	}
+	if turnID != "" {
+		if len(c.terminalTurns) >= terminalTurnLimit {
+			c.terminalTurns = make(map[string]struct{})
+		}
+		c.terminalTurns[turnID] = struct{}{}
+	}
 	for key := range c.activeTurn {
 		if key == threadID || key == canon || c.resolveThreadIDLocked(key) == canon {
 			delete(c.activeTurn, key)
@@ -872,6 +1261,12 @@ func (c *CodexAppServer) completeTurn(threadID, turnID, status string) {
 		approvalCanon := c.resolveThreadIDLocked(approval.ThreadID)
 		if approvalCanon == canon && (turnID == "" || approval.TurnID == "" || approval.TurnID == turnID) {
 			delete(c.pendingAppr, id)
+		}
+	}
+	for id, pending := range c.pendingInput {
+		pendingCanon := c.resolveThreadIDLocked(pending.ThreadID)
+		if pendingCanon == canon && (turnID == "" || pending.TurnID == "" || pending.TurnID == turnID) {
+			delete(c.pendingInput, id)
 		}
 	}
 }
@@ -979,6 +1374,68 @@ func (c *CodexAppServer) TrackServerRequest(req ServerRequest) *PendingApproval 
 	}
 	c.pendingAppr[p.ID] = p
 	return p
+}
+
+// TrackUserInput records the structured 0.146 requestUserInput request.
+func (c *CodexAppServer) TrackUserInput(req ServerRequest) *PendingUserInput {
+	if req.Method != "item/tool/requestUserInput" {
+		return nil
+	}
+	var params struct {
+		ThreadID         string  `json:"threadId"`
+		TurnID           string  `json:"turnId"`
+		ItemID           string  `json:"itemId"`
+		AutoResolutionMS *uint64 `json:"autoResolutionMs"`
+		Questions        []struct {
+			ID       string `json:"id"`
+			Header   string `json:"header"`
+			Question string `json:"question"`
+			Options  []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+			IsOther  bool `json:"isOther"`
+			IsSecret bool `json:"isSecret"`
+		} `json:"questions"`
+	}
+	if json.Unmarshal(req.Params, &params) != nil || req.ID == "" || params.ItemID == "" || len(params.Questions) == 0 {
+		return nil
+	}
+	now := time.Now()
+	pending := &PendingUserInput{
+		RequestID: req.ID, ItemID: params.ItemID, ThreadID: params.ThreadID,
+		TurnID: params.TurnID, AutoResolutionMS: params.AutoResolutionMS, CreatedAt: now,
+	}
+	if params.AutoResolutionMS != nil {
+		pending.ExpiresAt = now.Add(time.Duration(*params.AutoResolutionMS) * time.Millisecond)
+	}
+	for _, question := range params.Questions {
+		if strings.TrimSpace(question.ID) == "" {
+			return nil
+		}
+		out := UserInputQuestion{
+			ID: question.ID, Header: question.Header, Question: question.Question,
+			IsOther: question.IsOther, IsSecret: question.IsSecret,
+		}
+		for _, option := range question.Options {
+			out.Options = append(out.Options, UserInputOption{Label: option.Label, Description: option.Description})
+		}
+		pending.Questions = append(pending.Questions, out)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	canon := c.resolveThreadIDLocked(pending.ThreadID)
+	if wire := c.wireByThread[canon]; wire != "" {
+		pending.WireID = wire
+	} else {
+		pending.WireID = pending.ThreadID
+	}
+	if pending.TurnID != "" {
+		c.activeTurn[canon] = pending.TurnID
+		c.turnStatus[canon] = "inProgress"
+	}
+	c.pendingInput[pending.RequestID] = pending
+	return pending
 }
 
 // HandleNotification updates turn tracking from app-server notifications.
@@ -1155,12 +1612,34 @@ func (c *CodexAppServer) IsTurnActive(sessionOrThreadID string) bool {
 	return c.ActiveTurnID(sessionOrThreadID) != ""
 }
 
-// ProbeMethods reports app-server readiness after initialize.
+// ProbeMethods checks the installed 0.146+ generated schema before initialize.
+// It never creates a native thread or turn, so doctor remains non-destructive.
 func (c *CodexAppServer) ProbeMethods() map[string]bool {
+	c.probeOnce.Do(func() {
+		c.probe = c.probeMethodsUncached()
+	})
+	out := make(map[string]bool, len(c.probe))
+	for key, value := range c.probe {
+		out[key] = value
+	}
+	return out
+}
+
+func (c *CodexAppServer) probeMethodsUncached() map[string]bool {
 	out := map[string]bool{
 		"available": c.Available(),
 	}
 	if !out["available"] {
+		return out
+	}
+	_, out["version"], _ = c.CodexVersion()
+	if !out["version"] {
+		return out
+	}
+	for key, value := range c.probeGeneratedSchema() {
+		out[key] = value
+	}
+	if !out["schema"] {
 		return out
 	}
 	if err := c.Ensure(); err != nil {
@@ -1171,22 +1650,66 @@ func (c *CodexAppServer) ProbeMethods() map[string]bool {
 	}
 	out["ensure"] = true
 	out["initialize"] = true
-	out["thread/start"] = true
-	out["turn/start"] = true
-	out["turn/interrupt"] = true
-	out["turn/steer"] = true
+	out["full_control"] = out["thread/start"] && out["turn/start"] &&
+		out["turn/interrupt"] && out["turn/steer"] && out["approval"] &&
+		out["request_user_input"] && out["collaboration_mode"]
 	return out
 }
-func (c *CodexAppServer) readLoop() {
+
+func (c *CodexAppServer) probeGeneratedSchema() map[string]bool {
+	out := map[string]bool{"schema": false}
+	dir, err := os.MkdirTemp("", "nekonest-codex-schema-")
+	if err != nil {
+		return out
+	}
+	defer os.RemoveAll(dir)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	command, args, err := resolveLaunch(c.binPath, []string{
+		"app-server", "generate-json-schema", "--experimental", "--out", dir,
+	})
+	if err != nil {
+		return out
+	}
+	if output, err := exec.CommandContext(ctx, command, args...).CombinedOutput(); err != nil {
+		log.Printf("[codex-app-server] schema probe: %v (%s)", err, truncateRPC(output, 200))
+		return out
+	}
+	var schema strings.Builder
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info == nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".json") {
+			return nil
+		}
+		body, readErr := os.ReadFile(path)
+		if readErr == nil {
+			schema.Write(body)
+			schema.WriteByte('\n')
+		}
+		return nil
+	})
+	text := schema.String()
+	out["schema"] = text != ""
+	for _, method := range []string{"thread/start", "turn/start", "turn/interrupt", "turn/steer"} {
+		out[method] = strings.Contains(text, `"`+method+`"`)
+	}
+	out["approval"] = strings.Contains(text, `"item/commandExecution/requestApproval"`) &&
+		strings.Contains(text, `"item/fileChange/requestApproval"`) && strings.Contains(text, `"decision"`)
+	out["request_user_input"] = strings.Contains(text, `"item/tool/requestUserInput"`) &&
+		strings.Contains(text, `"autoResolutionMs"`) && strings.Contains(text, `"isOther"`) &&
+		strings.Contains(text, `"isSecret"`) && strings.Contains(text, `"answers"`)
+	out["collaboration_mode"] = strings.Contains(text, `"collaborationMode/list"`) &&
+		strings.Contains(text, `"experimentalApi"`) && strings.Contains(text, `"plan"`)
+	return out
+}
+func (c *CodexAppServer) readLoop(generation uint64, reader *bufio.Reader) {
 	for {
 		c.mu.Lock()
-		r := c.stdout
-		running := c.running
+		running := c.running && c.generation == generation && c.stdout == reader
 		c.mu.Unlock()
-		if !running || r == nil {
+		if !running || reader == nil {
 			return
 		}
-		line, err := r.ReadBytes(byte(10))
+		line, err := reader.ReadBytes(byte(10))
 		if err != nil {
 			return
 		}
@@ -1210,6 +1733,15 @@ func (c *CodexAppServer) readLoop() {
 			continue
 		}
 
+		c.eventMu.Lock()
+		c.mu.Lock()
+		current := c.running && c.generation == generation && c.stdout == reader
+		c.mu.Unlock()
+		if !current {
+			c.eventMu.Unlock()
+			return
+		}
+
 		hasID := len(msg.ID) > 0 && string(msg.ID) != "null"
 		// Server-initiated request: id + method (+ typically params)
 		if hasID && msg.Method != "" && msg.Result == nil && msg.Error == nil {
@@ -1218,12 +1750,16 @@ func (c *CodexAppServer) readLoop() {
 			if p := c.TrackServerRequest(req); p != nil {
 				log.Printf("[codex-app-server] pending approval id=%s method=%s thread=%s", p.ID, p.Method, p.ThreadID)
 			}
+			if pending := c.TrackUserInput(req); pending != nil {
+				log.Printf("[codex-app-server] pending user input request=%s item=%s thread=%s", pending.RequestID, pending.ItemID, pending.ThreadID)
+			}
 			c.mu.Lock()
 			fn := c.onRequest
 			c.mu.Unlock()
 			if fn != nil {
 				fn(req)
 			}
+			c.eventMu.Unlock()
 			continue
 		}
 
@@ -1238,16 +1774,23 @@ func (c *CodexAppServer) readLoop() {
 					fn(msg.Method, msg.Params)
 				}
 			}
+			c.eventMu.Unlock()
 			continue
 		}
 
 		// Response to our outbound call
 		id := rawIDString(msg.ID)
 		c.mu.Lock()
+		if !c.running || c.generation != generation || c.stdout != reader {
+			c.mu.Unlock()
+			c.eventMu.Unlock()
+			return
+		}
 		ch := c.pending[id]
 		delete(c.pending, id)
 		c.mu.Unlock()
 		if ch == nil {
+			c.eventMu.Unlock()
 			continue
 		}
 		if msg.Error != nil {
@@ -1260,6 +1803,7 @@ func (c *CodexAppServer) readLoop() {
 			ch <- rpcResult{Result: msg.Result}
 		}
 		close(ch)
+		c.eventMu.Unlock()
 	}
 }
 
@@ -1340,7 +1884,6 @@ func isApprovalMethod(method string) bool {
 	case "item/commandExecution/requestApproval",
 		"item/fileChange/requestApproval",
 		"item/permissions/requestApproval",
-		"item/tool/requestUserInput",
 		"applyPatchApproval",
 		"execCommandApproval":
 		return true

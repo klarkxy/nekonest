@@ -71,6 +71,60 @@
       </span>
     </section>
 
+    <section v-if="showPromptQueue" class="prompt-queue" :aria-label="t('session.queueTitle')">
+      <div class="prompt-queue-head">
+        <strong>{{ t('session.queueTitle') }}</strong>
+        <button
+          v-if="sessionStore.currentPromptQueue?.paused"
+          type="button"
+          class="queue-action"
+          :disabled="sessionStore.wsStatus !== 'connected'"
+          @click="resumePromptQueue"
+        >{{ t('session.queueResume') }}</button>
+      </div>
+      <ol class="prompt-queue-list">
+        <li v-for="item in sessionStore.currentPromptQueue?.items" :key="item.client_msg_id" class="prompt-queue-item">
+          <span>{{ t('session.queuePosition', { position: item.position }) }} · {{ queueStatusLabel(item.status) }}</span>
+          <button
+            v-if="item.status !== 'starting'"
+            type="button"
+            class="queue-action"
+            :disabled="sessionStore.wsStatus !== 'connected'"
+            @click="cancelQueuedPrompt(item.client_msg_id)"
+          >{{ t('session.queueCancel') }}</button>
+        </li>
+      </ol>
+    </section>
+
+    <form
+      v-if="pendingUserInput"
+      class="user-input-card"
+      role="group"
+      :aria-label="t('session.userInputTitle')"
+      @submit.prevent="handleUserInputSubmit"
+    >
+      <div class="approval-title">{{ t('session.userInputTitle') }}</div>
+      <div v-for="question in pendingUserInput.questions" :key="question.id" class="user-input-question">
+        <div class="user-input-header">{{ question.header }}</div>
+        <label class="user-input-label" :for="`user-input-${question.id}`">{{ question.question }}</label>
+        <div v-if="question.options?.length" class="user-input-options">
+          <label v-for="option in question.options" :key="option.label" class="user-input-option">
+            <input v-model="userInputAnswers[question.id]" type="radio" :name="`user-input-${question.id}`" :value="option.label" :disabled="userInputExpired || userInputSubmitting" @change="userInputOtherActive[question.id] = false" />
+            <span><strong>{{ option.label }}</strong><small>{{ option.description }}</small></span>
+          </label>
+          <label v-if="question.is_other" class="user-input-option user-input-option--other">
+            <input :checked="userInputOtherActive[question.id]" type="radio" :name="`user-input-${question.id}`" :disabled="userInputExpired || userInputSubmitting" @change="userInputOtherActive[question.id] = true; userInputAnswers[question.id] = ''" />
+            <span>{{ t('session.userInputOther') }}</span>
+          </label>
+          <input v-if="question.is_other && userInputOtherActive[question.id]" :id="`user-input-${question.id}`" v-model="userInputAnswers[question.id]" :type="question.is_secret ? 'password' : 'text'" autocomplete="off" class="user-input-text" :disabled="userInputExpired || userInputSubmitting" />
+        </div>
+        <input v-else-if="question.is_secret" :id="`user-input-${question.id}`" v-model="userInputAnswers[question.id]" type="password" class="user-input-text" autocomplete="new-password" :disabled="userInputExpired || userInputSubmitting" />
+        <textarea v-else :id="`user-input-${question.id}`" v-model="userInputAnswers[question.id]" class="user-input-text" autocomplete="off" :disabled="userInputExpired || userInputSubmitting" rows="2" />
+      </div>
+      <p v-if="userInputCountdown" class="user-input-countdown" role="timer">{{ userInputCountdown }}</p>
+      <button type="submit" class="approval-btn approval-btn--ok" :disabled="!canSubmitUserInput">{{ t('session.userInputSubmit') }}</button>
+    </form>
+
     <div
       v-if="sessionStore.currentSession?.pending_approval"
       class="approval-banner"
@@ -249,6 +303,13 @@
     <p v-if="composeStatusText" class="compose-status" role="status">
       {{ composeStatusText }}
     </p>
+    <button
+      v-if="showSeparateSteer"
+      type="button"
+      class="separate-steer-btn"
+      :disabled="!inputText.trim() || sending || uploading"
+      @click="handleSteer"
+    >{{ t('session.steer') }}</button>
 
     <div class="input-bar">
       <label
@@ -352,6 +413,7 @@ let restoringDraft = false
 let draftSaveTimer: number | null = null
 let routeGeneration = 0
 let uploadController: AbortController | null = null
+let userInputClock: number | null = null
 
 const agentMeta = computed(() => getAgentMeta(sessionStore.currentSession?.agent_type))
 const agentLabelText = computed(() => {
@@ -375,7 +437,8 @@ const sessionRunning = computed(
 
 const sessionAwaitingControl = computed(() => {
   const status = sessionStore.currentSession?.status
-  return status === 'waiting_approval' || status === 'waiting_user' || !!sessionStore.currentSession?.pending_approval
+  return status === 'waiting_approval' || status === 'waiting_user' ||
+    !!sessionStore.currentSession?.pending_approval || !!sessionStore.currentSession?.pending_user_input
 })
 
 const sessionBusy = computed(() => sessionRunning.value || sessionAwaitingControl.value)
@@ -388,11 +451,43 @@ const steerMode = computed(
   () => sessionRunning.value && !sessionAwaitingControl.value && sessionStore.wsStatus === 'connected' && steerSupported.value && !isLocalDraft.value
 )
 
+const queueEnabled = computed(() => !!sessionCaps.value?.queue && sessionStore.wsStatus === 'connected' && !isLocalDraft.value)
+const mainSendIsSteer = computed(() => steerMode.value && !queueEnabled.value)
+const showSeparateSteer = computed(() => steerMode.value && queueEnabled.value)
+
 const sendBlocked = computed(
-  () => sessionBusy.value && sessionStore.wsStatus === 'connected' && !steerMode.value
+  () => sessionBusy.value && sessionStore.wsStatus === 'connected' && !queueEnabled.value && !mainSendIsSteer.value
 )
 
+const showPromptQueue = computed(() => {
+  const queue = sessionStore.currentPromptQueue
+  return queueEnabled.value && !!queue && (queue.paused || queue.items.length > 0)
+})
+
 const hasPendingApproval = computed(() => !!sessionStore.currentSession?.pending_approval)
+const pendingUserInput = computed(() => sessionStore.currentSession?.pending_user_input)
+const userInputAnswers = ref<Record<string, string>>({})
+const userInputOtherActive = ref<Record<string, boolean>>({})
+const userInputSubmitting = ref(false)
+const userInputNow = ref(Date.now())
+const userInputExpired = computed(() => {
+  const expiresAt = pendingUserInput.value?.expires_at
+  return typeof expiresAt === 'number' && expiresAt > 0 && userInputNow.value >= expiresAt
+})
+const userInputCountdown = computed(() => {
+  const expiresAt = pendingUserInput.value?.expires_at
+  if (!expiresAt) return ''
+  const seconds = Math.max(0, Math.ceil((expiresAt - userInputNow.value) / 1000))
+  return seconds > 0 ? t('session.userInputExpires', { seconds }) : t('session.userInputExpired')
+})
+const canSubmitUserInput = computed(() => {
+  const pending = pendingUserInput.value
+  return !!pending && !userInputExpired.value && !userInputSubmitting.value &&
+    pending.questions.every(question => {
+      const answer = userInputAnswers.value[question.id] || ''
+      return (question.is_secret ? answer : answer.trim()).length > 0
+    })
+})
 
 const isIndeterminateStart = computed(
   () => isLocalDraft.value && startTerminalStatus.value === 'indeterminate'
@@ -420,16 +515,16 @@ const emptyHint = computed(() => {
 })
 
 const composerPlaceholder = computed(() => {
-  if (hasPendingApproval.value) return t('session.placeholderApproval')
+  if (hasPendingApproval.value || pendingUserInput.value) return t('session.placeholderApproval')
   if (isIndeterminateStart.value) return t('session.placeholderIndeterminate')
   if (isStartingThread.value) return t('session.placeholderStarting')
-  if (steerMode.value) return t('session.placeholderSteer')
+  if (mainSendIsSteer.value) return t('session.placeholderSteer')
   if (sendBlocked.value) return t('session.placeholderBusy')
   return t('session.placeholder')
 })
 
 const sendButtonLabel = computed(() => {
-  if (steerMode.value) return t('session.steer')
+  if (mainSendIsSteer.value) return t('session.steer')
   if (isIndeterminateStart.value) return t('session.sendIndeterminate')
   if (sendBlocked.value || isStartingThread.value) return t('session.sendBlocked')
   return t('session.send')
@@ -439,21 +534,21 @@ const attachmentControlsDisabled = computed(
   () =>
     sending.value ||
     uploading.value ||
-    steerMode.value ||
+    mainSendIsSteer.value ||
     isStartingThread.value ||
     isIndeterminateStart.value
 )
 
 const attachmentPickerTitle = computed(() => {
   if (isIndeterminateStart.value) return t('session.attachIndeterminate')
-  if (steerMode.value) return t('session.attachSteerUnavailable')
+  if (mainSendIsSteer.value) return t('session.attachSteerUnavailable')
   return t('session.attachAria')
 })
 
 const composerSendDisabled = computed(() => {
   if (isIndeterminateStart.value || isStartingThread.value) return true
   if (sending.value || uploading.value || sendBlocked.value) return true
-  if (steerMode.value) return !inputText.value.trim()
+  if (mainSendIsSteer.value) return !inputText.value.trim()
   return !inputText.value.trim() && !pendingAtts.value.length
 })
 
@@ -468,7 +563,7 @@ const composeStatusText = computed(() => {
       ? t('session.approvalComposeHint')
       : t('session.approvalComposeUnavailable')
   }
-  if (steerMode.value || isStartingThread.value || isIndeterminateStart.value) return ''
+  if (mainSendIsSteer.value || isStartingThread.value || isIndeterminateStart.value) return ''
   if (sendBlocked.value && !showActivityBanner.value) return t('session.sendBusyHint')
   return ''
 })
@@ -514,6 +609,7 @@ const wsLabel = computed(() => {
     case 'connected': return t('session.wsConnected')
     case 'connecting': return t('session.wsConnecting')
     case 'auth_error': return t('session.wsAuth')
+    case 'transport_error': return t('session.wsTransport')
     default: return t('session.wsDisconnected')
   }
 })
@@ -684,6 +780,7 @@ function onAgentAvatarError(event: Event) {
 
 onMounted(() => {
   bindSession()
+  userInputClock = window.setInterval(() => { userInputNow.value = Date.now() }, 250)
 })
 
 onUnmounted(() => {
@@ -697,6 +794,7 @@ onUnmounted(() => {
     saveDraftFor(boundDraftKey.deviceId, boundDraftKey.sessionId)
   }
   approvalDecision.dispose()
+  if (userInputClock !== null) window.clearInterval(userInputClock)
   for (const a of pendingAtts.value) {
     if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(a.previewUrl)
@@ -716,6 +814,26 @@ watch(
 watch(
   () => sessionStore.currentSession?.pending_approval?.id,
   id => approvalDecision.sync(id)
+)
+
+watch(
+  () => pendingUserInput.value?.request_id,
+  () => {
+    userInputAnswers.value = {}
+    userInputOtherActive.value = {}
+    userInputSubmitting.value = false
+    userInputNow.value = Date.now()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => sessionStore.lastUserInputResult,
+  result => {
+    if (result && result.requestId === pendingUserInput.value?.request_id && result.status !== 'accepted') {
+      userInputSubmitting.value = false
+    }
+  }
 )
 
 watch([inputText, pendingAtts], () => {
@@ -750,6 +868,7 @@ function deliveryLabel(msg: SessionMessage) {
     case 'queued': return t('session.deliveryQueued')
     case 'sending': return t('session.deliverySending')
     case 'accepted': return t('session.deliveryAccepted')
+    case 'cancelled': return t('session.deliveryCancelled')
     case 'not_seen': return t('session.deliveryNotSeen')
     case 'failed': return msg.metadata?.delivery_error || t('session.deliveryFailed')
     case 'indeterminate': return msg.metadata?.delivery_error || t('errors.ambiguousNoRetry')
@@ -763,6 +882,20 @@ function canRetryMessage(msg: SessionMessage) {
 
 function retryMessage(messageId: string) {
   sessionStore.retryPrompt(messageId)
+}
+
+function queueStatusLabel(status: 'queued' | 'paused' | 'starting') {
+  if (status === 'starting') return t('session.queueStarting')
+  if (status === 'paused') return t('session.queuePaused')
+  return t('session.queueQueued')
+}
+
+function cancelQueuedPrompt(clientMsgId: string) {
+  sessionStore.cancelPrompt(deviceId.value, sessionId.value, clientMsgId)
+}
+
+function resumePromptQueue() {
+  sessionStore.resumePromptQueue(deviceId.value, sessionId.value)
 }
 
 function removeAtt(i: number) {
@@ -870,7 +1003,7 @@ async function handleSend() {
   if (mi >= 0) {
     prompt = prompt.slice(0, mi).trim()
   }
-  if (steerMode.value) {
+  if (mainSendIsSteer.value) {
     if (!prompt || sending.value || uploading.value) return
     sending.value = true
     const ok = sessionStore.steer(deviceId.value, sessionId.value, prompt)
@@ -932,7 +1065,8 @@ async function handleSend() {
       local.agentType,
       local.projectDir,
       prompt,
-      boundOperationId
+      boundOperationId,
+      atts
     )
     if (!ok) {
       localThreads.clearStartOperation(draftSid)
@@ -970,8 +1104,10 @@ async function handleSend() {
     // never navigate / never synthesize native inbox. Keep in-memory attachments.
     // Clear only the phone-local draft id — never mutate drafts for the unowned payload session_id.
     if (result.status === 'indeterminate') {
-      draftStore.clear(did, draftSid)
-      localThreads.remove(draftSid)
+      // The native side may have created a thread but did not prove first-turn
+      // acceptance/ownership. Keep the phone-local draft and attachments for
+      // inspection; never manufacture a nest-only session or resend it.
+      draftStore.set(did, draftSid, inputText.value, pendingAtts.value)
       pendingStartOpId.value = ''
       startTerminalStatus.value = 'indeterminate'
       sessionStore.lastError = null
@@ -1016,26 +1152,12 @@ async function handleSend() {
     inputText.value = ''
     const attsSnapshot = [...pendingAtts.value]
     pendingAtts.value = []
-    // Navigate to native session, then send attachments (prompt already in start_thread).
+    // Attachments were included in the same native first turn as the prompt.
+    // Do not create a second synthetic "attachments" turn after ownership.
     await router.replace(sessionDetailLocation(did, realId))
-    if (atts.length) {
-      const okSend = sessionStore.sendPrompt(did, realId, t('session.attachmentsFollowup'), atts)
-      if (!okSend) {
-        pendingAtts.value = attsSnapshot
-        inputText.value = prompt
-        scheduleSaveDraft()
-      } else {
-        for (const a of attsSnapshot) {
-          if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
-            URL.revokeObjectURL(a.previewUrl)
-          }
-        }
-      }
-    } else {
-      for (const a of attsSnapshot) {
-        if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
-          URL.revokeObjectURL(a.previewUrl)
-        }
+    for (const a of attsSnapshot) {
+      if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(a.previewUrl)
       }
     }
     sessionStore.clearStartOp(operationId)
@@ -1088,6 +1210,31 @@ function handleDeny() {
 function handleInterrupt() {
   if (!interruptSupported.value) return
   sessionStore.interrupt(deviceId.value, sessionId.value)
+}
+
+function handleSteer() {
+  if (!steerMode.value || !inputText.value.trim() || sending.value || uploading.value) return
+  sending.value = true
+  const ok = sessionStore.steer(deviceId.value, sessionId.value, inputText.value)
+  if (ok) {
+    inputText.value = ''
+    scheduleSaveDraft()
+  }
+  sending.value = false
+}
+
+async function handleUserInputSubmit() {
+  const pending = pendingUserInput.value
+  if (!pending || !canSubmitUserInput.value) return
+  const answers: Record<string, string[]> = {}
+  for (const question of pending.questions) {
+    const answer = userInputAnswers.value[question.id] || ''
+    answers[question.id] = [question.is_secret ? answer : answer.trim()]
+  }
+  userInputSubmitting.value = true
+  if (!await sessionStore.respondUserInput(deviceId.value, sessionId.value, pending, answers)) {
+    userInputSubmitting.value = false
+  }
 }
 </script>
 
@@ -1481,6 +1628,72 @@ function handleInterrupt() {
 .neko-mascot {
   filter: drop-shadow(0 4px 12px rgba(114, 91, 157, 0.2));
 }
+
+.prompt-queue {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--neko-line);
+  background: var(--neko-surface-muted);
+}
+.prompt-queue-head,
+.prompt-queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.prompt-queue-head { font-size: 12px; color: var(--neko-ink); }
+.prompt-queue-list {
+  display: grid;
+  gap: 4px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.prompt-queue-item { min-height: 30px; font-size: 12px; color: var(--neko-ink-soft); }
+.queue-action,
+.separate-steer-btn {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--neko-line);
+  border-radius: 9px;
+  background: var(--neko-surface-solid);
+  color: var(--neko-primary-deep);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.queue-action:disabled,
+.separate-steer-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+.separate-steer-btn {
+  align-self: flex-end;
+  margin: 0 14px 6px;
+}
+.user-input-card {
+  margin: 8px 16px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--neko-accent) 40%, transparent);
+  border-radius: 14px;
+  background: var(--neko-surface);
+}
+.user-input-question { margin-top: 12px; }
+.user-input-header { font-size: 12px; font-weight: 700; color: var(--neko-accent); }
+.user-input-label { display: block; margin: 4px 0 8px; line-height: 1.4; }
+.user-input-options { display: grid; gap: 8px; }
+.user-input-option { display: flex; min-height: 44px; align-items: center; gap: 10px; }
+.user-input-option span { display: grid; gap: 2px; }
+.user-input-option small { color: var(--neko-ink-soft); }
+.user-input-text {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid var(--neko-line);
+  border-radius: 10px;
+  padding: 10px;
+  color: var(--neko-ink);
+  background: var(--neko-surface);
+}
+.user-input-countdown { margin: 10px 0; color: var(--neko-ink-soft); font-size: 12px; }
 .neko-mascot img {
   width: 72px;
   height: 72px;

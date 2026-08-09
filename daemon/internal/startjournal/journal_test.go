@@ -72,6 +72,27 @@ func TestJournalRejectsConflictingDuplicate(t *testing.T) {
 	}
 }
 
+func TestJournalRejectsOperationReusedWithDifferentAttachments(t *testing.T) {
+	journal, err := Load(filepath.Join(t.TempDir(), "starts.json"), "device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testRequest("same prompt")
+	request.AttachmentsDigest = PromptDigest("attachment-a")
+	if _, _, err := journal.Begin("same-op", request); err != nil {
+		t.Fatal(err)
+	}
+	conflict := request
+	conflict.AttachmentsDigest = PromptDigest("attachment-b")
+	if _, _, err := journal.Begin("same-op", conflict); !IsConflict(err) {
+		t.Fatalf("attachment conflict error = %v", err)
+	}
+	record, ok := journal.Lookup("same-op")
+	if !ok || record.AttachmentsDigest != request.AttachmentsDigest {
+		t.Fatalf("attachment conflict changed original record: %#v, ok=%v", record, ok)
+	}
+}
+
 func TestJournalRecoversStartingAsIndeterminate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "starts.json")
 	journal, err := Load(path, "device")

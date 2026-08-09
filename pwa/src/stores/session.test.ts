@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { tGlobal } from '@/i18n'
 import type { NekoMessage } from '@/types/protocol'
+import { resetTransportModeForTests } from '@/api/transport'
 
 const harness = vi.hoisted(() => ({
   connected: false,
   status: 'disconnected' as 'connecting' | 'connected' | 'disconnected' | 'auth_error',
   subscribedDevice: null as string | null,
   decrypted: null as unknown,
+  encrypted: null as NonNullable<NekoMessage['sealed_payload']> | null,
   sent: [] as Array<Partial<NekoMessage>>,
   handlers: new Map<string, (msg: NekoMessage) => void>(),
   statusHandlers: new Map<string, (status: 'connecting' | 'connected' | 'disconnected' | 'auth_error') => void>()
@@ -50,14 +52,16 @@ vi.mock('@/api/websocket', () => {
 })
 
 vi.mock('@/api/http', () => ({
-  apiFetch: vi.fn(async () => new Response('', { status: 503 }))
+  apiFetch: vi.fn(async () => new Response('', { status: 503 })),
+  getPhoneId: vi.fn(() => 'phone-test')
 }))
 
 vi.mock('@/crypto/keys', async () => {
   const actual = await vi.importActual<typeof import('@/crypto/keys')>('@/crypto/keys')
   return {
     ...actual,
-    decryptSealedPayload: vi.fn(async () => harness.decrypted)
+    decryptSealedPayload: vi.fn(async () => harness.decrypted),
+    encryptSessionPayload: vi.fn(async () => harness.encrypted)
   }
 })
 
@@ -68,6 +72,7 @@ import {
   PROMPT_ACK_TIMEOUT_MS,
   useSessionStore
 } from './session'
+import { encryptSessionPayload } from '@/crypto/keys'
 
 function emit(msg: NekoMessage) {
   for (const handler of harness.handlers.values()) handler(msg)
@@ -96,8 +101,12 @@ function persistedOutboxItems() {
 
 describe('session prompt outbox', () => {
   beforeEach(() => {
+    resetTransportModeForTests('open')
     vi.useFakeTimers()
     harness.decrypted = null
+    harness.encrypted = null
+    vi.mocked(encryptSessionPayload).mockClear()
+    vi.mocked(encryptSessionPayload).mockImplementation(async () => harness.encrypted)
     localStorage.clear()
     harness.connected = false
     harness.status = 'disconnected'
@@ -109,6 +118,7 @@ describe('session prompt outbox', () => {
   })
 
   afterEach(() => {
+    resetTransportModeForTests()
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()
@@ -223,7 +233,7 @@ describe('session prompt outbox', () => {
     store.cleanup()
   })
 
-  it('freezes a failed prompt and explicitly retries with the same client id', () => {
+  it('freezes a failed prompt and explicitly retries with a new client id', () => {
     const store = useSessionStore()
     store.subscribeDevice('device-a')
     store.currentSession = {
@@ -256,8 +266,10 @@ describe('session prompt outbox', () => {
 
     expect(store.retryPrompt(clientMsgId)).toBe(true)
     expect(harness.sent).toHaveLength(1)
-    expect(harness.sent[0].payload?.client_msg_id).toBe(clientMsgId)
-    expect(harness.sent[0].payload?.retry).toBe(true)
+    const retryClientMsgId = store.messages[0].id
+    expect(retryClientMsgId).not.toBe(clientMsgId)
+    expect(harness.sent[0].payload?.client_msg_id).toBe(retryClientMsgId)
+    expect(harness.sent[0].payload?.retry).toBeUndefined()
     expect(store.messages[0].metadata?.delivery_status).toBe('sending')
 
     emit({
@@ -265,9 +277,9 @@ describe('session prompt outbox', () => {
       device_id: 'device-a',
       session_id: 'session-a',
       timestamp: 2,
-      payload: { client_msg_id: clientMsgId, message_id: clientMsgId, prompt: '修复它' }
+      payload: { client_msg_id: retryClientMsgId, message_id: retryClientMsgId, prompt: '修复它' }
     })
-    expect(store.isPending(clientMsgId)).toBe(false)
+    expect(store.isPending(retryClientMsgId)).toBe(false)
     expect(store.messages[0].metadata?.delivery_status).toBeUndefined()
     store.cleanup()
   })
@@ -825,6 +837,190 @@ describe('session prompt outbox', () => {
     store.cleanup()
   })
 
+  it('includes first-turn attachments in start_thread rather than creating a follow-up prompt', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+
+    const attachment = {
+      id: 'upload-a', url: '/api/attachments/upload-a', name: 'diagram.png', mime: 'image/png', size: 42
+    }
+    const { ok, operationId } = store.startThread(
+      'device-a', 'codex', 'D:\\repo', 'inspect the image', 'start-with-file', [attachment]
+    )
+    expect(ok).toBe(true)
+    expect(harness.sent).toHaveLength(1)
+    expect(harness.sent[0]).toMatchObject({
+      type: 'start_thread',
+      payload: {
+        operation_id: operationId,
+        prompt: 'inspect the image',
+        attachments: [attachment]
+      }
+    })
+    expect(sentPrompts()).toHaveLength(0)
+    store.cleanup()
+  })
+
+  it('allows a busy Codex session to enqueue when the daemon advertises queue support', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a', device_id: 'device-a', agent_type: 'codex', status: 'running',
+      summary: '', last_activity: 0, capabilities: { queue: true }
+    }
+
+    expect(store.sendPrompt('device-a', 'session-a', 'next in FIFO')).toBe(true)
+    expect(store.messages).toHaveLength(1)
+    expect(sentPrompts()).toHaveLength(1)
+    store.cleanup()
+  })
+
+  it('tracks daemon queue snapshots, keeps queued ACKs durable, and sends cancel/resume controls', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a', device_id: 'device-a', agent_type: 'codex', status: 'running',
+      summary: '', last_activity: 0, capabilities: { queue: true }
+    }
+    store.sendPrompt('device-a', 'session-a', 'queued work')
+    const cid = store.messages[0].id
+
+    emit({
+      type: 'prompt_queued', device_id: 'device-a', session_id: 'session-a', timestamp: 1,
+      payload: { client_msg_id: cid, queue_position: 2 }
+    })
+    expect(store.isPending(cid)).toBe(true)
+    expect(store.currentPromptQueue?.items).toEqual([
+      { client_msg_id: cid, position: 2, status: 'queued' }
+    ])
+    vi.advanceTimersByTime(PROMPT_ACK_TIMEOUT_MS)
+    expect(sentPrompts()).toHaveLength(1)
+
+    emit({
+      type: 'queue_update', device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      payload: { paused: true, items: [{ client_msg_id: cid, position: 1, status: 'paused' }] }
+    })
+    expect(store.currentPromptQueue).toEqual({
+      paused: true, items: [{ client_msg_id: cid, position: 1, status: 'paused' }]
+    })
+    expect(store.cancelPrompt('device-a', 'session-a', cid)).toBe(true)
+    expect(store.resumePromptQueue('device-a', 'session-a')).toBe(true)
+    expect(harness.sent.slice(-2)).toMatchObject([
+      { type: 'cancel_prompt', payload: { client_msg_id: cid } },
+      { type: 'resume_prompt_queue', payload: {} }
+    ])
+    store.cleanup()
+  })
+
+  it('binds sealed command AAD and outer frames to one timestamp across async encryption', async () => {
+    resetTransportModeForTests('sealed')
+    setConnected(true)
+    vi.setSystemTime(new Date(1_500))
+    harness.encrypted = {
+      alg: 'aes-256-gcm', version: 1, key_scope: 'session', epoch: 1,
+      sender_id: 'phone', recipient_id: 'device-a', sequence: 1,
+      nonce: 'nonce', ciphertext: 'ciphertext'
+    }
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a', device_id: 'device-a', agent_type: 'codex', status: 'running',
+      summary: '', last_activity: 0, capabilities: { queue: true },
+      pending_user_input: {
+        request_id: 'request-a', item_id: 'item-a',
+        questions: [{ id: 'answer', header: 'Answer', question: 'Continue?' }]
+      }
+    }
+
+    expect(store.sendPrompt('device-a', 'session-a', 'sealed prompt')).toBe(true)
+    vi.setSystemTime(new Date(3_500))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(vi.mocked(encryptSessionPayload).mock.calls[0][6]).toBe(harness.sent[0].timestamp)
+
+    const response = store.respondUserInput(
+      'device-a', 'session-a', store.currentSession.pending_user_input!, { answer: ['yes'] }
+    )
+    vi.setSystemTime(new Date(5_500))
+    expect(await response).toBe(true)
+    expect(vi.mocked(encryptSessionPayload).mock.calls[1][6]).toBe(harness.sent[1].timestamp)
+
+    expect(store.cancelPrompt('device-a', 'session-a', 'prompt-a')).toBe(true)
+    vi.setSystemTime(new Date(7_500))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(vi.mocked(encryptSessionPayload).mock.calls[2][6]).toBe(harness.sent[2].timestamp)
+    store.cleanup()
+  })
+
+  it('reports definitive structured-input send failures and exposes rejected results for retry', async () => {
+    resetTransportModeForTests('sealed')
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    const pending = {
+      request_id: 'request-a', item_id: 'item-a',
+      questions: [{ id: 'answer', header: 'Answer', question: 'Continue?' }]
+    }
+    store.currentSession = {
+      id: 'session-a', device_id: 'device-a', agent_type: 'codex', status: 'running',
+      summary: '', last_activity: 0, pending_user_input: pending
+    }
+
+    expect(await store.respondUserInput('device-a', 'session-a', pending, { answer: ['yes'] })).toBe(false)
+    expect(harness.sent).toHaveLength(0)
+
+    harness.decrypted = { request_id: 'request-a', status: 'rejected', message: 'try again' }
+    emit({
+      protocol_version: '1.1', transport_mode: 'sealed',
+      type: 'user_input_result', device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      sealed_payload: {
+        alg: 'aes-256-gcm', version: 1, key_scope: 'session', epoch: 1,
+        sender_id: 'device-a', recipient_id: 'phone-test', sequence: 2,
+        nonce: 'nonce', ciphertext: 'ciphertext'
+      }
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(store.currentSession.pending_user_input?.request_id).toBe('request-a')
+    expect(store.lastUserInputResult).toEqual({ requestId: 'request-a', status: 'rejected' })
+    store.cleanup()
+  })
+
+  it('marks a confirmed cancellation without erasing a prior delivery failure', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a', device_id: 'device-a', agent_type: 'codex', status: 'idle', summary: '', last_activity: 0
+    }
+    store.sendPrompt('device-a', 'session-a', 'cancel me')
+    const cancelled = store.messages[0].id
+    emit({
+      type: 'prompt_cancelled', device_id: 'device-a', session_id: 'session-a', timestamp: 1,
+      payload: { client_msg_id: cancelled }
+    })
+    expect(store.isPending(cancelled)).toBe(false)
+    expect(store.messages[0].metadata?.delivery_status).toBe('cancelled')
+
+    store.sendPrompt('device-a', 'session-a', 'already failed')
+    const failed = store.messages[1].id
+    emit({
+      type: 'prompt_failed', device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      payload: { client_msg_id: failed, message: 'daemon stopped' }
+    })
+    emit({
+      type: 'prompt_cancelled', device_id: 'device-a', session_id: 'session-a', timestamp: 3,
+      payload: { client_msg_id: failed }
+    })
+    expect(store.isPending(failed)).toBe(true)
+    expect(store.messages[1].metadata?.delivery_status).toBe('failed')
+    store.cleanup()
+  })
+
   it('downgrades an owned result without prompt acknowledgement to indeterminate', () => {
     setConnected(true)
     const store = useSessionStore()
@@ -852,13 +1048,13 @@ describe('session prompt outbox', () => {
   })
 
   it('decrypts sealed thread results without requiring plaintext application details', async () => {
+    resetTransportModeForTests('sealed')
     setConnected(true)
     const store = useSessionStore()
     store.subscribeDevice('device-a')
 
     const { ok, operationId } = store.startThread('device-a', 'kimi_cli', 'D:\\repo', 'ping')
     expect(ok).toBe(true)
-    vi.stubEnv('VITE_NEKONEST_TRANSPORT_MODE', 'sealed')
     harness.decrypted = {
       operation_id: operationId,
       agent_type: 'kimi_cli',
@@ -896,13 +1092,13 @@ describe('session prompt outbox', () => {
   })
 
   it('downgrades an unauthenticated sealed owned result to indeterminate', async () => {
+    resetTransportModeForTests('sealed')
     setConnected(true)
     const store = useSessionStore()
     store.subscribeDevice('device-a')
 
     const { ok, operationId } = store.startThread('device-a', 'claude_code', 'D:\\repo', 'ping')
     expect(ok).toBe(true)
-    vi.stubEnv('VITE_NEKONEST_TRANSPORT_MODE', 'sealed')
     harness.decrypted = null
 
     emit({
@@ -938,14 +1134,13 @@ describe('session prompt outbox', () => {
   })
 
   it('rejects plaintext thread results when the local nest mode is sealed', () => {
+    resetTransportModeForTests('sealed')
     setConnected(true)
     const store = useSessionStore()
     store.subscribeDevice('device-a')
 
     const { ok, operationId } = store.startThread('device-a', 'grok_build', 'D:\\repo', 'ping')
     expect(ok).toBe(true)
-    vi.stubEnv('VITE_NEKONEST_TRANSPORT_MODE', 'sealed')
-
     emit({
       protocol_version: '1.0',
       transport_mode: 'open',
@@ -992,6 +1187,56 @@ describe('session prompt outbox', () => {
     ])
     store.applySessionList({ sessions: [] }, 'device-a')
     expect(store.startCapabilities).toBeNull()
+    store.cleanup()
+  })
+
+  it('applies an immediate app-server capability downgrade to the open session', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({ sessions: [{
+      id: 'session-a',
+      device_id: 'device-a',
+      agent_type: 'codex',
+      status: 'running',
+      summary: '',
+      last_activity: 1,
+      capabilities: {
+        control_mode: 'app_server', approve: true, deny: true,
+        interrupt: true, steer: true, queue: true
+      }
+    }] }, 'device-a')
+    store.currentSession = store.sessions[0]
+
+    emit({
+      protocol_version: '1.1',
+      transport_mode: 'open',
+      type: 'session_update',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      timestamp: 2,
+      payload: {
+        session: {
+          id: 'session-a',
+          device_id: 'device-a',
+          agent_type: 'codex',
+          status: 'error',
+          summary: '',
+          last_activity: 2,
+          capabilities: {
+            control_mode: 'exec_resume', approve: false, deny: false,
+            interrupt: false, steer: false, queue: false
+          }
+        }
+      }
+    })
+
+    expect(store.currentSession).toMatchObject({
+      status: 'error',
+      capabilities: {
+        control_mode: 'exec_resume', approve: false, deny: false,
+        interrupt: false, steer: false, queue: false
+      }
+    })
     store.cleanup()
   })
 

@@ -33,7 +33,7 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 | `NEKONEST_ADMIN_SECRET` | **是** | 首选管理员引导密钥；可直接鉴权并签发独立手机身份/令牌。 |
 | `NEKONEST_PHONE_SECRET` | 兼容 | `NEKONEST_ADMIN_SECRET` 的单版本弃用别名。 |
 | `NEKONEST_BOOTSTRAP_TOKEN` | **是** | 保护 `POST /api/devices/register`（头 `X-Neko-Bootstrap`）。必须与管理员密钥不同。 |
-| `NEKONEST_TRANSPORT_MODE` | 否 | 全窝固定 `open` \| `sealed`；v0.2 默认 `open`。密封模式为显式预览，所有端必须一致。 |
+| `NEKONEST_TRANSPORT_MODE` | 否 | 首次启动可选 `open` \| `sealed`（新 DB 默认 sealed）；后续仅作为断言且必须匹配 SQLite 不可变值。无元数据旧库会持久化为 open，不能靠环境变量切换。 |
 | `NEKONEST_ALLOWED_ORIGINS` | 建议 | 逗号分隔的浏览器来源白名单。 |
 | `NEKONEST_TRUST_PROXY` | 若在反代后 | 仅当反代**覆盖** `X-Forwarded-For` / `X-Real-IP` 时设为 `1` 或 `true`。用于限流客户端 IP。 |
 | `NEKONEST_TRUSTED_PROXY_CIDRS` | 反代非 loopback | 可信反代 CIDR/IP 列表。 |
@@ -64,7 +64,7 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 
 | 路径 | 作用 | 鉴权 |
 |---|---|---|
-| `GET /health` | 存活检查，并返回 `server_version` 与 `protocol_version` | 无 |
+| `GET /health` | 存活检查，并返回 `server_version`、`protocol_version` 与权威 `transport_mode` | 无 |
 | `GET /ws/phone` | 手机 WebSocket | 手机密钥 |
 | `GET /ws/daemon` | Daemon WebSocket | 注册后的设备令牌 |
 | `GET /api/devices` | 设备列表 | 手机密钥 |
@@ -104,7 +104,7 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 |---|---|---|
 | `NEKONEST_SERVER` | `-register` | VPS 地址，如 `https://nekonest.example.com`（http(s) 会规范为 ws(s)） |
 | `NEKONEST_BOOTSTRAP_TOKEN` | 公网 `-register` | 与 Server 相同；以 `X-Neko-Bootstrap` 发送 |
-| `NEKONEST_TRANSPORT_MODE` | 所有运行 | `open`（v0.2 默认）或 `sealed`；必须与 Server 和 PWA 构建一致。 |
+| `NEKONEST_TRANSPORT_MODE` | 注册 / 可选断言 | 注册时读取并持久化 Server 模式；若显式提供则必须一致。缺少字段的旧 Daemon 配置认定为 open。 |
 
 常驻运行从配置文件读凭据，不依赖上述环境变量。
 
@@ -118,6 +118,7 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 | 设备 ID | `device_id` | 注册时分配 |
 | 令牌 | `token` | 设备鉴权令牌；**机密** |
 | 工作目录 | `work_dir` | 可选会话目录提示 |
+| 传输模式 | `transport_mode` | 注册时从 Server 得到的不可变模式；旧配置缺省表示 open |
 
 ### 实例锁与日志
 
@@ -125,6 +126,9 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 |---|---|
 | `<config>.daemon.lock` | 单实例锁；同配置第二进程会被拒绝 |
 | 提示词 journal（配置旁、按设备） | 接受/提交状态，用于至多一次投递 |
+| 提示词 queue（配置旁、按设备） | 按会话持久 FIFO；每会话最多 20 条；重启时 running 转 paused |
+
+手机按 Web 来源钉扎已验证的传输模式：曾经使用 sealed 的来源会拒绝降级到 open；首次连接管理员明确选择的开放中继时，必须在应用内显式确认。
 
 ### 配置热更
 
@@ -150,7 +154,7 @@ REST 使用由 ws(s) 推导的 http(s)。部署见 [deploy-windows.zh-CN.md](./d
 
 | 构建变量 | 默认 | 说明 |
 |---|---|---|
-| `VITE_NEKONEST_TRANSPORT_MODE` | `open` | 必须与 Server、Daemon 一致；仅为显式配置的密封预览窝设为 `sealed`。 |
+| `VITE_NEKONEST_TRANSPORT_MODE` | 未设置 | 仅用于开发/构建断言。PWA 在 WebSocket 前读取 `/health.transport_mode`；若覆盖值不同，会显示错误并停止连接。 |
 
 ---
 

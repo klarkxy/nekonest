@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -17,6 +18,31 @@ type Config struct {
 	DeviceID  string `json:"device_id"`
 	Token     string `json:"token"`
 	WorkDir   string `json:"work_dir"` // base directory for agent sessions
+	// TransportMode is immutable after registration. It is deliberately stored
+	// alongside the device credentials so a legacy daemon cannot silently turn
+	// a sealed nest into an open connection on restart.
+	TransportMode string `json:"transport_mode"`
+}
+
+const (
+	TransportOpen   = "open"
+	TransportSealed = "sealed"
+)
+
+// NormalizeTransportMode validates a persisted mode. Empty is the legacy
+// configuration shape and therefore means open; new registrations always save
+// the explicit value returned by the server.
+func NormalizeTransportMode(raw string) (string, error) {
+	mode := strings.TrimSpace(raw)
+	if mode == "" {
+		return TransportOpen, nil
+	}
+	switch mode {
+	case TransportOpen, TransportSealed:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid transport_mode %q (want open or sealed)", raw)
+	}
 }
 
 // NormalizeServerURL converts http(s) base URLs to ws(s) for WebSocket dialing.
@@ -77,6 +103,11 @@ func LoadFrom(path string) (*Config, error) {
 	if cfg.ServerURL != "" {
 		cfg.ServerURL = NormalizeServerURL(cfg.ServerURL)
 	}
+	mode, err := NormalizeTransportMode(cfg.TransportMode)
+	if err != nil {
+		return nil, err
+	}
+	cfg.TransportMode = mode
 	return &cfg, nil
 }
 

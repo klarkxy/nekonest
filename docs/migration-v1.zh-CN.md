@@ -27,19 +27,18 @@
 2. 写入备份库的 `nekonest.db.sha256`。
 3. 打开线上库，做增量 schema，再删除上述明文内容表。
 4. 清空线上 attachments 目录（可用备份恢复）。
+5. 在同一事务中原子持久化 `transport_mode=sealed`。
 
-然后升级二进制（server、daemon、PWA），并设置：
+然后升级二进制（server、daemon、PWA）。不要断言 `open`：迁移后的数据库已经是 sealed。Server 可不设模式变量，或显式断言持久化值：
 
 ```bash
-# 密封应用载荷全路径接通前：
-export NEKONEST_TRANSPORT_MODE=open
-# 生产目标：
-# export NEKONEST_TRANSPORT_MODE=sealed
+# 可选断言；不匹配会拒绝启动。
+export NEKONEST_TRANSPORT_MODE=sealed
 export NEKONEST_ADMIN_SECRET=...   # 原 NEKONEST_PHONE_SECRET
 export NEKONEST_BOOTSTRAP_TOKEN=...
 ```
 
-启动 server，各主机运行 `nekonest-daemon -doctor`、`nekonest-daemon -pair gen`，手机重新配对。
+启动 Server；让每个 Daemon 注册/更新，使 `config.json` 持久化 sealed 模式；运行 `nekonest-daemon -doctor`，生成新配对码并让手机重配。未执行本迁移的已有 open 窝仍保持 open；只改环境变量会被明确拒绝。
 
 ## 回滚
 

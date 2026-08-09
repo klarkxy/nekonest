@@ -139,8 +139,8 @@ Priority tags:
 | Migration | One explicit breaking v0.1→v1 migration; no long-term v0/v1 mixed protocol. Preserve daemon device IDs/token hashes and native stores. After verified backup, clear old VPS plaintext messages, prompts, pair codes, and attachments. Phones re-login/re-pair. |
 | Protocol compatibility | Version is `major.minor`. Major mismatch rejects. Minor is backward compatible: unknown optional fields ignored; absent capabilities default false/unsupported. E2E, identity, or delivery semantic breaks require a major bump. Never downgrade sealed to open. |
 | Formal host OS | **Windows + Linux**. macOS later. |
-| Primary agent | **Codex** is the only full-control v1 agent. Normative path: `codex app-server` JSON-RPC; pin/probe a minimum compatible CLI beginning with the locally verified 0.144.1 protocol surface. |
-| Codex controls | Send, approve/deny, interrupt, and steer are **MUST**. Follow-up queue is **SHOULD**. Legacy `codex exec resume` is a capability-degraded compatibility path. |
+| Primary agent | **Codex** is the only full-control v1 agent. Normative path: `codex app-server` JSON-RPC; the minimum full-control baseline is **codex-cli 0.146.0**, with live schema/initialize probing. |
+| Codex controls | Send, structured user input, approve/deny, interrupt, steer, and a durable FIFO follow-up queue are implemented full-control surfaces. Legacy `codex exec resume` is a capability-degraded compatibility path. |
 | Start thread | **Agent-scoped, capability-gated.** The phone opens a local-only draft; it creates the native thread only when the first prompt is sent. An installed/probed starter may target only a directory in the daemon's **current union of native-discovered project directories**. No arbitrary path entry or filesystem browsing. Lifecycle: `starting → owned \| failed \| indeterminate` (no permanent ghost row); `owned` requires positive first-prompt acknowledgement and native-store ownership. |
 | Other agents | Claude Code, Kilo, Kimi CLI, Grok Build: **compatibility resume** — discover, ownership, history, send/stream, interrupt, attachments per advertised capability, plus start only when native `spawn` is truly installed/probed and advertised. **No** approval/steer/queue promise. |
 | Attachments | Codex app-server **MUST** support images and ordinary files end-to-end. Other adapters advertise `native_image`, `path_best_effort`, or `unsupported`; UI never implies a stronger tier. |
@@ -208,7 +208,7 @@ Detailed **live** vs target cards for each harness: [agent-capability-matrix.md]
 
 | Wire id | Product | Role | Guarantees |
 |---|---|---|---|
-| `codex` | Codex | **Only full-control v1 agent** | Discover, ownership, history, send/stream, interrupt, **approve/deny**, **steer**, **attachments `native_image_and_file`** via `codex app-server`. May advertise **spawn/`start_thread`** only when its native starter is installed/probed. Queue is SHOULD when protocol can guarantee ordering. Legacy `codex exec resume` is degraded compatibility only (advertise real capabilities). Exclude subagents from main list. Pin/probe minimum CLI from 0.144.1 surface. |
+| `codex` | Codex | **Only full-control v1 agent** | Discover, ownership, history, send/stream, interrupt, **approve/deny**, structured user input, **steer**, durable FIFO queue, supervised recovery, and **attachments `native_image_and_file`** via `codex app-server`. May advertise **spawn/`start_thread`** only when its native starter is installed/probed. Legacy `codex exec resume` is degraded compatibility only (advertise real capabilities). Exclude subagents from main list. Minimum full-control CLI: **0.146.0**. |
 
 #### 7.3.2 Compatibility-resume agents (MUST)
 
@@ -547,7 +547,7 @@ All former open items are closed. Resolutions:
 | 1 | **E2E default** | Sealed-by-default for new nests. Open relay retained, disabled by default, **admin-only** enable. One nest one mode; no mix; no auto-downgrade. |
 | 2 | **Start-thread UX** | Local-only draft first; the first prompt uses the selected agent's installed/probed native starter. Target **only** directories in the daemon's **current union of discovered** native project dirs. No arbitrary path entry or separate operator allowlist file required for v1. |
 | 3 | **Auth evolution** | Admin bootstrap secret (`NEKONEST_ADMIN_SECRET`, one-release `NEKONEST_PHONE_SECRET` alias). General access: **independent revocable phone tokens** + device grants. Multi-phone keys wrapped per phone. |
-| 4 | **Codex approval transport** | Normative: **`codex app-server` JSON-RPC**. Pin/probe minimum compatible CLI from locally verified **0.144.1** protocol surface. Legacy `exec resume` is degraded only. Claude Code and others: no approval promise in v1. |
+| 4 | **Codex approval transport** | Normative: **`codex app-server` JSON-RPC** on **codex-cli 0.146.0+**, with schema/initialize probing. Legacy `exec resume` is degraded only. Claude Code and others: no approval promise in v1. |
 | 5 | **Expansion agents** | **None required** for v1.0.0. No “at least two” gate. |
 | 6 | **Message type names** | Stabilize in implementation against plan catalog: `start_thread`, `thread_starting`, `thread_owned`, `thread_failed`, `thread_indeterminate`, `steer`, `pair_request`, `pair_confirm`, `pair_ready`, `pair_failed`, `key_package`, `phone_revoked`, `attention_event`; status includes `waiting_user`. Exact schema lands in Phase 1 `protocol.json`. |
 | 7 | **Formal OS** | Windows + Linux MUST; macOS LATER. |

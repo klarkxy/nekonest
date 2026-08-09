@@ -50,8 +50,9 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 - **可靠续写**：提示词具有独立的接受、提交与失败状态；断线重连不会把“传输成功”误当作“智能体已接收”。
 - **历史与流式输出**：合并原生历史、服务端持久化与实时输出，并保持稳定消息标识；CLI 标准错误只作本机诊断，不进入对话正文。
 - **图片与文档附件**：手机上传后由 Daemon 下载到本次任务临时目录，再按各 CLI 能力传入（最多 5 个、单个 ≤ 4 MB）。
-- **Codex 全控制**：原生 app-server 发送、批准/拒绝、转向、中断以及图片/文件附件；不健康时诚实降级到 `exec resume`。五个 agent 都只有在各自 starter 探测通过后，才可提供 agent 范围的原生新建。
-- **传输协商**：每个窝固定 `open` 或 `sealed`；v0.2 默认 open，sealed 仍是显式 v1 预览。
+- **Codex 全控制**：在 `codex-cli >= 0.146.0` 上提供原生 app-server 发送、结构化问答、批准/拒绝、转向、中断、持久 FIFO 后续队列、图片/文件原子首回合与进程监督恢复；不可用时诚实降级到 `exec resume`。五个 agent 都只有在各自 starter 探测通过后，才可提供 agent 范围的原生新建。
+- **持久传输模式**：每个窝只能固定为 `open` 或 `sealed`。新数据库默认 sealed；缺少模式元数据的旧数据库一次性认定并持久化为 open；不匹配时失败关闭。
+- **手机端降级防护**：PWA 按来源钉扎模式；sealed 来源不能静默变成 open，首次使用管理员明确选择的开放中继必须显式确认。
 - **移动端体验**：可安装 PWA、会话草稿、线程级或整项目的手机本地收起、经清理的 Markdown、断线恢复与可选 Web Push。
 - **版本诊断**：页面顶部对比当前网页与实时 Server 版本；每台机器在自己的设备卡片上报告 Daemon 版本及更新状态。
 - **安全默认值**：管理员引导、可撤销手机身份、Daemon 注册令牌、来源校验、附件校验、消息大小限制与受控代理信任。
@@ -61,10 +62,30 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 | 智能体 | 本地会话来源 | 控制方式 | 附件处理 |
 |---|---|---|---|
 | Claude Code | `~/.claude/projects` | `claude --resume` 兼容续写 | 授权本次临时目录，并在提示词中提供本地路径 |
-| Codex | `~/.codex/sessions` | 通过 `codex app-server` **全控制**；`exec resume` 降级 | app-server 健康时原生图片与文件 |
+| Codex | `~/.codex/sessions` | 通过 `codex app-server` **全控制**；`exec resume` 降级 | app-server 健康时原生图片 + 同回合落地文件路径 |
 | Kilo | Kilo / OpenCode 本地数据库 | `kilo run --session` 兼容续写 | 原生 `--file`（广告为 `path_best_effort`） |
 | Kimi CLI | `.kimi-code`，兼容 `.kimi` 旧布局 | `kimi --session` 兼容续写 | 在提示词中提供本地路径，能否读取取决于 CLI 文件权限 |
 | Grok Build | `~/.grok/sessions` | `grok --resume` 兼容续写 | 在提示词中提供本地路径；非交互安全模式 |
+
+### 能力实现进度（现行 v0.2）
+
+图例：✅ 已实现并对手机端广告 · ⚙️ 已实现，但受运行状态、探测结果或降级路径限制 · ❌ 手机端未实现或不广告。
+
+| 能力 | Claude Code | Codex | Kilo | Kimi CLI | Grok Build |
+|---|---|---|---|---|---|
+| 发现 / 列表 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 所有权门槛 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 历史记录 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 发送 + 流式输出 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 中断 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 新建原生线程 | ⚙️ starter 探测 | ⚙️ app-server 健康 | ⚙️ ACP starter 探测 | ⚙️ ACP starter 探测 | ⚙️ starter 探测 |
+| 图片 / 文件附件 | ⚙️ 路径尽力读取 | ⚙️ 原生图片 + 同回合落地文件路径；降级时仅原生图片 | ⚙️ 原生 `--file`，但保守广告为尽力读取 | ⚙️ 路径尽力读取 | ⚙️ 路径尽力读取 |
+| 批准 / 拒绝 | ❌ | ⚙️ 仅 app-server | ❌ | ❌ | ❌ |
+| 转向当前回合 | ❌ | ⚙️ 仅 app-server | ❌ | ❌ | ❌ |
+| 后续提示词队列 | ❌ | ⚙️ app-server + 可写队列日志 | ❌ | ❌ | ❌ |
+| 等待状态信号 | ⚙️ 仅审批状态；手机不可操作 | ⚙️ app-server 审批 + 结构化问答 | ❌ | ❌ | ❌ |
+
+受运行时限制的能力，只有在已安装 CLI / 控制路径通过探测后才会对手机端广告。新建原生线程属于设备级 `start_capabilities`，并不表示每个现有会话都有 `capabilities.spawn=true`。Codex app-server 不健康时降级为 `exec resume`；降级路径仍支持续写、流式输出、中断与图片输入，但不支持审批、转向、普通文件输入或新建原生线程。
 
 未安装某个 CLI，或本机没有该智能体的有效主线程时，不会影响其他智能体。
 
@@ -91,9 +112,10 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/serve
 
 export NEKONEST_ADMIN_SECRET='换成足够长的随机串'
 export NEKONEST_BOOTSTRAP_TOKEN='换成另一段足够长的随机串'
-export NEKONEST_TRANSPORT_MODE='open'
 ./nekonest-server -port 8080 -data ./data -pwa ../pwa/dist
 ```
+
+全新数据目录会初始化为 `sealed`。只有在首次启动时明确要创建管理员选定的 open 窝，才设置 `NEKONEST_TRANSPORT_MODE=open`；后续该变量只是断言，必须与持久化模式一致。
 
 用 Caddy 或 Nginx 把公网 HTTPS/WSS 反向代理到 `127.0.0.1:8080`。完整示例见 [docs/deploy-vps.zh-CN.md](docs/deploy-vps.zh-CN.md)。
 
@@ -132,7 +154,7 @@ $env:NEKONEST_BOOTSTRAP_TOKEN = "与 VPS 相同的注册令牌"
 | `NEKONEST_ADMIN_SECRET` | 管理员引导与签发手机令牌；**公网必须设置** |
 | `NEKONEST_PHONE_SECRET` | 管理员密钥的弃用兼容别名 |
 | `NEKONEST_BOOTSTRAP_TOKEN` | 保护 Daemon 注册；**公网必须设置**，且应与手机密钥不同 |
-| `NEKONEST_TRANSPORT_MODE` | 全窝固定模式；v0.2 默认 `open`，sealed 为显式预览 |
+| `NEKONEST_TRANSPORT_MODE` | 可选的首次模式选择 / 后续断言；新 DB 默认 `sealed`，旧 DB 固定为 `open` |
 | `NEKONEST_ALLOWED_ORIGINS` | 浏览器来源白名单，逗号分隔 |
 | `NEKONEST_TRUST_PROXY` | 仅在反代**覆盖**转发头时设为 `1` |
 | `NEKONEST_TRUSTED_PROXY_CIDRS` | 反代不在 loopback 时声明可信网段 |
@@ -144,7 +166,7 @@ $env:NEKONEST_BOOTSTRAP_TOKEN = "与 VPS 相同的注册令牌"
 
 完整 flags、`config.json`、路由与限额见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md)。信任模型见 [docs/security.zh-CN.md](docs/security.zh-CN.md)。
 
-v0.2 的运维默认值是 `open`，VPS 可中转并持久化应用明文；请把主机与 `data/` 视为敏感系统。密封 E2E 为显式预览模式，仅在 v1 验收切换后成为新窝默认。
+Server 会把模式持久化到 SQLite，并通过 `/health` 暴露；PWA 在建立 WebSocket 前读取这个运行时值。已有 open 窝继续 open。迁移到 sealed 必须执行离线备份与明文清理并重新配对；仅修改环境变量不能静默转换。
 
 ## 文档
 
@@ -226,7 +248,7 @@ pwa:     pnpm dev
 
 - 手机主要续写原生线程。任何受支持 agent 都只有在其原生 starter 已安装/探测通过时才可提供 agent 范围的 `start_thread`；手机在首条提示词创建原生线程前仅保留本地草稿，目标只能是 daemon 当前已发现项目目录并集。
 - Codex 是唯一全控制智能体（发送、批准/拒绝、中断、转向与完整原生附件）；其余四种即使宣告原生新建能力，也仍是兼容续写适配器。
-- v0.2 各端默认 `open` 传输。sealed 为显式预览；一个窝固定一种模式，禁止自动降级。
+- 新窝默认 sealed；缺少模式元数据的旧数据库/配置一次性认定为 open。一个窝只有一种持久化模式，禁止自动降级。
 - Kimi CLI 与 Grok Build 当前只接收附件的本地路径，读取能力取决于对应 CLI 的文件权限。
 - Web Push 需要额外配置 VAPID；未配置时不发送真实推送。
 - Daemon 支持 **Windows 与 Linux**；macOS 后续再做。

@@ -45,5 +45,8 @@ func TestClearPlaintextContentForV1PreservesDevices(t *testing.T) {
 	if d.GetSchemaVersion() == "" {
 		t.Fatal("schema version")
 	}
+	if mode, err := d.TransportMode(); err != nil || mode != protocol.TransportSealed {
+		t.Fatalf("offline migration must atomically seal the nest: mode=%q err=%v", mode, err)
+	}
 	_ = filepath.Separator
 }

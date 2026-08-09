@@ -91,6 +91,16 @@
       <span>{{ t('deviceList.authBody') }}</span>
     </div>
 
+    <div v-if="deviceStore.transportError" class="auth-banner" role="alert">
+      <strong>{{ t('deviceList.transportTitle') }}</strong>
+      <span>{{ deviceStore.transportError }}</span>
+      <button
+        v-if="deviceStore.needsOpenTransportConsent"
+        type="button"
+        @click="deviceStore.confirmOpenTransport()"
+      >{{ t('deviceList.confirmOpenTransport') }}</button>
+    </div>
+
     <section class="device-section" aria-labelledby="device-section-title">
       <div class="section-heading">
         <div>
@@ -222,6 +232,9 @@ const visibleDevices = computed(() =>
 const connection = computed(() => {
   if (deviceStore.authError) {
     return { tone: 'error', dot: 'offline', label: t('deviceList.connAuth') } as const
+  }
+  if (deviceStore.transportError) {
+    return { tone: 'error', dot: 'offline', label: t('deviceList.connTransportError') } as const
   }
   if (deviceStore.loadError) {
     return { tone: 'error', dot: 'offline', label: t('deviceList.connServerFail') } as const

@@ -1,11 +1,16 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type {
   AgentSession,
   AgentStartCapability,
   AgentType,
+  AttachmentRef,
   DeliveryStatus,
+  MessageType,
   NekoMessage,
+  PendingUserInput,
+  QueueItem,
+  PromptQueueState,
   SessionListPayload,
   SessionMessage
 } from '@/types/protocol'
@@ -32,7 +37,8 @@ export const useSessionStore = defineStore('sessions', () => {
   const importing = ref(false)
   const streaming = ref(false)
   const lastError = ref<string | null>(null)
-  const wsStatus = ref<'connecting' | 'connected' | 'disconnected' | 'auth_error'>('disconnected')
+  const lastUserInputResult = ref<{ requestId: string; status: string } | null>(null)
+  const wsStatus = ref<'connecting' | 'connected' | 'disconnected' | 'auth_error' | 'transport_error'>('disconnected')
 
   const HANDLER_ID = 'session-store'
   let historyGeneration = 0
@@ -52,9 +58,145 @@ export const useSessionStore = defineStore('sessions', () => {
     error?: string
     retryAllowed: boolean
     createdAt: number
+    /** Exact sealed command frame. Retrying must never create a new nonce. */
+    sealedWire?: NekoMessage
   }
   const outbox = new Map<string, OutboxItem>()
   const ackTimers = new Map<string, number>()
+  const sealingPromises = new Map<string, Promise<boolean>>()
+  /** Daemon-owned FIFO snapshots, keyed by device/session. */
+  const promptQueues = ref<Record<string, PromptQueueState>>({})
+  /** Queue snapshot for the currently open thread; prompt bodies stay in the durable outbox. */
+  const currentPromptQueue = computed<PromptQueueState | null>(() => {
+    const session = currentSession.value
+    if (!session?.device_id || !session.id) return null
+    return promptQueues.value[queueKey(session.device_id, session.id)] || null
+  })
+
+  function queueKey(deviceId: string, sessionId: string) {
+    return `${deviceId}::${sessionId}`
+  }
+
+  const sealedInboundApplicationTypes = new Set<MessageType>([
+    'session_list', 'session_update', 'session_message', 'session_history',
+    'prompt_queued', 'prompt_accepted', 'prompt_failed', 'prompt_sent',
+    'user_input_result', 'queue_update', 'prompt_cancelled',
+    'thread_starting', 'thread_owned', 'thread_failed', 'thread_indeterminate'
+  ])
+
+  function messagePassesTransportPolicy(msg: NekoMessage): boolean {
+    const mode = nestTransportMode()
+    if (msg.transport_mode && msg.transport_mode !== mode) return false
+    if (msg.payload && msg.sealed_payload) return false
+    if (mode === 'open') return !msg.sealed_payload
+    if (!sealedInboundApplicationTypes.has(msg.type)) return true
+    // A server-generated definitive delivery failure may expose only allowed
+    // routing metadata. It cannot contain application text.
+    if (msg.type === 'prompt_failed' && !msg.payload && !msg.sealed_payload && msg.client_msg_id) return true
+    if (msg.type === 'thread_indeterminate' && !msg.payload && !msg.sealed_payload && msg.client_msg_id) return true
+    return !!msg.sealed_payload && !msg.payload
+  }
+
+  function withAuthenticatedMessagePayload(
+    msg: NekoMessage,
+    apply: (payload: Record<string, unknown>) => void
+  ) {
+    if (nestTransportMode() === 'open') {
+      apply((msg.payload || {}) as Record<string, unknown>)
+      return
+    }
+    if (!msg.sealed_payload || !msg.device_id) return
+    const sp = msg.sealed_payload
+    void decryptSealedPayload(msg.device_id, msg.session_id, sp, {
+      protocol_version: msg.protocol_version || '1.1',
+      transport_mode: 'sealed',
+      type: msg.type,
+      device_id: msg.device_id,
+      session_id: msg.session_id,
+      client_msg_id: msg.client_msg_id,
+      key_scope: sp.key_scope,
+      key_epoch: sp.epoch,
+      sender_id: sp.sender_id,
+      sequence: sp.sequence,
+      timestamp: msg.timestamp
+    }).then(plain => {
+      if (plain && typeof plain === 'object' && !Array.isArray(plain)) {
+        const payload = plain as Record<string, unknown>
+        const innerClientMsgId = String(payload.client_msg_id || payload.operation_id || '').trim()
+        if (msg.client_msg_id && innerClientMsgId && innerClientMsgId !== msg.client_msg_id) return
+        apply(payload)
+      }
+    })
+  }
+
+  function isSealedPromptEnvelope(value: unknown, clientMsgId: string): value is NekoMessage {
+    if (!value || typeof value !== 'object') return false
+    const frame = value as Partial<NekoMessage>
+    return frame.type === 'send_prompt' && frame.client_msg_id === clientMsgId &&
+      typeof frame.device_id === 'string' && typeof frame.timestamp === 'number' &&
+      !!frame.sealed_payload && !frame.payload
+  }
+
+  function applyQueueUpdate(deviceId: string, sessionId: string, payload: Record<string, unknown>) {
+    if (!sessionId) return
+    const rawItems = Array.isArray(payload.items) ? payload.items : []
+    const items: QueueItem[] = rawItems.flatMap<QueueItem>(value => {
+      if (!value || typeof value !== 'object') return []
+      const item = value as Record<string, unknown>
+      const clientMsgId = typeof item.client_msg_id === 'string' ? item.client_msg_id.trim() : ''
+      if (!clientMsgId) return []
+      const status: QueueItem['status'] = item.status === 'starting' || item.status === 'paused'
+        ? item.status
+        : 'queued'
+      return [{
+        client_msg_id: clientMsgId,
+        position: typeof item.position === 'number' ? item.position : 0,
+        status
+      }]
+    })
+    promptQueues.value = {
+      ...promptQueues.value,
+      [queueKey(deviceId, sessionId)]: { paused: payload.paused === true, items }
+    }
+  }
+
+  function noteQueuedPrompt(
+    deviceId: string,
+    sessionId: string,
+    clientMsgId: string,
+    queuePosition?: unknown
+  ) {
+    if (!sessionId || !clientMsgId) return
+    const key = queueKey(deviceId, sessionId)
+    const current = promptQueues.value[key] || { paused: false, items: [] }
+    const position = typeof queuePosition === 'number' && queuePosition > 0
+      ? queuePosition
+      : current.items.length + 1
+    const others = current.items.filter(item => item.client_msg_id !== clientMsgId)
+    const newItem: QueueItem = { client_msg_id: clientMsgId, position, status: 'queued' }
+    const items: QueueItem[] = [...others, newItem]
+      .sort((a, b) => a.position - b.position)
+    promptQueues.value = {
+      ...promptQueues.value,
+      [key]: {
+        paused: current.paused,
+        items
+      }
+    }
+  }
+
+  function removeQueuedPrompt(deviceId: string, sessionId: string, clientMsgId: string) {
+    const key = queueKey(deviceId, sessionId)
+    const current = promptQueues.value[key]
+    if (!current) return
+    promptQueues.value = {
+      ...promptQueues.value,
+      [key]: {
+        ...current,
+        items: current.items.filter(item => item.client_msg_id !== clientMsgId)
+      }
+    }
+  }
 
   function normalizeOutboxItem(value: unknown): OutboxItem | null {
     if (!value || typeof value !== 'object') return null
@@ -78,7 +220,10 @@ export const useSessionStore = defineStore('sessions', () => {
       retryAllowed: it.retryAllowed !== false,
       createdAt: Number.isFinite(it.createdAt)
         ? Number(it.createdAt)
-        : Math.floor(Date.now() / 1000)
+        : Math.floor(Date.now() / 1000),
+      sealedWire: isSealedPromptEnvelope(it.sealedWire, it.clientMsgId)
+        ? it.sealedWire
+        : undefined
     }
   }
 
@@ -221,7 +366,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function sendOutboxItem(
     it: OutboxItem,
-    explicitRetry = false,
+    _explicitRetry = false,
     scheduleAck = true
   ): boolean {
     const payload: Record<string, unknown> = {
@@ -229,52 +374,82 @@ export const useSessionStore = defineStore('sessions', () => {
       client_msg_id: it.clientMsgId
     }
     if (it.attachments?.length) payload.attachments = it.attachments
-    if (explicitRetry) payload.retry = true
-
     const mode = nestTransportMode()
     if (mode === 'sealed') {
-      // Async seal then send; mark queued until seal completes.
+      // Persist and reuse the entire original envelope. Re-encrypting a retry
+      // changes its nonce/sequence and turns one durable command into two.
+      if (it.sealedWire) {
+        const sent = nekoWS().send(it.sealedWire)
+        it.status = sent ? 'sending' : 'queued'
+        delete it.error
+        persistOutboxItem(it)
+        patchDeliveryMessage(it.clientMsgId, it.status)
+        if (sent && scheduleAck) scheduleAckQuery(it.clientMsgId)
+        else clearAckTimer(it.clientMsgId)
+        return sent
+      }
+      if (sealingPromises.has(it.clientMsgId)) return true
+      // Async seal then send; one client_msg_id has exactly one in-flight
+      // encryption and one persisted immutable frame.
       it.status = 'queued'
       persistOutboxItem(it)
       patchDeliveryMessage(it.clientMsgId, 'queued')
-      void (async () => {
-        const sealed = await encryptSessionPayload(
-          it.deviceId,
-          it.sessionId,
-          getPhoneId() || 'phone',
-          'send_prompt',
-          payload,
-          it.clientMsgId
-        )
-        if (!sealed) {
-          // No content key yet — fall back to open payload (server may reject if nest is sealed).
-          const sent = nekoWS().send({
-            type: 'send_prompt',
-            device_id: it.deviceId,
-            session_id: it.sessionId,
-            client_msg_id: it.clientMsgId,
-            timestamp: Math.floor(Date.now() / 1000),
-            payload
-          })
-          it.status = sent ? 'sending' : 'queued'
-          persistOutboxItem(it)
-          patchDeliveryMessage(it.clientMsgId, it.status)
-          if (sent && scheduleAck) scheduleAckQuery(it.clientMsgId)
-          return
+      const sealing = (async (): Promise<boolean> => {
+        let sealed: Awaited<ReturnType<typeof encryptSessionPayload>> = null
+        const timestamp = Math.floor(Date.now() / 1000)
+        try {
+          sealed = await encryptSessionPayload(
+            it.deviceId,
+            it.sessionId,
+            getPhoneId() || 'phone',
+            'send_prompt',
+            payload,
+            it.clientMsgId,
+            timestamp
+          )
+        } catch {
+          // Fail closed below: a sealed nest must never leak a plaintext retry.
         }
-        const sent = nekoWS().send({
+        if (!sealed) {
+          const current = outbox.get(it.clientMsgId) || it
+          current.status = 'failed'
+          current.error = tGlobal('errors.sealedPromptKeyUnavailable')
+          current.retryAllowed = false
+          persistOutboxItem(current)
+          patchDeliveryMessage(current.clientMsgId, 'failed', current.error, false)
+          lastError.value = current.error
+          return false
+        }
+        const frame: NekoMessage = {
           type: 'send_prompt',
           device_id: it.deviceId,
           session_id: it.sessionId,
           client_msg_id: it.clientMsgId,
-          timestamp: Math.floor(Date.now() / 1000),
+          timestamp,
           sealed_payload: sealed
-        })
-        it.status = sent ? 'sending' : 'queued'
-        persistOutboxItem(it)
-        patchDeliveryMessage(it.clientMsgId, it.status)
-        if (sent && scheduleAck) scheduleAckQuery(it.clientMsgId)
-      })()
+        }
+        // Write the immutable frame before it crosses the socket. A reload or
+        // failed write can then repeat the exact ciphertext object.
+        const current = outbox.get(it.clientMsgId)
+        if (!current) return false
+        current.sealedWire = frame
+        if (!persistOutboxItem(current)) {
+          current.status = 'failed'
+          current.error = tGlobal('errors.outboxPersist')
+          current.retryAllowed = false
+          patchDeliveryMessage(current.clientMsgId, 'failed', current.error, false)
+          lastError.value = current.error
+          return false
+        }
+        const sent = nekoWS().send(frame)
+        current.status = sent ? 'sending' : 'queued'
+        delete current.error
+        persistOutboxItem(current)
+        patchDeliveryMessage(current.clientMsgId, current.status)
+        if (sent && scheduleAck) scheduleAckQuery(current.clientMsgId)
+        return sent
+      })().finally(() => sealingPromises.delete(it.clientMsgId))
+      sealingPromises.set(it.clientMsgId, sealing)
       return true
     }
 
@@ -375,7 +550,7 @@ export const useSessionStore = defineStore('sessions', () => {
       client_msg_id?: string
     }
   ) {
-    const cid = (p?.client_msg_id || '').trim()
+    const cid = (p?.client_msg_id || msg.client_msg_id || '').trim()
     const stableId = (p?.message_id || cid || '').trim()
     if (cid) clearOutboxCommitted(cid)
     if (!currentSession.value || !msg.session_id || msg.session_id !== currentSession.value.id) return
@@ -462,6 +637,19 @@ export const useSessionStore = defineStore('sessions', () => {
       if (msg.device_id && activeDeviceId && msg.device_id !== activeDeviceId) {
         return
       }
+      if (!messagePassesTransportPolicy(msg)) {
+        if (
+          msg.type === 'thread_starting' || msg.type === 'thread_owned' ||
+          msg.type === 'thread_failed' || msg.type === 'thread_indeterminate'
+        ) {
+          applyStartThreadResult(
+            'thread_indeterminate',
+            { operation_id: msg.client_msg_id },
+            msg.device_id || deviceId
+          )
+        }
+        return
+      }
       if (msg.type === 'key_package' && msg.device_id) {
         void ingestKeyPackageMessage(msg.device_id, (msg.payload || {}) as Record<string, unknown>)
         return
@@ -502,7 +690,7 @@ export const useSessionStore = defineStore('sessions', () => {
             msg.session_id,
             sp,
             {
-              protocol_version: msg.protocol_version || '1.0',
+              protocol_version: msg.protocol_version || '1.1',
               transport_mode: 'sealed',
               type: msg.type,
               device_id: msg.device_id,
@@ -531,27 +719,30 @@ export const useSessionStore = defineStore('sessions', () => {
         // even though the phone socket stays connected. Query again on return.
         flushOutbox()
       } else if (msg.type === 'session_list' && msg.device_id === deviceId) {
-        applySessionList((msg.payload || {}) as SessionListPayload, deviceId)
-        if (currentSession.value) {
-          if (currentSession.value.device_id && currentSession.value.device_id !== deviceId) {
-            currentSession.value = null
-            messages.value = []
-          } else {
-            const updated = sessions.value.find(s => s.id === currentSession.value!.id)
-            if (updated) {
-              currentSession.value = updated
-              // Discovery is authoritative for busy state: leave "replying" when idle.
-              if (updated.status === 'idle' || updated.status === 'error') {
-                streaming.value = false
-                stopStreamPoll()
+        withAuthenticatedMessagePayload(msg, payload => {
+          applySessionList(payload as SessionListPayload, deviceId)
+          if (currentSession.value) {
+            if (currentSession.value.device_id && currentSession.value.device_id !== deviceId) {
+              currentSession.value = null
+              messages.value = []
+            } else {
+              const updated = sessions.value.find(s => s.id === currentSession.value!.id)
+              if (updated) {
+                currentSession.value = updated
+                // Discovery is authoritative for busy state: leave "replying" when idle.
+                if (updated.status === 'idle' || updated.status === 'error') {
+                  streaming.value = false
+                  stopStreamPoll()
+                }
               }
             }
           }
-        }
+        })
       } else if (msg.type === 'session_update') {
-        const raw = msg.payload?.session ?? msg.payload
-        const updated = raw as AgentSession | undefined
-        if (!updated?.id) return
+		const applySessionUpdate = (plain: Record<string, unknown> | undefined) => {
+		const raw = plain?.session ?? plain
+		const updated = raw as AgentSession | undefined
+		if (!updated?.id) return
         if (updated.device_id && updated.device_id !== deviceId) return
         const idx = sessions.value.findIndex(s => s.id === updated.id)
         if (idx >= 0) {
@@ -559,10 +750,94 @@ export const useSessionStore = defineStore('sessions', () => {
           if (currentSession.value?.id === updated.id) {
             currentSession.value = sessions.value[idx]
           }
-        } else {
-          sessions.value.push({ ...updated, device_id: updated.device_id || deviceId })
+		} else {
+		  sessions.value.push({ ...updated, device_id: updated.device_id || deviceId })
+		}
+		}
+		if (msg.sealed_payload && msg.device_id) {
+		  const sp = msg.sealed_payload
+		  void decryptSealedPayload(msg.device_id, msg.session_id, sp, {
+			protocol_version: msg.protocol_version || '1.1',
+			transport_mode: 'sealed', type: 'session_update', device_id: msg.device_id,
+			session_id: msg.session_id, key_scope: sp.key_scope, key_epoch: sp.epoch,
+			sender_id: sp.sender_id, sequence: sp.sequence, timestamp: msg.timestamp
+		  }).then(plain => {
+			if (plain && typeof plain === 'object' && !Array.isArray(plain)) {
+			  applySessionUpdate(plain as Record<string, unknown>)
+			}
+		  })
+		} else {
+		  applySessionUpdate((msg.payload || {}) as Record<string, unknown>)
+		}
+      } else if (msg.type === 'user_input_result') {
+		const applyResult = (result: Record<string, unknown>) => {
+		  const requestId = String(result.request_id || '')
+		  const status = String(result.status || '')
+		  const pending = currentSession.value?.pending_user_input
+		  if (!pending || pending.request_id !== requestId) return
+		  lastUserInputResult.value = { requestId, status }
+		  if (status === 'accepted' || status === 'expired' || status === 'stale' || status === 'indeterminate') {
+			currentSession.value = { ...currentSession.value!, pending_user_input: undefined }
+		  }
+		  if (status !== 'accepted') {
+			lastError.value = String(result.message || tGlobal('session.userInputFailed'))
+		  }
+		}
+		if (msg.sealed_payload && msg.device_id) {
+		  const sp = msg.sealed_payload
+		  void decryptSealedPayload(msg.device_id, msg.session_id, sp, {
+			protocol_version: msg.protocol_version || '1.1', transport_mode: 'sealed',
+			type: 'user_input_result', device_id: msg.device_id, session_id: msg.session_id,
+			key_scope: sp.key_scope, key_epoch: sp.epoch, sender_id: sp.sender_id,
+			sequence: sp.sequence, timestamp: msg.timestamp
+		  }).then(plain => {
+			if (plain && typeof plain === 'object' && !Array.isArray(plain)) applyResult(plain as Record<string, unknown>)
+		  })
+		} else applyResult((msg.payload || {}) as Record<string, unknown>)
+		} else if (msg.type === 'queue_update') {
+        const applyUpdate = (payload: Record<string, unknown>) => {
+          const sid = String(payload.session_id || msg.session_id || '').trim()
+          applyQueueUpdate(msg.device_id || deviceId, sid, payload)
         }
-      } else if (msg.type === 'session_message') {
+        if (msg.sealed_payload && msg.device_id) {
+          const sp = msg.sealed_payload
+          void decryptSealedPayload(msg.device_id, msg.session_id, sp, {
+            protocol_version: msg.protocol_version || '1.1', transport_mode: 'sealed',
+            type: 'queue_update', device_id: msg.device_id, session_id: msg.session_id,
+            key_scope: sp.key_scope, key_epoch: sp.epoch, sender_id: sp.sender_id,
+            sequence: sp.sequence, timestamp: msg.timestamp
+          }).then(plain => {
+            if (plain && typeof plain === 'object' && !Array.isArray(plain)) applyUpdate(plain as Record<string, unknown>)
+          })
+        } else applyUpdate((msg.payload || {}) as Record<string, unknown>)
+      } else if (msg.type === 'prompt_cancelled') {
+        const applyCancelled = (payload: Record<string, unknown>) => {
+          const cid = String(payload.client_msg_id || '').trim()
+          const sid = String(payload.session_id || msg.session_id || '').trim()
+          if (!cid || !sid) return
+          syncOutboxFromStorage()
+          // A late cancellation must not erase a separately reported failed
+          // delivery: that command is no longer a daemon-queued item and may
+          // carry the only safe retry/indeterminate state for the user.
+          const item = outbox.get(cid)
+          if (item?.status !== 'failed') clearOutboxCommitted(cid)
+          removeQueuedPrompt(msg.device_id || deviceId, sid, cid)
+          if (currentSession.value?.id === sid && item?.status !== 'failed') {
+            patchDeliveryMessage(cid, 'cancelled')
+          }
+        }
+        if (msg.sealed_payload && msg.device_id) {
+          const sp = msg.sealed_payload
+          void decryptSealedPayload(msg.device_id, msg.session_id, sp, {
+            protocol_version: msg.protocol_version || '1.1', transport_mode: 'sealed',
+            type: 'prompt_cancelled', device_id: msg.device_id, session_id: msg.session_id,
+            key_scope: sp.key_scope, key_epoch: sp.epoch, sender_id: sp.sender_id,
+            sequence: sp.sequence, timestamp: msg.timestamp
+          }).then(plain => {
+            if (plain && typeof plain === 'object' && !Array.isArray(plain)) applyCancelled(plain as Record<string, unknown>)
+          })
+        } else applyCancelled((msg.payload || {}) as Record<string, unknown>)
+		} else if (msg.type === 'session_message') {
         const applySessionMessage = (sessionMessage: SessionMessage) => {
           const sid = msg.session_id || (sessionMessage as { session_id?: string }).session_id
           if (!sid) return
@@ -592,7 +867,7 @@ export const useSessionStore = defineStore('sessions', () => {
             msg.session_id,
             sp,
             {
-              protocol_version: msg.protocol_version || '1.0',
+              protocol_version: msg.protocol_version || '1.1',
               transport_mode: 'sealed',
               type: 'session_message',
               device_id: msg.device_id,
@@ -615,25 +890,59 @@ export const useSessionStore = defineStore('sessions', () => {
         applySessionMessage(sessionMessage)
       } else if (msg.type === 'session_history') {
         if (!currentSession.value || !msg.session_id || msg.session_id !== currentSession.value.id) return
-        importing.value = false
-        const hist = (msg.payload?.messages as SessionMessage[]) || []
-        mergeHistory(hist)
-        stopForTerminalHistoryError(hist)
+        withAuthenticatedMessagePayload(msg, payload => {
+          importing.value = false
+          const hist = (payload.messages as SessionMessage[]) || []
+          mergeHistory(hist)
+          stopForTerminalHistoryError(hist)
+        })
+      } else if (msg.type === 'prompt_queued') {
+        withAuthenticatedMessagePayload(msg, payload => {
+          const cid = String(payload.client_msg_id || msg.client_msg_id || '').trim()
+          if (!cid) return
+          clearAckTimer(cid)
+          const item = outbox.get(cid)
+          if (item) {
+            item.status = 'sending'
+            persistOutboxItem(item)
+          }
+          noteQueuedPrompt(
+            msg.device_id || deviceId,
+            String(payload.session_id || msg.session_id || item?.sessionId || ''),
+            cid,
+            Number(payload.queue_position) || undefined
+          )
+          if (currentSession.value && msg.session_id === currentSession.value.id) {
+            patchDeliveryMessage(cid, 'accepted')
+          }
+        })
       } else if (msg.type === 'prompt_accepted') {
-        const p = msg.payload as { client_msg_id?: string }
-        const cid = (p?.client_msg_id || '').trim()
-        if (!cid) return
-        clearAckTimer(cid)
-        const item = outbox.get(cid)
-        if (item) {
-          item.status = 'sending'
-          persistOutboxItem(item)
-        }
-        if (currentSession.value && msg.session_id === currentSession.value.id) {
-          patchDeliveryMessage(cid, 'accepted')
-        }
-        // Keep outbox until prompt_committed (at-most-once durability).
-        scheduleAckQuery(cid)
+        withAuthenticatedMessagePayload(msg, payload => {
+          const cid = String(payload.client_msg_id || msg.client_msg_id || '').trim()
+          if (!cid) return
+          clearAckTimer(cid)
+          const item = outbox.get(cid)
+          if (item) {
+            item.status = 'sending'
+            persistOutboxItem(item)
+          }
+          if (currentSession.value && msg.session_id === currentSession.value.id) {
+            patchDeliveryMessage(cid, 'accepted')
+          }
+          // Keep outbox until prompt_committed (at-most-once durability).
+          // Older daemons used prompt_accepted{queued:true}; preserve that
+          // shape without confusing admission with native turn acceptance.
+          if (payload.queued === true) {
+            noteQueuedPrompt(
+              msg.device_id || deviceId,
+              String(msg.session_id || item?.sessionId || ''),
+              cid,
+              Number(payload.queue_position) || undefined
+            )
+          } else {
+            scheduleAckQuery(cid)
+          }
+        })
       } else if (msg.type === 'prompt_committed' || msg.type === 'prompt_sent') {
         // prompt_sent is deprecated; treat as committed for transition.
         applyPromptCommitted(msg, deviceId, (msg.payload || {}) as {
@@ -644,7 +953,7 @@ export const useSessionStore = defineStore('sessions', () => {
         })
       } else if (msg.type === 'prompt_not_seen') {
         const p = msg.payload as { client_msg_id?: string }
-        const cid = (p?.client_msg_id || '').trim()
+        const cid = String(p?.client_msg_id || msg.client_msg_id || '').trim()
         if (!cid) return
         clearAckTimer(cid)
         const item = outbox.get(cid)
@@ -658,33 +967,37 @@ export const useSessionStore = defineStore('sessions', () => {
           patchDeliveryMessage(cid, 'not_seen', tGlobal('outbox.notSeen'), true)
         }
       } else if (msg.type === 'prompt_failed') {
-        const p = msg.payload as {
-          client_msg_id?: string
-          message?: string
-          error?: string
-          reason?: string
-          outcome?: string
-          retry_allowed?: boolean
+        const applyFailure = (payload: Record<string, unknown>) => {
+          const cid = String(payload.client_msg_id || msg.client_msg_id || '').trim()
+          const outcome = String(payload.outcome || msg.outcome || '')
+          const retryAllowed = (payload.retry_allowed ?? msg.retry_allowed) !== false && outcome !== 'indeterminate'
+          const failure = promptFailureMessage(payload, retryAllowed)
+          if (cid) syncOutboxFromStorage()
+          const item = cid ? outbox.get(cid) : undefined
+          if (cid) clearAckTimer(cid)
+          if (item) {
+            item.status = 'failed'
+            item.error = failure
+            item.retryAllowed = retryAllowed
+            persistOutboxItem(item)
+          }
+          const failedSessionId = msg.session_id || item?.sessionId
+          if (currentSession.value && failedSessionId === currentSession.value.id) {
+            lastError.value = failure
+            importing.value = false
+            streaming.value = false
+            stopStreamPoll()
+            if (cid) patchDeliveryMessage(cid, 'failed', failure, retryAllowed)
+          }
         }
-        const cid = (p?.client_msg_id || '').trim()
-        const retryAllowed = p?.retry_allowed !== false && p?.outcome !== 'indeterminate'
-        const failure = promptFailureMessage(p, retryAllowed)
-        if (cid) syncOutboxFromStorage()
-        const item = cid ? outbox.get(cid) : undefined
-        if (cid) clearAckTimer(cid)
-        if (item) {
-          item.status = 'failed'
-          item.error = failure
-          item.retryAllowed = retryAllowed
-          persistOutboxItem(item)
-        }
-        const failedSessionId = msg.session_id || item?.sessionId
-        if (currentSession.value && failedSessionId === currentSession.value.id) {
-          lastError.value = failure
-          importing.value = false
-          streaming.value = false
-          stopStreamPoll()
-          if (cid) patchDeliveryMessage(cid, 'failed', failure, retryAllowed)
+        if (!msg.sealed_payload && nestTransportMode() === 'sealed') {
+          applyFailure({
+            client_msg_id: msg.client_msg_id,
+            outcome: msg.outcome,
+            retry_allowed: msg.retry_allowed
+          })
+        } else {
+          withAuthenticatedMessagePayload(msg, applyFailure)
         }
       } else if (msg.type === 'error') {
         const m = (msg.payload as { message?: string })?.message || 'unknown error'
@@ -841,13 +1154,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function requestNativeHistory(deviceId: string, sessionId: string) {
     importing.value = true
-    const ok = nekoWS().send({
-      type: 'fetch_history',
-      device_id: deviceId,
-      session_id: sessionId,
-      timestamp: Math.floor(Date.now() / 1000),
-      payload: { limit: 50 }
-    })
+    const ok = sendApplicationCommand('fetch_history', deviceId, sessionId, { limit: 40 })
     if (!ok) {
       importing.value = false
       return
@@ -927,13 +1234,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   function requestNativeHistoryQuiet(deviceId: string, sessionId: string) {
-    nekoWS().send({
-      type: 'fetch_history',
-      device_id: deviceId,
-      session_id: sessionId,
-      timestamp: Math.floor(Date.now() / 1000),
-      payload: { limit: 30 }
-    })
+    sendApplicationCommand('fetch_history', deviceId, sessionId, { limit: 30 })
   }
 
   function sendPrompt(
@@ -956,7 +1257,8 @@ export const useSessionStore = defineStore('sessions', () => {
         currentSession.value.status === 'waiting_user' ||
         streaming.value
       )
-    if (isCurrentSessionBusy && nekoWS().isConnected()) {
+    const queueEnabled = currentSession.value?.id === sessionId && currentSession.value.capabilities?.queue === true
+    if (isCurrentSessionBusy && nekoWS().isConnected() && !queueEnabled) {
       lastError.value = tGlobal('errors.busySend')
       return false
     }
@@ -966,7 +1268,7 @@ export const useSessionStore = defineStore('sessions', () => {
       return false
     }
     // Stable wire id (msg_*) — server persists it; not "optimistic-only" prefix.
-    const clientMsgId = `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+    const clientMsgId = newPromptClientMsgId()
     const trimmed = prompt.trim()
     const item: OutboxItem = {
       clientMsgId,
@@ -1020,56 +1322,131 @@ export const useSessionStore = defineStore('sessions', () => {
       lastError.value = tGlobal('errors.channelRetry')
       return false
     }
-    item.status = 'queued'
-    item.retryAllowed = true
-    delete item.error
+    // A definitive retry is a new command. One client_msg_id always keeps one
+    // immutable envelope; the failed ID remains terminal in server durability.
+    const retryClientMsgId = newPromptClientMsgId()
+    const retryItem: OutboxItem = {
+      ...item,
+      clientMsgId: retryClientMsgId,
+      status: 'queued',
+      retryAllowed: true,
+      createdAt: Math.floor(Date.now() / 1000),
+      sealedWire: undefined
+    }
+    delete retryItem.error
+    clearAckTimer(clientMsgId)
+    sealingPromises.delete(clientMsgId)
+    removePersistedOutboxItem(clientMsgId)
+    outbox.delete(clientMsgId)
+    outbox.set(retryClientMsgId, retryItem)
     lastError.value = null
-    patchDeliveryMessage(clientMsgId, 'queued')
-    persistOutboxItem(item)
-    const sent = sendOutboxItem(item, true)
+    const delivery = messages.value.find(message => message.id === clientMsgId)
+    if (delivery) delivery.id = retryClientMsgId
+    patchDeliveryMessage(retryClientMsgId, 'queued')
+    persistOutboxItem(retryItem)
+    const sent = sendOutboxItem(retryItem)
     if (!sent) {
       const failure = tGlobal('errors.channelDropped')
-      item.status = 'failed'
-      item.error = failure
-      persistOutboxItem(item)
-      patchDeliveryMessage(clientMsgId, 'failed', failure)
+      retryItem.status = 'failed'
+      retryItem.error = failure
+      persistOutboxItem(retryItem)
+      patchDeliveryMessage(retryClientMsgId, 'failed', failure)
       lastError.value = failure
     }
     return sent
   }
 
   function approve(deviceId: string, sessionId: string, approvalId: string): boolean {
-    const ok = nekoWS().send({
-      type: 'approve',
-      device_id: deviceId,
-      session_id: sessionId,
-      timestamp: Math.floor(Date.now() / 1000),
-      payload: { approval_id: approvalId }
-    })
+    const ok = sendApplicationCommand('approve', deviceId, sessionId, { approval_id: approvalId })
     if (!ok) lastError.value = tGlobal('errors.channelApprove')
     return ok
   }
 
   function deny(deviceId: string, sessionId: string, approvalId: string): boolean {
-    const ok = nekoWS().send({
-      type: 'deny',
-      device_id: deviceId,
-      session_id: sessionId,
-      timestamp: Math.floor(Date.now() / 1000),
-      payload: { approval_id: approvalId }
-    })
+    const ok = sendApplicationCommand('deny', deviceId, sessionId, { approval_id: approvalId })
     if (!ok) lastError.value = tGlobal('errors.channelReject')
     return ok
   }
 
+  function newPromptClientMsgId(): string {
+    return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+  }
+
+  function sendApplicationCommand(
+    type: MessageType,
+    deviceId: string,
+    sessionId: string,
+    payload: Record<string, unknown>,
+    clientMsgId?: string
+  ): boolean {
+    const timestamp = Math.floor(Date.now() / 1000)
+    if (nestTransportMode() === 'open') {
+      return nekoWS().send({
+        type, device_id: deviceId, session_id: sessionId,
+        client_msg_id: clientMsgId, timestamp, payload
+      })
+    }
+    void (async () => {
+      let sealed: Awaited<ReturnType<typeof encryptSessionPayload>> = null
+      try {
+        sealed = await encryptSessionPayload(
+          deviceId, sessionId, getPhoneId() || 'phone', type, payload,
+          clientMsgId, timestamp
+        )
+      } catch {
+        // Fall through to the fail-closed error below.
+      }
+      if (!sealed) {
+        lastError.value = tGlobal('session.queueKeyUnavailable')
+        return
+      }
+      if (!nekoWS().send({
+        type, device_id: deviceId, session_id: sessionId,
+        client_msg_id: clientMsgId, timestamp, sealed_payload: sealed
+      })) lastError.value = tGlobal('errors.channelQueued')
+    })()
+    return true
+  }
+
+  async function respondUserInput(
+	deviceId: string,
+	sessionId: string,
+	pending: PendingUserInput,
+	answers: Record<string, string[]>
+  ): Promise<boolean> {
+	const payload: Record<string, unknown> = { request_id: pending.request_id, answers }
+	const timestamp = Math.floor(Date.now() / 1000)
+	if (nestTransportMode() === 'sealed') {
+	  let sealed: Awaited<ReturnType<typeof encryptSessionPayload>> = null
+	  try {
+		sealed = await encryptSessionPayload(
+		  deviceId, sessionId, getPhoneId() || 'phone', 'respond_user_input', payload,
+		  undefined, timestamp
+		)
+	  } catch {
+		// Treat local crypto failures as definitive so the form can be retried.
+	  }
+	  if (!sealed) {
+		lastError.value = tGlobal('session.userInputKeyUnavailable')
+		return false
+	  }
+	  const sent = nekoWS().send({
+		type: 'respond_user_input', device_id: deviceId, session_id: sessionId,
+		timestamp, sealed_payload: sealed
+	  })
+	  if (!sent) lastError.value = tGlobal('errors.channelQueued')
+	  return sent
+	}
+	const sent = nekoWS().send({
+	  type: 'respond_user_input', device_id: deviceId, session_id: sessionId,
+	  timestamp, payload
+	})
+	if (!sent) lastError.value = tGlobal('errors.channelQueued')
+	return sent
+  }
+
   function interrupt(deviceId: string, sessionId: string): boolean {
-    const ok = nekoWS().send({
-      type: 'interrupt',
-      device_id: deviceId,
-      session_id: sessionId,
-      timestamp: Math.floor(Date.now() / 1000),
-      payload: {}
-    })
+    const ok = sendApplicationCommand('interrupt', deviceId, sessionId, {})
     if (!ok) lastError.value = tGlobal('errors.channelInterrupt')
     return ok
   }
@@ -1081,14 +1458,31 @@ export const useSessionStore = defineStore('sessions', () => {
       lastError.value = tGlobal('errors.emptySteer')
       return false
     }
-    const ok = nekoWS().send({
-      type: 'steer',
-      device_id: deviceId,
-      session_id: sessionId,
-      timestamp: Math.floor(Date.now() / 1000),
-      payload: { text: trimmed }
-    })
+    const ok = sendApplicationCommand('steer', deviceId, sessionId, { text: trimmed })
     if (!ok) lastError.value = tGlobal('errors.channelSteer')
+    return ok
+  }
+
+  function sendQueueControl(
+    type: 'cancel_prompt' | 'resume_prompt_queue',
+    deviceId: string,
+    sessionId: string,
+    payload: Record<string, unknown>
+  ): boolean {
+    return sendApplicationCommand(type, deviceId, sessionId, payload)
+  }
+
+  function cancelPrompt(deviceId: string, sessionId: string, clientMsgId: string): boolean {
+    const cid = clientMsgId.trim()
+    if (!cid) return false
+    const ok = sendQueueControl('cancel_prompt', deviceId, sessionId, { client_msg_id: cid })
+    if (!ok) lastError.value = tGlobal('errors.channelQueueControl')
+    return ok
+  }
+
+  function resumePromptQueue(deviceId: string, sessionId: string): boolean {
+    const ok = sendQueueControl('resume_prompt_queue', deviceId, sessionId, {})
+    if (!ok) lastError.value = tGlobal('errors.channelQueueControl')
     return ok
   }
 
@@ -1114,7 +1508,8 @@ export const useSessionStore = defineStore('sessions', () => {
     agentType: AgentType,
     cwd: string,
     firstPrompt = '',
-    boundOperationId = ''
+    boundOperationId = '',
+    attachments?: AttachmentRef[]
   ): { ok: boolean; operationId: string } {
     const operationId = boundOperationId.trim() || `local_start_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const firstPromptText = firstPrompt.trim()
@@ -1129,7 +1524,8 @@ export const useSessionStore = defineStore('sessions', () => {
       operation_id: operationId,
       project_dir: cwd,
       agent_type: agentType,
-      prompt: firstPrompt
+      prompt: firstPrompt,
+      ...(attachments?.length ? { attachments } : {})
     }
     if (nestTransportMode() === 'sealed') {
       void (async () => {
@@ -1276,10 +1672,11 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   return {
-    sessions, startCapabilities, currentSession, messages, loading, importing, streaming, lastError, wsStatus,
+    sessions, startCapabilities, currentSession, messages, loading, importing, streaming, lastError, lastUserInputResult, wsStatus,
+    promptQueues, currentPromptQueue,
     startOps,
     subscribeDevice, applySessionList, setCurrentSession, clearMessages, requestNativeHistory,
-    sendPrompt, retryPrompt, approve, deny, interrupt, steer, startThread, clearStartOp,
+    sendPrompt, retryPrompt, approve, deny, respondUserInput, interrupt, steer, cancelPrompt, resumePromptQueue, startThread, clearStartOp,
     isPending, cleanup
   }
 })

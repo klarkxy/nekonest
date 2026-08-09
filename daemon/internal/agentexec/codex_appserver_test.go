@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -221,6 +222,21 @@ func TestStartingTurnWaitsForStartedNotification(t *testing.T) {
 	}
 }
 
+func TestLateTurnStartResponseDoesNotResurrectCompletedTurn(t *testing.T) {
+	c := NewCodexAppServer()
+	c.RegisterThreadIDs("thr1", "ses1", "wire1")
+	c.SetActiveTurn("thr1", "turn1")
+	c.HandleNotification("turn/completed", json.RawMessage(`{"threadId":"thr1","turn":{"id":"turn1","status":"completed"}}`))
+	c.setStartingTurn("thr1", "turn1")
+
+	if got := c.ActiveTurnID("wire1"); got != "" {
+		t.Fatalf("late response resurrected completed turn %q", got)
+	}
+	if got := c.LastTurnStatus("wire1"); got != "completed" {
+		t.Fatalf("late response changed terminal status to %q", got)
+	}
+}
+
 func TestHandleNotificationInterruptedAndStaleCompletion(t *testing.T) {
 	c := NewCodexAppServer()
 	c.RegisterThreadIDs("thr1", "ses1", "wire1")
@@ -305,17 +321,129 @@ func TestEncodeRequestID(t *testing.T) {
 	}
 }
 
-func TestPendingApprovalUserInputTool(t *testing.T) {
+func TestStructuredPendingUserInputAndResponse(t *testing.T) {
 	c := NewCodexAppServer()
-	p := c.TrackServerRequest(ServerRequest{
+	sink := &testWriteCloser{}
+	c.mu.Lock()
+	c.running = true
+	c.initialized = true
+	c.stdin = sink
+	c.mu.Unlock()
+	c.RegisterThreadIDs("thr", "ses", "wire")
+	p := c.TrackUserInput(ServerRequest{
 		ID:     "1",
 		Method: "item/tool/requestUserInput",
-		Params: json.RawMessage(`{"threadId":"thr","turnId":"t","itemId":"i","questions":[]}`),
+		Params: json.RawMessage(`{"threadId":"thr","turnId":"t","itemId":"i","autoResolutionMs":60000,"questions":[{"id":"choice","header":"Mode","question":"Pick one","options":[{"label":"Safe","description":"recommended"}],"isOther":true},{"id":"token","header":"Secret","question":"Value","isSecret":true}]}`),
 	})
-	if p.ToolName != "user_input" {
-		t.Fatalf("%s", p.ToolName)
+	if p == nil || len(p.Questions) != 2 || !p.Questions[0].IsOther || !p.Questions[1].IsSecret {
+		t.Fatalf("pending=%#v", p)
 	}
-	if time.Since(p.CreatedAt) > time.Minute {
-		t.Fatal("createdAt")
+	snapshot := c.PendingUserInputFor("wire")
+	if snapshot == nil || snapshot.RequestID != "1" || snapshot.ExpiresAt.IsZero() {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	status, err := c.RespondUserInput("1", map[string][]string{
+		"choice": {"Safe"},
+		"token":  {"do-not-retain"},
+	})
+	if err != nil || status != "accepted" {
+		t.Fatalf("status=%s err=%v", status, err)
+	}
+	written := sink.String()
+	if !strings.Contains(written, `"answers":{"choice":{"answers":["Safe"]},"token":{"answers":["do-not-retain"]}}`) {
+		t.Fatalf("response=%s", written)
+	}
+	if _, ok := c.resolvedInput["1"]; !ok || c.PendingUserInputFor("wire") != nil {
+		t.Fatal("request was not resolved")
+	}
+	before := sink.String()
+	status, err = c.RespondUserInput("1", map[string][]string{"choice": {"changed"}})
+	if err != nil || status != "accepted" || sink.String() != before {
+		t.Fatalf("duplicate status=%s err=%v", status, err)
+	}
+}
+
+func TestStructuredUserInputExpiredAndStale(t *testing.T) {
+	c := NewCodexAppServer()
+	zero := uint64(0)
+	p := &PendingUserInput{
+		RequestID: "expired", ItemID: "item", ThreadID: "thr",
+		Questions: []UserInputQuestion{{ID: "q"}}, AutoResolutionMS: &zero,
+		CreatedAt: time.Now().Add(-time.Second), ExpiresAt: time.Now().Add(-time.Millisecond),
+	}
+	c.pendingInput[p.RequestID] = p
+	if status, err := c.RespondUserInput("expired", map[string][]string{"q": {"a"}}); status != "expired" || !errors.Is(err, ErrUserInputExpired) {
+		t.Fatalf("expired status=%s err=%v", status, err)
+	}
+	if status, err := c.RespondUserInput("missing", nil); status != "stale" || !errors.Is(err, ErrNoPendingUserInput) {
+		t.Fatalf("stale status=%s err=%v", status, err)
+	}
+}
+
+func TestProcessExitInvalidatesOnlyCurrentGeneration(t *testing.T) {
+	c := NewCodexAppServer()
+	oldCmd := &exec.Cmd{}
+	currentCmd := &exec.Cmd{}
+	c.mu.Lock()
+	c.generation = 2
+	c.cmd = currentCmd
+	c.running = true
+	c.initialized = true
+	c.mu.Unlock()
+
+	c.handleProcessExit(1, oldCmd, errors.New("old process"))
+	if !c.Initialized() {
+		t.Fatal("stale process exit invalidated the current generation")
+	}
+
+	c.RegisterThreadIDs("thread-2", "session-2", "wire-2")
+	c.SetActiveTurn("thread-2", "turn-2")
+	result := make(chan rpcResult, 1)
+	c.mu.Lock()
+	c.pending["99"] = result
+	c.mu.Unlock()
+	exits := make(chan AppServerExit, 1)
+	c.SetExitHandler(func(event AppServerExit) { exits <- event })
+	c.handleProcessExit(2, currentCmd, errors.New("boom"))
+
+	if c.Initialized() || c.ActiveTurnID("wire-2") != "" {
+		t.Fatal("current process exit retained live app-server state")
+	}
+	select {
+	case rpc := <-result:
+		if !errors.Is(rpc.Error, ErrAppServerExited) {
+			t.Fatalf("pending RPC error = %v", rpc.Error)
+		}
+	default:
+		t.Fatal("pending RPC was not failed")
+	}
+	select {
+	case event := <-exits:
+		if event.Generation != 2 || len(event.Sessions) != 1 || event.Sessions[0] != "wire-2" {
+			t.Fatalf("exit event = %#v", event)
+		}
+	default:
+		t.Fatal("current exit event was not emitted")
+	}
+}
+
+func TestParseCodexFullControlVersion(t *testing.T) {
+	tests := []struct {
+		output  string
+		version string
+		ok      bool
+		wantErr bool
+	}{
+		{"codex-cli 0.145.9", "0.145.9", false, false},
+		{"codex-cli 0.146.0", "0.146.0", true, false},
+		{"codex-cli 0.146.1", "0.146.1", true, false},
+		{"codex-cli 1.0.0", "1.0.0", true, false},
+		{"unknown", "", false, true},
+	}
+	for _, test := range tests {
+		version, ok, err := parseCodexVersion(test.output)
+		if version != test.version || ok != test.ok || (err != nil) != test.wantErr {
+			t.Errorf("parse %q = version=%q ok=%v err=%v", test.output, version, ok, err)
+		}
 	}
 }

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nekonest/daemon/internal/adapters"
+	"github.com/nekonest/daemon/internal/attach"
 	"github.com/nekonest/daemon/internal/startjournal"
 )
 
@@ -36,6 +40,7 @@ type threadStartCommand struct {
 	AgentType   adapters.AgentType
 	ProjectDir  string
 	Prompt      string
+	Attachments []attach.Ref
 }
 
 type threadStartEvent struct {
@@ -55,6 +60,10 @@ type threadStartCoordinator struct {
 	startTimeout        time.Duration
 	ownershipWait       time.Duration
 	ownershipPoll       time.Duration
+	// materializeAttachments must download every ref before the native starter
+	// is invoked. Keeping it injected makes the no-native-boundary failure
+	// path directly testable.
+	materializeAttachments func(sessionID string, refs []attach.Ref) (string, []attach.LocalFile, string, error)
 }
 
 func (c *threadStartCoordinator) Handle(parent context.Context, command threadStartCommand, emit func(threadStartEvent)) {
@@ -76,9 +85,10 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 		return
 	}
 	record, fresh, err := c.journal.Begin(command.OperationID, startjournal.Request{
-		AgentType:    string(agentType),
-		ProjectDir:   normalizedDir,
-		PromptDigest: startjournal.PromptDigest(command.Prompt),
+		AgentType:         string(agentType),
+		ProjectDir:        normalizedDir,
+		PromptDigest:      startjournal.PromptDigest(command.Prompt),
+		AttachmentsDigest: threadStartAttachmentsDigest(command.Attachments),
 	})
 	if err != nil {
 		message := err.Error()
@@ -158,6 +168,47 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 		finish(startjournal.StatusFailed, "", reason)
 		return
 	}
+	if len(command.Attachments) > 0 && agentType != adapters.AgentCodex {
+		finish(startjournal.StatusFailed, "", "first-turn attachments are currently supported only for codex")
+		return
+	}
+
+	var (
+		attachmentDir    string
+		attachmentFiles  []attach.LocalFile
+		attachmentSuffix string
+	)
+	if len(command.Attachments) > 0 {
+		if c.materializeAttachments == nil {
+			finish(startjournal.StatusFailed, "", "attachments are unavailable for native thread creation")
+			return
+		}
+		attachmentDir, attachmentFiles, attachmentSuffix, err = c.materializeAttachments(command.OperationID, command.Attachments)
+		if err != nil || len(attachmentFiles) != len(command.Attachments) {
+			if attachmentDir != "" {
+				_ = os.RemoveAll(attachmentDir)
+			}
+			message := "attachment download failed before native thread creation"
+			if err != nil {
+				message += ": " + err.Error()
+			} else {
+				message += ": one or more attachments could not be materialized"
+			}
+			finish(startjournal.StatusFailed, "", message)
+			return
+		}
+	}
+	var cleanupOnce sync.Once
+	releaseFiles := func() {
+		cleanupOnce.Do(func() {
+			if attachmentDir != "" {
+				_ = os.RemoveAll(attachmentDir)
+			}
+		})
+	}
+	// The native starter takes ownership of cleanup only after it positively
+	// accepted the first turn. Every pre-boundary/failed path removes files now.
+	starterOwnsFiles := false
 
 	startTimeout := c.startTimeout
 	if startTimeout <= 0 {
@@ -165,13 +216,19 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 	}
 	startCtx, cancelStart := context.WithTimeout(parent, startTimeout)
 	started, startErr, startPanic := invokeNativeThreadStart(startCtx, starter, adapters.ThreadStartRequest{
-		ProjectDir: projectDir,
-		Prompt:     command.Prompt,
+		ProjectDir:  projectDir,
+		Prompt:      command.Prompt + attachmentSuffix,
+		Attachments: attachmentFiles,
+		OnComplete:  releaseFiles,
 	})
 	cancelStart()
 	sessionID := strings.TrimSpace(started.SessionID)
 	crossedNativeBoundary := started.Created || started.PromptAccepted
 	promptAccepted := started.PromptAccepted && startErr == nil && startPanic == nil
+	starterOwnsFiles = promptAccepted
+	if !starterOwnsFiles {
+		releaseFiles()
+	}
 	ownershipConfirmed := crossedNativeBoundary && sessionID != "" && c.waitForOwnership(parent, adapter, sessionID)
 	if ownershipConfirmed && promptAccepted {
 		finish(startjournal.StatusOwned, sessionID, "", true)
@@ -202,6 +259,20 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 		reason = startErr.Error()
 	}
 	finish(startjournal.StatusFailed, "", reason)
+}
+
+func threadStartAttachmentsDigest(refs []attach.Ref) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	// attach.Ref contains only strings, so this canonical JSON form cannot fail
+	// to marshal and preserves attachment order as part of the operation binding.
+	data, err := json.Marshal(refs)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func (c *threadStartCoordinator) waitForOwnership(ctx context.Context, adapter adapters.Adapter, sessionID string) bool {

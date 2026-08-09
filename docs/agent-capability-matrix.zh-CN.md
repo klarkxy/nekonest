@@ -53,7 +53,7 @@ PWA 控件**必须**按已广告标志开关。缺省字段 = **false / 不支�
 
 除非某行另有说明，共同**不具备**：
 
-- 现行从不广告 `queue`
+- 只有 Codex app-server 健康且持久队列日志可写时才广告 `queue`
 - 禁止任意文件系统浏览与泛化 `create_session`
 - `start_thread` 只能指向 daemon **当前**原生发现项目目录并集
 - `thread_owned` 需要首条提示词确认 **且** 原生仓库所有权
@@ -88,11 +88,11 @@ PWA 控件**必须**按已广告标志开关。缺省字段 = **false / 不支�
 | `interrupt` | Yes | Yes | Yes | Yes | Yes | Yes |
 | `approve` / `deny` | **No**（见注） | **Yes** | **No** | **No** | **No** | **No** |
 | `steer` | **No** | **Yes** | **No** | **No** | **No** | **No** |
-| `queue` | **No** | **No** | **No** | **No** | **No** | **No** |
+| `queue` | **No** | **Yes**（持久 FIFO 可用） | **No** | **No** | **No** | **No** |
 | 会话级 `spawn` | **No**（仅设备目录） | 健康时 **Yes** | **No** | **No**（仅设备目录） | **No**（仅设备目录） | **No**（仅设备目录） |
 | 广告的 `attachment_mode` | `path_best_effort` | `native_image_and_file` | `native_image` | `path_best_effort` | `path_best_effort` | `path_best_effort` |
 | 状态 `waiting_approval` | 仅检测（历史启发式；不广告手机审批） | 来自 app-server 正性信号 | 不伪造审批 UI | No | No | No |
-| 状态 `waiting_user` | No | 来自 app-server 正性信号 | No | No | No | No |
+| 状态 `waiting_user` | No | 来自结构化 `requestUserInput` 正性信号（Codex 当前在 Plan collaboration mode 发出） | No | No | No | No |
 
 **说明**
 
@@ -130,7 +130,7 @@ PWA 控件**必须**按已广告标志开关。缺省字段 = **false / 不支�
 | Harness | 广告模式 | 文件如何到达 agent | 实际限制 |
 |---|---|---|---|
 | Claude Code | `path_best_effort` | 对附件父目录 `--add-dir`；路径出现在 NekoNest 提示词后缀。**不用** Claude 远程 `--file` id | 需 agent 能 Read 授权目录；沙箱仍可能拦截 |
-| Codex app-server | `native_image_and_file` | turn input 携带原生图片与文件部件 | 全控制路径 |
+| Codex app-server | `native_image_and_file` | 图片使用原生 `localImage`；普通文件先落地，再把路径注入同一个原子回合 | 全控制路径；枚举表示端到端图片+文件支持，不表示 app-server 存在通用文件部件类型 |
 | Codex exec-resume | `native_image` | 目录 `--add-dir` + 图片 MIME/扩展名 `--image`；其他文件主要靠提示词路径 | 弱于 app-server |
 | Kilo | `path_best_effort` | `kilo run` 上原生重复 `--file <path>` | 实现强于广告枚举名；在标志抬升前 UI 仍不得宣称 `native_image_and_file` |
 | Kimi CLI | `path_best_effort` | 仅提示词路径后缀；argv 构造忽略附件切片 | 取决于 Kimi 文件权限/沙箱 |
@@ -154,13 +154,14 @@ PWA 控件**必须**按已广告标志开关。缺省字段 = **false / 不支�
 
 | 领域 | 现行行为 |
 |---|---|
-| 健康路径 | `codex app-server` JSON-RPC：initialize、thread/turn、审批、中断、steer、附件 |
+| 健康路径 | `codex app-server` JSON-RPC：initialize、thread/turn、审批、结构化问答、中断、steer、持久队列、附件与监督重启 |
 | 降级路径 | `codex exec resume` 发送/流式/中断 + `native_image` 附件 |
-| 能力盖章 | 健康时：`control_mode=app_server`，`approve/deny/interrupt/steer/spawn=true`，`attachment_mode=native_image_and_file` |
+| 能力盖章 | 健康且队列日志可写时：`control_mode=app_server`，`approve/deny/interrupt/steer/queue/spawn=true`，`attachment_mode=native_image_and_file` |
 | 建线 | 仅 app-server 健康时设备目录 + 会话级 `spawn` |
 | 状态 | `waiting_approval` / `waiting_user` 仅来自 app-server 正性信号（发现上叠加 overlay） |
-| 基线 | 开发冒烟钉 **codex-cli 0.144.1** 面；方法名可能漂移——用 `nekonest-daemon -doctor` |
-| v1 目标 | 角色相同；密封默认与诚实降级仍是发版要求 |
+| 基线 | 全控制要求 **codex-cli 0.146.0+** 并通过 schema/initialize 探测；使用 `nekonest-daemon -doctor` |
+| 附件生命周期 | 每条提示/开线最多 5 个；落地文件保留到对应原生 turn 终态或 app-server 退出 |
+| 恢复 | app-server 意外退出会降级能力、将受影响会话置错、暂停队列、发送通用失败事件，并有界重启；不重放结果不明的旧工作 |
 
 ### 4.2 Claude Code（`claude_code`）
 
@@ -209,8 +210,8 @@ PWA 控件**必须**按已广告标志开关。缺省字段 = **false / 不支�
 |---|---|---|
 | Codex 角色 | app-server 健康时全控制 | 相同；降级须保持诚实 |
 | 其余四个 | 兼容续写 + 探测建线 | 对 approve/steer/queue 同样不承诺 |
-| 传输默认 | open（密封为可选预览） | 新 nest 默认密封 |
-| `queue` | 不广告 | Codex 在能保证顺序时为 SHOULD |
+| 传输默认 | 新 DB sealed；无元数据旧 DB 持久化为 open | 新 nest 默认密封 |
+| `queue` | 仅 Codex 健康且日志可写时广告 | 按会话持久 FIFO、开始前可取消、可暂停/恢复；不支持重排 |
 | 主机 OS | Windows + Linux | 相同；macOS 更晚 |
 | 扩展 agent | 无硬性要求 | OpenCode / Gemini / Cursor 等更晚，非 v1 门槛 |
 | Kilo 附件枚举 | 已用 `--file` 仍广告 `path_best_effort` | 必须诚实；抬升 `native_image`（或更清晰档位）是实现跟进，不是手机猜测 |

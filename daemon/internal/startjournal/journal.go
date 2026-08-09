@@ -43,26 +43,28 @@ const (
 	StatusIndeterminate Status = "thread_indeterminate"
 )
 
-// Request is the immutable binding for one operation id. PromptDigest must be
-// produced by PromptDigest so prompt text is never written to this journal.
+// Request is the immutable binding for one operation id. Digests bind prompt
+// and attachment content without writing either plaintext value to the journal.
 type Request struct {
-	AgentType    string `json:"agent_type"`
-	ProjectDir   string `json:"project_dir"`
-	PromptDigest string `json:"prompt_digest"`
+	AgentType         string `json:"agent_type"`
+	ProjectDir        string `json:"project_dir"`
+	PromptDigest      string `json:"prompt_digest"`
+	AttachmentsDigest string `json:"attachments_digest,omitempty"`
 }
 
 // Record is the replayable durable result for one operation.
 type Record struct {
-	Key            string `json:"key"`
-	OperationID    string `json:"operation_id"`
-	AgentType      string `json:"agent_type"`
-	ProjectDir     string `json:"project_dir"`
-	PromptDigest   string `json:"prompt_digest"`
-	Status         Status `json:"status"`
-	SessionID      string `json:"session_id,omitempty"`
-	PromptAccepted bool   `json:"prompt_accepted,omitempty"`
-	Message        string `json:"message,omitempty"`
-	UpdatedAt      int64  `json:"updated_at"`
+	Key               string `json:"key"`
+	OperationID       string `json:"operation_id"`
+	AgentType         string `json:"agent_type"`
+	ProjectDir        string `json:"project_dir"`
+	PromptDigest      string `json:"prompt_digest"`
+	AttachmentsDigest string `json:"attachments_digest,omitempty"`
+	Status            Status `json:"status"`
+	SessionID         string `json:"session_id,omitempty"`
+	PromptAccepted    bool   `json:"prompt_accepted,omitempty"`
+	Message           string `json:"message,omitempty"`
+	UpdatedAt         int64  `json:"updated_at"`
 }
 
 type diskJournal struct {
@@ -198,13 +200,14 @@ func (j *Journal) Begin(operationID string, request Request) (record Record, cre
 	}
 	next := cloneRecords(j.records)
 	record = Record{
-		Key:          key,
-		OperationID:  operationID,
-		AgentType:    request.AgentType,
-		ProjectDir:   request.ProjectDir,
-		PromptDigest: request.PromptDigest,
-		Status:       StatusStarting,
-		UpdatedAt:    time.Now().UnixNano(),
+		Key:               key,
+		OperationID:       operationID,
+		AgentType:         request.AgentType,
+		ProjectDir:        request.ProjectDir,
+		PromptDigest:      request.PromptDigest,
+		AttachmentsDigest: request.AttachmentsDigest,
+		Status:            StatusStarting,
+		UpdatedAt:         time.Now().UnixNano(),
 	}
 	next[key] = record
 	if err := j.persist(next); err != nil {
@@ -308,7 +311,10 @@ func (j *Journal) validateRecord(record Record) error {
 	if err := validateOperationID(record.OperationID); err != nil {
 		return fmt.Errorf("thread start journal has invalid operation id: %w", err)
 	}
-	request := Request{AgentType: record.AgentType, ProjectDir: record.ProjectDir, PromptDigest: record.PromptDigest}
+	request := Request{
+		AgentType: record.AgentType, ProjectDir: record.ProjectDir,
+		PromptDigest: record.PromptDigest, AttachmentsDigest: record.AttachmentsDigest,
+	}
 	if err := validateRequest(request); err != nil {
 		return fmt.Errorf("thread start journal has invalid request binding: %w", err)
 	}
@@ -383,13 +389,22 @@ func validateRequest(request Request) error {
 	if _, err := hex.DecodeString(request.PromptDigest); err != nil {
 		return fmt.Errorf("invalid prompt digest")
 	}
+	if request.AttachmentsDigest != "" {
+		if len(request.AttachmentsDigest) != sha256.Size*2 {
+			return fmt.Errorf("invalid attachments digest")
+		}
+		if _, err := hex.DecodeString(request.AttachmentsDigest); err != nil {
+			return fmt.Errorf("invalid attachments digest")
+		}
+	}
 	return nil
 }
 
 func sameRequest(record Record, request Request) bool {
 	return record.AgentType == request.AgentType &&
 		record.ProjectDir == request.ProjectDir &&
-		record.PromptDigest == request.PromptDigest
+		record.PromptDigest == request.PromptDigest &&
+		record.AttachmentsDigest == request.AttachmentsDigest
 }
 
 func terminal(status Status) bool {

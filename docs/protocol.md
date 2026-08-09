@@ -15,10 +15,10 @@ Keep JSON field names, enums, optionality, timestamps, and meanings identical ac
 
 | Field | Rule |
 |---|---|
-| `protocol_version` | `major.minor` (current **1.0**). Major mismatch rejects; minor is backward compatible (unknown optional fields ignored). |
-| `transport_mode` | Nest-wide `sealed` \| `open`. One mode per nest; **no** sealed→open automatic downgrade. v0.2 defaults to **open**; the v1 acceptance cutover changes new nests to sealed. |
+| `protocol_version` | `major.minor` (current **1.1**). Major mismatch rejects; minor is backward compatible (unknown optional fields ignored and absent capability flags are false). |
+| `transport_mode` | Nest-wide `sealed` \| `open`. One persisted mode per nest; **no** sealed→open automatic downgrade. New databases default sealed; legacy databases without metadata are classified once as open. |
 
-First frames (`register_device` for daemon, `subscribe` for phone) **must** include both fields. Server returns negotiated version/mode on `auth_response` / `subscribe_ack`. Stable error codes: `version_mismatch`, `transport_mode_mismatch`, `invalid_envelope`.
+First frames (`register_device` for daemon, `subscribe` for phone) **must** include both fields. Every later frame is validated against the negotiated major version, transport mode, and its explicit routing-vs-application body policy. In sealed mode application frames require `sealed_payload`; open mode rejects it; mixed bodies are always rejected. Server returns negotiated version/mode on `auth_response` / `subscribe_ack`. Stable error codes: `version_mismatch`, `transport_mode_mismatch`, `invalid_envelope`.
 
 ### Application release versions
 
@@ -99,6 +99,7 @@ Adding an agent requires adapter + registry, server types, PWA catalog/assets, s
 | `project_dir` / `project` | Directory grouping |
 | `capabilities` | Optional; absent fields default false/unsupported |
 | `pending_approval` | Optional tool approval blob |
+| `pending_user_input` | Optional structured Codex question request; distinct from approval |
 
 ### SessionCapabilities
 
@@ -140,6 +141,21 @@ business result: a missing or invalid sealed result must resolve locally as
 first-prompt acknowledgement are established, so its `prompt_accepted` field
 must be `true`. If either fact is missing, use `thread_indeterminate` and retain
 the first prompt in the local draft instead of navigating or synthesizing it.
+Attachments belong to that same first native turn: the daemon downloads and
+validates them before `thread/start`, then sends prompt + attachments in the
+first `turn/start`. A pre-create download failure is `thread_failed`; an
+unknown result after native creation is `thread_indeterminate`.
+
+### Structured user input
+
+`pending_user_input` preserves the app-server `request_id`, `item_id`, expiry,
+and every question's `id`, header, prompt, options, `isOther`, and `isSecret`.
+The phone replies with `respond_user_input` and the exact 0.146 answer map:
+`question_id -> { "answers": ["..."] }`. `user_input_result` reports
+`accepted`, `expired`, `stale`, or `indeterminate`. Request ids are idempotent;
+an uncertain app-server handoff is never automatically retried. Secret values
+are never written into drafts/history/logs/server persistence or attention
+events.
 
 ### SessionMessage
 
@@ -188,12 +204,22 @@ Grouped by role. Payload shapes for critical flows are implemented in Go/TS—wh
 | `send_prompt` | Phone → … → daemon: user prompt (+ attachments) |
 | `prompt_status_query` | Ask current delivery state |
 | `prompt_not_seen` | Daemon/server has no record of id |
-| `prompt_accepted` | Accepted into daemon pipeline (outbox **not** cleared) |
+| `prompt_queued` | Durably admitted to the Codex FIFO, but not yet accepted by native `turn/start` |
+| `prompt_accepted` | Positively accepted by the native agent control path (outbox **not** cleared) |
 | `prompt_committed` | Journal committed — **clear durable outbox here** |
 | `prompt_failed` | Failed visibly |
 | `prompt_sent` | **Deprecated** transitional alias; clients should clear on `prompt_committed` |
 
 **Do not** collapse “WebSocket write succeeded” into `prompt_accepted` / business success.
+`prompt_queued` reports the FIFO position without starting acceptance polling.
+The durable outbox still clears only after the item receives native
+`turn/start` acceptance and `prompt_committed`. Receivers retain compatibility
+with the older `prompt_accepted{queued:true}` admission shape.
+
+Reconnect/status recovery reuses the exact same sealed envelope for one
+`client_msg_id`. After a definitive retryable `prompt_failed`, an explicit
+user retry creates a **new** `client_msg_id` and a freshly sealed command; an
+indeterminate result is never exposed as an ordinary retry.
 
 ### Control and lifecycle (v1)
 
@@ -202,6 +228,10 @@ Grouped by role. Payload shapes for critical flows are implemented in Go/TS—wh
 | `approve` / `deny` | Tool approval (Codex app-server when capable) |
 | `interrupt` | Stop running work |
 | `steer` | Mid-turn correction (Codex) |
+| `respond_user_input` / `user_input_result` | Structured Codex question response and terminal request status |
+| `queue_update` | FIFO snapshot including queued/running/paused entries |
+| `cancel_prompt` / `prompt_cancelled` | Cancel a not-yet-started queue entry |
+| `resume_prompt_queue` | Explicitly resume a paused per-session queue |
 | `start_thread` / `thread_*` | Agent-scoped phone-local draft, first-prompt native start into permitted discovered dirs |
 | `pair_*` / `key_package` / `phone_revoked` | Pairing and E2E key distribution |
 | `attention_event` | Generic push-driving event class (sealed-safe) |
@@ -247,7 +277,7 @@ WebSocket carries most interactive traffic. REST (phone secret unless noted):
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/health` | Unauthenticated liveness |
+| GET | `/health` | Unauthenticated liveness plus `protocol_version`, `server_version`, and authoritative `transport_mode` |
 | GET | `/api/devices` | Device list |
 | POST | `/api/devices/register` | Bootstrap token header |
 | GET | `/api/devices/sessions` | Sessions |

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nekonest/daemon/internal/adapters"
+	"github.com/nekonest/daemon/internal/attach"
 	"github.com/nekonest/daemon/internal/sealedkeys"
 	"github.com/nekonest/daemon/internal/startjournal"
 )
@@ -99,6 +100,7 @@ type fakeStartAdapter struct {
 	ownershipChecks int
 	ownsAfter       int
 	onStart         func()
+	lastRequest     adapters.ThreadStartRequest
 }
 
 func (a *fakeStartAdapter) Name() string                               { return a.name }
@@ -125,9 +127,10 @@ func (a *fakeStartAdapter) FetchHistory(string, int) ([]*adapters.HistoryMessage
 func (a *fakeStartAdapter) ProbeThreadStart(context.Context) adapters.ThreadStartCapability {
 	return a.probe
 }
-func (a *fakeStartAdapter) StartNativeThread(_ context.Context, _ adapters.ThreadStartRequest) (adapters.ThreadStartResult, error) {
+func (a *fakeStartAdapter) StartNativeThread(_ context.Context, request adapters.ThreadStartRequest) (adapters.ThreadStartResult, error) {
 	a.mu.Lock()
 	a.startCalls++
+	a.lastRequest = request
 	onStart := a.onStart
 	result, err := a.result, a.startErr
 	a.mu.Unlock()
@@ -135,6 +138,12 @@ func (a *fakeStartAdapter) StartNativeThread(_ context.Context, _ adapters.Threa
 		onStart()
 	}
 	return result, err
+}
+
+func (a *fakeStartAdapter) request() adapters.ThreadStartRequest {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastRequest
 }
 
 func (a *fakeStartAdapter) counts() (starts, ownership int) {
@@ -228,6 +237,55 @@ func TestThreadStartPersistsBeforeBoundaryAndDuplicateDoesNotStartAgain(t *testi
 	}
 }
 
+func TestThreadStartAttachmentFailureDoesNotCrossNativeBoundary(t *testing.T) {
+	projectDir := testNativeProjectDir(t)
+	agent := &fakeStartAdapter{
+		name: string(adapters.AgentCodex), probe: adapters.ThreadStartCapability{Available: true},
+		result: adapters.ThreadStartResult{SessionID: "native-1", Created: true, PromptAccepted: true}, ownsAfter: 1,
+	}
+	coordinator, _ := newThreadStartTestCoordinator(t, agent, projectDir)
+	coordinator.materializeAttachments = func(string, []attach.Ref) (string, []attach.LocalFile, string, error) {
+		return "", nil, "", errors.New("HTTP 503")
+	}
+	events := collectStartEvents(coordinator, threadStartCommand{
+		OperationID: "attachment-download-fails", AgentType: adapters.AgentCodex, ProjectDir: projectDir, Prompt: "inspect",
+		Attachments: []attach.Ref{{URL: "https://nest.invalid/api/attachments/a", Name: "a.txt", MIME: "text/plain"}},
+	})
+	if got := events[len(events)-1]; got.State != startjournal.StatusFailed || !strings.Contains(got.Message, "attachment download failed") {
+		t.Fatalf("events = %#v", events)
+	}
+	if starts, _ := agent.counts(); starts != 0 {
+		t.Fatalf("native starter called %d times after attachment failure", starts)
+	}
+}
+
+func TestThreadStartPassesMaterializedAttachmentsToNativeStarter(t *testing.T) {
+	projectDir := testNativeProjectDir(t)
+	agent := &fakeStartAdapter{
+		name: string(adapters.AgentCodex), probe: adapters.ThreadStartCapability{Available: true},
+		result: adapters.ThreadStartResult{SessionID: "native-1", Created: true, PromptAccepted: true}, ownsAfter: 1,
+	}
+	coordinator, _ := newThreadStartTestCoordinator(t, agent, projectDir)
+	attachmentDir := t.TempDir()
+	coordinator.materializeAttachments = func(string, []attach.Ref) (string, []attach.LocalFile, string, error) {
+		return attachmentDir, []attach.LocalFile{{Path: filepath.Join(attachmentDir, "photo.png"), Name: "photo.png", MIME: "image/png"}}, "\n[attachment]", nil
+	}
+	events := collectStartEvents(coordinator, threadStartCommand{
+		OperationID: "attachment-pass", AgentType: adapters.AgentCodex, ProjectDir: projectDir, Prompt: "inspect",
+		Attachments: []attach.Ref{{URL: "https://nest.invalid/api/attachments/a", Name: "photo.png", MIME: "image/png"}},
+	})
+	if got := events[len(events)-1]; got.State != startjournal.StatusOwned {
+		t.Fatalf("events = %#v", events)
+	}
+	request := agent.request()
+	if len(request.Attachments) != 1 || request.Attachments[0].Name != "photo.png" || !strings.Contains(request.Prompt, "[attachment]") {
+		t.Fatalf("request = %#v", request)
+	}
+	if request.OnComplete == nil {
+		t.Fatal("native starter missing attachment cleanup callback")
+	}
+}
+
 func TestThreadStartRejectsConflictingOperationWithoutSecondStart(t *testing.T) {
 	projectDir := testNativeProjectDir(t)
 	agent := &fakeStartAdapter{
@@ -243,6 +301,36 @@ func TestThreadStartRejectsConflictingOperationWithoutSecondStart(t *testing.T) 
 	events := collectStartEvents(coordinator, command)
 	if len(events) != 1 || events[0].State != startjournal.StatusFailed || !strings.Contains(events[0].Message, "different thread start request") {
 		t.Fatalf("conflict events = %#v", events)
+	}
+	if starts, _ := agent.counts(); starts != 1 {
+		t.Fatalf("native start calls = %d; want 1", starts)
+	}
+}
+
+func TestThreadStartRejectsConflictingAttachmentSetWithoutSecondStart(t *testing.T) {
+	projectDir := testNativeProjectDir(t)
+	agent := &fakeStartAdapter{
+		name: string(adapters.AgentCodex), probe: adapters.ThreadStartCapability{Available: true},
+		result: adapters.ThreadStartResult{SessionID: "codex:native", Created: true, PromptAccepted: true}, ownsAfter: 1,
+	}
+	coordinator, _ := newThreadStartTestCoordinator(t, agent, projectDir)
+	attachmentDir := t.TempDir()
+	coordinator.materializeAttachments = func(string, []attach.Ref) (string, []attach.LocalFile, string, error) {
+		return attachmentDir, []attach.LocalFile{{Path: filepath.Join(attachmentDir, "file.txt"), Name: "file.txt", MIME: "text/plain"}}, "\n[attachment]", nil
+	}
+	command := threadStartCommand{
+		OperationID: "same-attachments", AgentType: adapters.AgentCodex,
+		ProjectDir: projectDir, Prompt: "inspect",
+		Attachments: []attach.Ref{{ID: "a", URL: "https://nest.invalid/api/attachments/a", Name: "file.txt", MIME: "text/plain"}},
+	}
+	first := collectStartEvents(coordinator, command)
+	if got := first[len(first)-1]; got.State != startjournal.StatusOwned {
+		t.Fatalf("first events = %#v", first)
+	}
+	command.Attachments[0].URL = "https://nest.invalid/api/attachments/b"
+	second := collectStartEvents(coordinator, command)
+	if len(second) != 1 || second[0].State != startjournal.StatusFailed || !strings.Contains(second[0].Message, "different thread start request") {
+		t.Fatalf("attachment conflict events = %#v", second)
 	}
 	if starts, _ := agent.counts(); starts != 1 {
 		t.Fatalf("native start calls = %d; want 1", starts)

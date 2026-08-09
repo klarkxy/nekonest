@@ -8,10 +8,10 @@
 
 | 模式 | 环境变量 | 何时用 |
 |---|---|---|
-| **开放（建议先跑）** | server 与 daemon 均 `NEKONEST_TRANSPORT_MODE=open`；PWA 默认 open | 密封联调完成前的日常 |
-| **密封** | server/daemon `sealed`；PWA `VITE_NEKONEST_TRANSPORT_MODE=sealed` | QR 配对 + key package 成功后 |
+| **密封（新窝默认）** | 新 DB 的 Server 不设模式；Daemon 注册时持久化返回值；PWA 读取 `/health` | QR 配对 + key package 后的正常新安装 |
+| **开放（管理员选择 / 旧窝）** | 只在首次创建 open DB 时设 `NEKONEST_TRANSPORT_MODE=open`，或保留现有 open DB/config | 接受 VPS 可见明文的可信中继环境 |
 
-一窝一种模式。不匹配则拒绝握手（禁止 sealed→open 自动降级）。
+一窝一种持久化模式。初始化后环境/构建覆盖只作为断言；不匹配则拒绝启动/连接（禁止 sealed→open 自动降级）。
 
 ## 前置条件（开放模式）
 
@@ -43,21 +43,24 @@
 
 ## B. Codex 控制路径（本机有 CLI 时）
 
-开发基线：**codex-cli 0.144.1** + `codex app-server`。
+全控制基线：**codex-cli 0.146.0+** + `codex app-server`。
 
-1. `nekonest-daemon -doctor` 打印 app-server `available` / `ensure`。  
+1. `nekonest-daemon -doctor` 报告已安装/最低版本，并探测 initialize、thread/start、turn/start、steer、interrupt、审批决定形状与 requestUserInput 字段。
 2. 若能力为 `control_mode=app_server` 且 `approve=true`：主机触发真审批 → 手机批准/拒绝生效。  
-3. 若 `steer=true`：中途 steer 生效。  
-4. 对每个宣告 `spawn=true` 的 agent：`start_thread` 只能进入 daemon **当前已发现**的原生项目目录并集；生命周期 `thread_starting → thread_owned | failed | indeterminate`；无幽灵 nest 行。
-5. app-server 不健康时：Codex 保持 `exec_resume`（仅发送/历史/中断）；不假冒 approve/spawn。
+3. 在 Codex Plan-mode 线程触发 `requestUserInput`：分别回答选项、Other/自由文本、Secret；倒计时过期后禁用提交，stale/不确定请求不自动重答。本轮不新增 Plan mode 选择器。
+4. 运行长回合时用主发送按钮排两条，确认 FIFO 顺序；取消未开始项；中断/失败后队列暂停并由用户恢复。Steer 是独立动作且只修改当前回合。
+5. 用一张图片与一个普通文件新建原生线程；二者必须进入同一次首个 `turn/start`，仅在首回合接受且原生 store 认领后跳转。
+6. 工作中杀掉 app-server：能力立即降级、会话 error、队列暂停、发送通用失败事件；有界重启后恢复能力，绝不重放结果不明的旧回合/请求。
+7. 每个宣告 `spawn=true` 的 agent 只能进入 daemon **当前已发现**的原生项目目录并集；无幽灵 nest 行。
+8. 低于 0.146.0 或方法探测失败时保持 `exec_resume`，不得假冒审批、问答、队列、steer、普通文件或 spawn。
 
-## C. 密封模式（第二轮可选）
+## C. 密封模式与通知
 
-1. server + daemon + PWA 均设 sealed 并重启。  
-2. 用 QR JSON 重新配对，保证 wrap key 一致。  
-3. 确认窝侧 DB/日志无新密封流量的 prompt 明文。  
-4. key_package 到达后聊天仍可用。  
-5. 开放客户端连密封窝（或反过来）被 **拒绝**。
+1. 用全新数据目录且不设模式；`/health.transport_mode` 必须为 `sealed`。注册/重配，使 Daemon config 与 wrap key 一致。
+2. 配置真实 VAPID 并让手机订阅。触发审批、结构化问答、失败与完成；Push 文字保持通用，深链进入目标会话后才解密详情。
+3. 覆盖发送/重连和排队重试；同一 `client_msg_id` 必须重放完全相同的 sealed 信封（nonce/ciphertext/AAD 不变）。
+4. 用唯一字符串扫描 Server DB/日志：提示词、答案、审批细节、附件名/路径、工具正文都不得出现明文。
+5. 已有 open DB 升级后仍报告 open；Server 环境、Daemon config 与 PWA 构建的 open/sealed 任意不匹配均被 **拒绝**。
 
 ## D. 迁移冒烟（从 v0.1 升级时）
 
@@ -67,8 +70,7 @@
 
 ## 已知限制（不算失败）
 
-- 密封默认是**产品目标**；验收前可用 open  
-- Codex app-server 方法名随 CLI 版本变化 — doctor 显示可用时个别 method 仍可能失败  
+- Codex app-server 由 0.146.0 最低版本与实时 schema/initialize 探测共同门控
 - 非 Codex：仅兼容续接（不承诺审批/steer/队列；仅当 `start_capabilities.spawn=true` 时可 `start_thread`）— 见 [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)
 - 附件上限 5 个、各 4 MB（开放路径）  
 - Web Push 需 VAPID；密封推送正文保持通用  

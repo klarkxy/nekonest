@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,132 @@ func openTestDB(t *testing.T) *DB {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
+}
+
+func TestTransportModeNewNestDefaultsSealedAndIsPersistent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transport.db")
+	first, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode, err := first.TransportMode()
+	if err != nil || mode != protocol.TransportSealed {
+		t.Fatalf("mode=%q err=%v, want sealed", mode, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := NewWithTransportMode(path, "sealed")
+	if err != nil {
+		t.Fatalf("same explicit mode: %v", err)
+	}
+	defer second.Close()
+	if _, err := NewWithTransportMode(path, "open"); err == nil {
+		t.Fatal("expected persistent mode mismatch")
+	}
+}
+
+func TestTransportModeLegacyNestBecomesOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-transport.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE devices (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := NewWithTransportMode(path, "open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	mode, err := d.TransportMode()
+	if err != nil || mode != protocol.TransportOpen {
+		t.Fatalf("mode=%q err=%v, want open", mode, err)
+	}
+}
+
+func TestTransportModeRejectsLegacySealedRequestAndInvalidStoredValue(t *testing.T) {
+	legacyPath := filepath.Join(t.TempDir(), "legacy-mismatch.db")
+	legacy, err := sql.Open("sqlite", legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE devices (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewWithTransportMode(legacyPath, "sealed"); err == nil {
+		t.Fatal("expected legacy sealed request to fail")
+	}
+	legacy, err = sql.Open("sqlite", legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemaMetaCount int
+	if err := legacy.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'`).Scan(&schemaMetaCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if schemaMetaCount != 0 {
+		t.Fatal("failed legacy mode classification left a partial schema_meta table")
+	}
+
+	path := filepath.Join(t.TempDir(), "invalid-mode.db")
+	d, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.conn.Exec(`UPDATE schema_meta SET value = 'broken' WHERE key = 'transport_mode'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.TransportMode(); err == nil {
+		t.Fatal("expected invalid stored transport mode to fail closed")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(path); err == nil {
+		t.Fatal("expected startup to reject invalid stored transport mode")
+	}
+}
+
+func TestAttentionEventDedupePersistsAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attention.db")
+	first, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := first.AcceptAttentionEvent("dev1", "event-1", time.Now())
+	if err != nil || !accepted {
+		t.Fatalf("first event accepted=%v err=%v", accepted, err)
+	}
+	accepted, err = first.AcceptAttentionEvent("dev1", "event-1", time.Now())
+	if err != nil || accepted {
+		t.Fatalf("duplicate accepted=%v err=%v", accepted, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	accepted, err = second.AcceptAttentionEvent("dev1", "event-1", time.Now())
+	if err != nil || accepted {
+		t.Fatalf("restart duplicate accepted=%v err=%v", accepted, err)
+	}
 }
 
 func TestSQLitePragmasApplied(t *testing.T) {
@@ -479,6 +606,28 @@ func TestPromptCommandIdempotencyAndExplicitRetry(t *testing.T) {
 	)
 	if err != nil || !transitioned || stored.Status != PromptIndeterminate || stored.RetryAllowed {
 		t.Fatalf("tightened result: %#v transitioned=%v err=%v", stored, transitioned, err)
+	}
+}
+
+func TestSealedPromptCommandUsesOpaqueEnvelopeAsConflictFingerprint(t *testing.T) {
+	d := openTestDB(t)
+	input := &PromptCommand{
+		DeviceID: "dev", ClientMsgID: "sealed_1", SessionID: "session",
+		AttachmentsJSON:    "[]",
+		SealedEnvelopeJSON: `{"type":"send_prompt","client_msg_id":"sealed_1","sealed_payload":{"nonce":"n","ciphertext":"opaque-a"}}`,
+	}
+	stored, forward, err := d.RegisterPromptCommand(input, false)
+	if err != nil || !forward || stored.SealedEnvelopeJSON != input.SealedEnvelopeJSON || stored.Prompt != "" {
+		t.Fatalf("sealed register: %#v forward=%v err=%v", stored, forward, err)
+	}
+	stored, forward, err = d.RegisterPromptCommand(input, false)
+	if err != nil || !forward || stored.Status != PromptRegistered {
+		t.Fatalf("sealed registered replay: %#v forward=%v err=%v", stored, forward, err)
+	}
+	conflict := *input
+	conflict.SealedEnvelopeJSON = strings.ReplaceAll(input.SealedEnvelopeJSON, "opaque-a", "opaque-b")
+	if _, _, err := d.RegisterPromptCommand(&conflict, false); !errors.Is(err, ErrPromptCommandConflict) {
+		t.Fatalf("sealed conflict err=%v", err)
 	}
 }
 

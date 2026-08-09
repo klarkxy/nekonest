@@ -8,6 +8,7 @@ const maxPushSubscriptionsPerDevice = 32
 type PushSubscription struct {
 	ID       int64  `json:"id"`
 	DeviceID string `json:"device_id"`
+	PhoneID  string `json:"phone_id,omitempty"`
 	Endpoint string `json:"endpoint"`
 	P256DH   string `json:"p256dh"`
 	Auth     string `json:"auth"`
@@ -23,13 +24,14 @@ func (db *DB) SavePushSubscription(sub *PushSubscription) error {
 	}
 	defer tx.Rollback()
 	if _, err = tx.Exec(`
-		INSERT INTO push_subscriptions (device_id, endpoint, p256dh, auth, created_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO push_subscriptions (device_id, phone_id, endpoint, p256dh, auth, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(endpoint, device_id) DO UPDATE SET
+			phone_id = excluded.phone_id,
 			p256dh = excluded.p256dh,
 			auth = excluded.auth,
 			created_at = excluded.created_at`,
-		sub.DeviceID, sub.Endpoint, sub.P256DH, sub.Auth, now,
+		sub.DeviceID, sub.PhoneID, sub.Endpoint, sub.P256DH, sub.Auth, now,
 	); err != nil {
 		return err
 	}
@@ -51,7 +53,7 @@ func (db *DB) SavePushSubscription(sub *PushSubscription) error {
 // GetPushSubscriptions returns all subscriptions for a device.
 func (db *DB) GetPushSubscriptions(deviceID string) ([]*PushSubscription, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, device_id, endpoint, p256dh, auth FROM push_subscriptions WHERE device_id = ?`,
+		`SELECT id, device_id, phone_id, endpoint, p256dh, auth FROM push_subscriptions WHERE device_id = ?`,
 		deviceID,
 	)
 	if err != nil {
@@ -62,7 +64,7 @@ func (db *DB) GetPushSubscriptions(deviceID string) ([]*PushSubscription, error)
 	var subs []*PushSubscription
 	for rows.Next() {
 		sub := &PushSubscription{}
-		if err := rows.Scan(&sub.ID, &sub.DeviceID, &sub.Endpoint, &sub.P256DH, &sub.Auth); err != nil {
+		if err := rows.Scan(&sub.ID, &sub.DeviceID, &sub.PhoneID, &sub.Endpoint, &sub.P256DH, &sub.Auth); err != nil {
 			return nil, err
 		}
 		subs = append(subs, sub)

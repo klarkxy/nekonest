@@ -107,6 +107,86 @@ func TestValidateEnvelopeForm(t *testing.T) {
 	}
 }
 
+func TestValidateFrameForTransport(t *testing.T) {
+	sealed := &NekoMessage{
+		ProtocolVersion: CurrentProtocolVersion,
+		TransportMode:   TransportSealed,
+		Type:            MsgSendPrompt,
+		SealedPayload:   &SealedPayload{KeyScope: KeyScopeSession},
+	}
+	if err := ValidateFrameForTransport(sealed, TransportSealed); err != nil {
+		t.Fatalf("sealed application frame: %v", err)
+	}
+
+	plaintext := *sealed
+	plaintext.SealedPayload = nil
+	plaintext.Payload = map[string]any{"prompt": "must stay opaque"}
+	if err := ValidateFrameForTransport(&plaintext, TransportSealed); err == nil {
+		t.Fatal("sealed application plaintext was accepted")
+	}
+
+	mixed := *sealed
+	mixed.Payload = map[string]any{"prompt": "mixed"}
+	if err := ValidateFrameForTransport(&mixed, TransportSealed); err == nil {
+		t.Fatal("mixed application frame was accepted")
+	}
+
+	openWithSealed := *sealed
+	openWithSealed.TransportMode = TransportOpen
+	if err := ValidateFrameForTransport(&openWithSealed, TransportOpen); err == nil {
+		t.Fatal("open frame with sealed payload was accepted")
+	}
+
+	for _, msgType := range []MessageType{MsgSubscribe, MsgRegisterDevice, MsgAttentionEvent, MsgPromptCommitted} {
+		routing := &NekoMessage{
+			ProtocolVersion: CurrentProtocolVersion,
+			TransportMode:   TransportSealed,
+			Type:            msgType,
+			Payload:         map[string]any{"routing": true},
+		}
+		if err := ValidateFrameForTransport(routing, TransportSealed); err != nil {
+			t.Fatalf("sealed routing frame %s: %v", msgType, err)
+		}
+	}
+
+	wrongMode := *sealed
+	wrongMode.TransportMode = TransportOpen
+	if err := ValidateFrameForTransport(&wrongMode, TransportSealed); err == nil {
+		t.Fatal("wrong transport_mode was accepted")
+	}
+	missingVersion := *sealed
+	missingVersion.ProtocolVersion = ""
+	if err := ValidateFrameForTransport(&missingVersion, TransportSealed); err == nil {
+		t.Fatal("missing protocol_version was accepted")
+	}
+	unknown := *sealed
+	unknown.Type = "future_application"
+	if err := ValidateFrameForTransport(&unknown, TransportSealed); err == nil {
+		t.Fatal("unknown message type was accepted")
+	}
+}
+
+func TestValidateFrameForTransportAllowsBareFailClosedThreadIndeterminate(t *testing.T) {
+	msg := NewMessage(MsgThreadIndeterminate, "device-a").WithTransport(TransportSealed)
+	msg.ClientMsgID = "operation-a"
+	if err := ValidateFrameForTransport(msg, TransportSealed); err != nil {
+		t.Fatalf("bare thread_indeterminate: %v", err)
+	}
+}
+
+func TestRetryAllowedFalseRemainsPresentOnRoutingFailure(t *testing.T) {
+	retryAllowed := false
+	msg := NewMessage(MsgPromptFailed, "device-a")
+	msg.RetryAllowed = &retryAllowed
+	wire, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"retry_allowed":false`) {
+		t.Fatalf("explicit false was omitted: %s", wire)
+	}
+}
+
 func TestParseAndNegotiateProtocolVersion(t *testing.T) {
 	if _, err := ParseProtocolVersion(""); err == nil {
 		t.Fatal("empty")

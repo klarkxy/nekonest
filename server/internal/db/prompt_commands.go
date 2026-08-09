@@ -18,18 +18,19 @@ var ErrPromptCommandConflict = errors.New("client_msg_id already belongs to a di
 
 // PromptCommand is the durable idempotency record for one phone prompt.
 type PromptCommand struct {
-	DeviceID        string
-	ClientMsgID     string
-	SessionID       string
-	Prompt          string
-	AttachmentsJSON string
-	Status          string
-	Error           string
-	Outcome         string
-	RetryAllowed    bool
-	CommitSent      bool
-	CreatedAt       int64
-	UpdatedAt       int64
+	DeviceID           string
+	ClientMsgID        string
+	SessionID          string
+	Prompt             string
+	AttachmentsJSON    string
+	SealedEnvelopeJSON string
+	Status             string
+	Error              string
+	Outcome            string
+	RetryAllowed       bool
+	CommitSent         bool
+	CreatedAt          int64
+	UpdatedAt          int64
 }
 
 // RegisterPromptCommand inserts a new registered command. When retryFailed is
@@ -43,10 +44,10 @@ func (db *DB) RegisterPromptCommand(cmd *PromptCommand, retryFailed bool) (*Prom
 	now := time.Now().Unix()
 	result, err := db.conn.Exec(`
 		INSERT OR IGNORE INTO prompt_commands
-			(device_id, client_msg_id, session_id, prompt, attachments_json,
+			(device_id, client_msg_id, session_id, prompt, attachments_json, sealed_envelope_json,
 			 status, error, outcome, retry_allowed, commit_sent, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 'registered', '', '', 0, 0, ?, ?)`,
-		cmd.DeviceID, cmd.ClientMsgID, cmd.SessionID, cmd.Prompt, cmd.AttachmentsJSON, now, now,
+		VALUES (?, ?, ?, ?, ?, ?, 'registered', '', '', 0, 0, ?, ?)`,
+		cmd.DeviceID, cmd.ClientMsgID, cmd.SessionID, cmd.Prompt, cmd.AttachmentsJSON, cmd.SealedEnvelopeJSON, now, now,
 	)
 	if err != nil {
 		return nil, false, err
@@ -62,7 +63,8 @@ func (db *DB) RegisterPromptCommand(cmd *PromptCommand, retryFailed bool) (*Prom
 	if affected == 0 &&
 		(stored.SessionID != cmd.SessionID ||
 			stored.Prompt != cmd.Prompt ||
-			stored.AttachmentsJSON != cmd.AttachmentsJSON) {
+			stored.AttachmentsJSON != cmd.AttachmentsJSON ||
+			stored.SealedEnvelopeJSON != cmd.SealedEnvelopeJSON) {
 		return stored, false, ErrPromptCommandConflict
 	}
 	if affected == 1 {
@@ -114,14 +116,14 @@ func (db *DB) MarkPromptForwarded(deviceID, clientMsgID string) (*PromptCommand,
 func (db *DB) GetPromptCommand(deviceID, clientMsgID string) (*PromptCommand, error) {
 	var cmd PromptCommand
 	err := db.conn.QueryRow(`
-		SELECT device_id, client_msg_id, session_id, prompt, attachments_json,
+		SELECT device_id, client_msg_id, session_id, prompt, attachments_json, sealed_envelope_json,
 		       status, error, outcome, retry_allowed, commit_sent, created_at, updated_at
 		FROM prompt_commands
 		WHERE device_id = ? AND client_msg_id = ?`,
 		deviceID, clientMsgID,
 	).Scan(
 		&cmd.DeviceID, &cmd.ClientMsgID, &cmd.SessionID, &cmd.Prompt,
-		&cmd.AttachmentsJSON, &cmd.Status, &cmd.Error, &cmd.Outcome,
+		&cmd.AttachmentsJSON, &cmd.SealedEnvelopeJSON, &cmd.Status, &cmd.Error, &cmd.Outcome,
 		&cmd.RetryAllowed, &cmd.CommitSent, &cmd.CreatedAt, &cmd.UpdatedAt,
 	)
 	if err != nil {
@@ -161,7 +163,7 @@ func (db *DB) ListUncommittedAcceptedPrompts(deviceID string, limit int) ([]*Pro
 		limit = 100
 	}
 	rows, err := db.conn.Query(`
-		SELECT device_id, client_msg_id, session_id, prompt, attachments_json,
+		SELECT device_id, client_msg_id, session_id, prompt, attachments_json, sealed_envelope_json,
 		       status, error, outcome, retry_allowed, commit_sent, created_at, updated_at
 		FROM prompt_commands
 		WHERE device_id = ? AND status = 'accepted' AND commit_sent = 0
@@ -178,7 +180,7 @@ func (db *DB) ListUncommittedAcceptedPrompts(deviceID string, limit int) ([]*Pro
 		cmd := &PromptCommand{}
 		if err := rows.Scan(
 			&cmd.DeviceID, &cmd.ClientMsgID, &cmd.SessionID, &cmd.Prompt,
-			&cmd.AttachmentsJSON, &cmd.Status, &cmd.Error, &cmd.Outcome,
+			&cmd.AttachmentsJSON, &cmd.SealedEnvelopeJSON, &cmd.Status, &cmd.Error, &cmd.Outcome,
 			&cmd.RetryAllowed, &cmd.CommitSent, &cmd.CreatedAt, &cmd.UpdatedAt,
 		); err != nil {
 			return nil, err

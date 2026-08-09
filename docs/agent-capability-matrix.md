@@ -58,7 +58,7 @@ Common capabilities (all five harnesses when the CLI/store is usable):
 
 Shared non-capabilities unless a row says otherwise:
 
-- `queue` is **never** advertised live today
+- `queue` is advertised only for Codex when app-server is healthy and the durable queue journal is writable
 - Arbitrary filesystem browsing and generic `create_session` remain forbidden
 - `start_thread` may target only directories in the daemon’s **current union of
   native-discovered project dirs**
@@ -96,11 +96,11 @@ flags are raised only when `AppServerHealthy()` is true
 | `interrupt` | Yes | Yes | Yes | Yes | Yes | Yes |
 | `approve` / `deny` | **No** (see notes) | **Yes** | **No** | **No** | **No** | **No** |
 | `steer` | **No** | **Yes** | **No** | **No** | **No** | **No** |
-| `queue` | **No** | **No** | **No** | **No** | **No** | **No** |
+| `queue` | **No** | **Yes** (durable FIFO available) | **No** | **No** | **No** | **No** |
 | Per-session `spawn` | **No** (device catalog only) | **Yes** when healthy | **No** | **No** (device catalog only) | **No** (device catalog only) | **No** (device catalog only) |
 | `attachment_mode` advertised | `path_best_effort` | `native_image_and_file` | `native_image` | `path_best_effort` | `path_best_effort` | `path_best_effort` |
 | Status `waiting_approval` | Detect only (history heuristic; phone approve not advertised) | Yes from positive app-server signal | No fake approval UI | No | No | No |
-| Status `waiting_user` | No | Yes from positive app-server signal | No | No | No | No |
+| Status `waiting_user` | No | Yes from positive structured `requestUserInput` signal (Codex currently emits this in Plan collaboration mode) | No | No | No | No |
 
 **Notes**
 
@@ -148,7 +148,7 @@ All agents share: phone upload → server blob → daemon per-run temp dir
 | Harness | Advertised mode | How files reach the agent | Practical limits |
 |---|---|---|---|
 | Claude Code | `path_best_effort` | `--add-dir` on attachment parent dirs; paths appear in the NekoNest prompt suffix. **Does not** use Claude remote `--file` ids | Agent must Read the authorized dir; sandbox may still block |
-| Codex app-server | `native_image_and_file` | Turn input carries native image + file parts | Full-control path |
+| Codex app-server | `native_image_and_file` | Images use native `localImage`; ordinary files are materialized and their paths are injected into the same atomic turn | Full-control path; the enum describes end-to-end image+file support, not a generic app-server file-part type |
 | Codex exec-resume | `native_image` | `--add-dir` for dirs + `--image` for image MIME/ext; other files mainly via prompt paths | Degraded vs app-server |
 | Kilo | `path_best_effort` | Native repeated `--file <path>` on `kilo run` | Stronger than the advertised enum name suggests; UI still must not claim `native_image_and_file` until the flag is raised |
 | Kimi CLI | `path_best_effort` | Paths only in prompt suffix; attachment slice ignored by argv builder | Depends on Kimi file permissions / sandbox |
@@ -172,13 +172,14 @@ All agents share: phone upload → server blob → daemon per-run temp dir
 
 | Area | Live behavior |
 |---|---|
-| Healthy path | `codex app-server` JSON-RPC: initialize, thread/turn APIs, approvals, interrupt, steer, attachments |
+| Healthy path | `codex app-server` JSON-RPC: initialize, thread/turn APIs, approvals, structured questions, interrupt, steer, durable queue, attachments, supervised restart |
 | Degraded path | `codex exec resume` send/stream/interrupt + `native_image` attachments |
-| Capability stamp | When healthy: `control_mode=app_server`, `approve/deny/interrupt/steer/spawn=true`, `attachment_mode=native_image_and_file` |
+| Capability stamp | When healthy and the queue journal is writable: `control_mode=app_server`, `approve/deny/interrupt/steer/queue/spawn=true`, `attachment_mode=native_image_and_file` |
 | Start | Device catalog + per-session `spawn` only while app-server healthy |
 | Status | `waiting_approval` / `waiting_user` only from positive app-server signals (plus overlay on discover) |
-| Baseline | Development smoke pins **codex-cli 0.144.1** surface; method names can drift—use `nekonest-daemon -doctor` |
-| v1 target | Same role; sealed default and always-honest fallback remain release requirements |
+| Baseline | Full control requires **codex-cli 0.146.0+** plus schema/initialize probes; use `nekonest-daemon -doctor` |
+| Attachment lifetime | At most 5 per prompt/start; materialized files remain until the matching native turn reaches a terminal state or app-server exits |
+| Recovery | Unexpected app-server exit degrades capabilities, errors affected sessions, pauses queues, emits generic failure attention, and uses bounded reinitialize without replaying uncertain work |
 
 ### 4.2 Claude Code (`claude_code`)
 
@@ -227,8 +228,8 @@ All agents share: phone upload → server blob → daemon per-run temp dir
 |---|---|---|
 | Codex role | Full-control when app-server healthy | Same; must stay honest on fallback |
 | Other four | Compatibility-resume + probed start | Same non-promises for approve/steer/queue |
-| Transport default | Open (sealed opt-in preview) | Sealed default for new nests |
-| `queue` | Not advertised | SHOULD for Codex when ordering is guaranteed |
+| Transport default | New DB sealed; legacy DB without metadata persisted open | Sealed default for new nests |
+| `queue` | Codex only when healthy + journal writable | Durable per-session FIFO, cancel-before-start, pause/resume; no reorder |
 | Host OS | Windows + Linux | Same; macOS later |
 | Expansion agents | None required | OpenCode / Gemini / Cursor etc. later, not v1 gate |
 | Kilo attachment enum | Still `path_best_effort` while using `--file` | Honesty required; raising `native_image` (or a clearer tier) is an implementation follow-up, not a phone guess |

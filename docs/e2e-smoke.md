@@ -8,10 +8,10 @@ Acceptance path after deploy or deploy-sensitive changes. Product target: [v1-pr
 
 | Mode | Env | When |
 |---|---|---|
-| **Open (recommended first)** | `NEKONEST_TRANSPORT_MODE=open` on **server and daemon**; PWA default open | Daily use while sealing is validated |
-| **Sealed** | `NEKONEST_TRANSPORT_MODE=sealed` on server and daemon; PWA `VITE_NEKONEST_TRANSPORT_MODE=sealed` | After pair with QR JSON + key packages |
+| **Sealed (new-nest default)** | Leave Server mode unset on a new DB; daemon registration persists the returned mode; PWA reads `/health` | Normal new installation after pair with QR JSON + key packages |
+| **Open (admin-selected / legacy)** | Set `NEKONEST_TRANSPORT_MODE=open` only when initializing a new open DB, or keep an existing open DB/config | Trusted relay operation where VPS plaintext access is accepted |
 
-One nest = one mode. Mismatch rejects the handshake (no sealed→open downgrade).
+One nest = one persisted mode. An environment/build override is only an assertion after initialization. Mismatch rejects startup/connection (no sealed→open downgrade).
 
 ## Preconditions (open mode)
 
@@ -43,22 +43,25 @@ One nest = one mode. Mismatch rejects the handshake (no sealed→open downgrade)
 
 ## B. Codex control path (when CLI present)
 
-Local baseline used in development: **codex-cli 0.144.1** with `codex app-server`.
+Full-control baseline: **codex-cli 0.146.0+** with `codex app-server`.
 
-1. `nekonest-daemon -doctor` logs app-server `available` / `ensure`.  
+1. `nekonest-daemon -doctor` reports installed/minimum versions and probes initialize, thread/start, turn/start, steer, interrupt, approval decision shape, and requestUserInput fields.
 2. If capabilities show `control_mode=app_server` and `approve=true`:  
    - Trigger a real approval on host; phone shows approval UI; Approve/Deny resolve.  
-3. If `steer=true`: steer mid-turn; agent incorporates correction.  
-4. For every agent advertising `spawn=true`: start_thread only for a directory in the daemon's **currently discovered** native project union; lifecycle `thread_starting → thread_owned | failed | indeterminate`; no ghost nest-only row.
-5. If app-server unhealthy: Codex stays `exec_resume` (send/history/interrupt only); no fake approve/spawn.
+3. On a Codex Plan-mode thread, trigger `requestUserInput`: answer options, Other/free text, and a Secret question; confirm expiry disables submission and uncertain/stale requests are not retried. NekoNest does not add a Plan-mode selector in this release.
+4. Start a long turn, send two follow-ups with the main Send action, then verify FIFO order, cancel a waiting item, pause on interrupt/failure, and explicitly resume. Use Steer separately and confirm it modifies the active turn.
+5. Start a native thread with one image and one ordinary file. Both must be present in the same first `turn/start`; navigate only after prompt acceptance plus native-store ownership.
+6. Kill app-server during work: capability immediately degrades, the session becomes error, queue pauses, a generic failure attention event is emitted, and bounded re-initialize restores capability without replaying the uncertain turn/request.
+7. For every agent advertising `spawn=true`: target only the daemon's **currently discovered** native project union; lifecycle `thread_starting → thread_owned | failed | indeterminate`; no ghost nest-only row.
+8. A CLI below 0.146.0 or failed method probe stays `exec_resume`; no fake approval, user input, queue, steer, ordinary-file, or spawn capability.
 
-## C. Sealed mode (optional second pass)
+## C. Sealed mode and notification pass
 
-1. Set sealed on server + daemon + PWA build/env; restart all.  
-2. Re-pair with QR JSON so wrap keys match.  
-3. Confirm nest DB/logs do not contain prompt plaintext for new sealed `session_message` traffic.  
-4. Chat still works after key_package delivery.  
-5. Open-mode client against sealed nest is **rejected** (and the reverse).
+1. Create a fresh data directory without a mode override; `/health.transport_mode` is `sealed`. Register/re-pair so the daemon config and wrap keys match.
+2. Configure real VAPID and subscribe the phone. Trigger approval, structured input, failure, and completion; Push text is generic and each deep link opens the referenced session where details decrypt.
+3. Exercise prompt send/reconnect and queued retry. The Server replays the exact stored sealed envelope (same nonce/ciphertext/AAD) for one `client_msg_id`.
+4. Scan Server DB and logs for the unique prompt, answers, approval detail, attachment filename/path, and tool body; none may appear as plaintext.
+5. Existing open DB upgrades still report open. Open/ sealed environment, daemon-config, and PWA build mismatches are all **rejected**.
 
 ## D. Migration smoke (if upgrading from v0.1)
 
@@ -68,8 +71,7 @@ Local baseline used in development: **codex-cli 0.144.1** with `codex app-server
 
 ## Known limitations (not failures)
 
-- Sealed default is the **product target**; operators may run open until sealed e2e is signed off  
-- Codex app-server JSON-RPC method names vary by CLI version — doctor/probe may show available while a specific method alias fails  
+- Codex app-server is capability-gated by the 0.146.0 minimum and live schema/initialize probe
 - Non-Codex agents: compatibility resume only (no approval/steer/queue promise; `start_thread` only when `start_capabilities.spawn=true`) — see [agent-capability-matrix.md](./agent-capability-matrix.md)
 - Max 5 attachments, 4 MB each (open path)  
 - Web Push needs VAPID; sealed push bodies stay generic  

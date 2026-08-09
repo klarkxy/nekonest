@@ -39,7 +39,7 @@ func NewWithSecret(database *db.DB, phoneSecret string) *Server {
 		db:            database,
 		connMgr:       NewConnectionManager(database),
 		phoneSecret:   phoneSecret,
-		transportMode: protocol.TransportOpen,
+		transportMode: protocol.TransportSealed,
 	}
 
 	// Set up device online/offline callbacks. Replacements with a different
@@ -71,7 +71,7 @@ func (s *Server) SetDataDir(dir string) {
 }
 
 // SetTransportMode configures the nest-wide transport mode (sealed|open).
-// v0.2 defaults to open. One nest has one fixed mode; clients must match.
+// One nest has one fixed mode; clients must match.
 func (s *Server) SetTransportMode(mode protocol.TransportMode) error {
 	parsed, err := protocol.ParseTransportMode(string(mode))
 	if err != nil {
@@ -84,7 +84,7 @@ func (s *Server) SetTransportMode(mode protocol.TransportMode) error {
 // TransportMode returns the configured nest transport mode.
 func (s *Server) TransportMode() protocol.TransportMode {
 	if s.transportMode == "" {
-		return protocol.TransportOpen
+		return protocol.TransportSealed
 	}
 	return s.transportMode
 }
@@ -131,7 +131,7 @@ func (s *Server) negotiateFirstFrame(msg *protocol.NekoMessage) protocol.Handsha
 		msg.ProtocolVersion,
 		string(msg.TransportMode),
 		s.TransportMode(),
-		0, // server minor for 1.0
+		1,
 	)
 }
 
@@ -176,6 +176,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 			"status":           "nyan~",
 			"server_version":   buildinfo.Version,
 			"protocol_version": protocol.CurrentProtocolVersion,
+			"transport_mode":   string(s.TransportMode()),
 		})
 	})
 }
@@ -349,7 +350,8 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requirePhoneAuth(w, r) {
+	auth, ok := s.requirePhoneAuthResult(w, r)
+	if !ok {
 		return
 	}
 
@@ -395,6 +397,13 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		Endpoint: req.Endpoint,
 		P256DH:   req.P256DH,
 		Auth:     req.Auth,
+	}
+	if auth != nil && !auth.AdminBypass {
+		if !s.phoneMayAccessDevice(auth, req.DeviceID) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		sub.PhoneID = auth.PhoneID
 	}
 	if err := s.db.SavePushSubscription(sub); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -455,9 +464,14 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		Ed25519Public       string `json:"ed25519_public"`
 		X25519Public        string `json:"x25519_public"`
 		IdentityFingerprint string `json:"identity_fingerprint"`
+		TransportMode       string `json:"transport_mode"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.TransportMode != "" && req.TransportMode != string(s.TransportMode()) {
+		http.Error(w, "transport_mode mismatch: nest is "+string(s.TransportMode()), http.StatusConflict)
 		return
 	}
 
@@ -483,9 +497,10 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]string{
-		"device_id": req.DeviceID,
-		"token":     token,
-		"name":      req.Name,
+		"device_id":      req.DeviceID,
+		"token":          token,
+		"name":           req.Name,
+		"transport_mode": string(s.TransportMode()),
 	})
 }
 

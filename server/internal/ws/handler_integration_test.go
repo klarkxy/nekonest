@@ -49,6 +49,49 @@ func v1Envelope(msgType protocol.MessageType, deviceID string, payload map[strin
 	}
 }
 
+func sealedV1Envelope(msgType protocol.MessageType, deviceID string, payload map[string]any) *protocol.NekoMessage {
+	return &protocol.NekoMessage{
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportSealed,
+		Type:            msgType,
+		DeviceID:        deviceID,
+		Timestamp:       time.Now().Unix(),
+		Payload:         payload,
+	}
+}
+
+func sealedApplicationEnvelope(msgType protocol.MessageType, deviceID, sessionID, clientMsgID string) *protocol.NekoMessage {
+	return &protocol.NekoMessage{
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportSealed,
+		Type:            msgType,
+		DeviceID:        deviceID,
+		SessionID:       sessionID,
+		ClientMsgID:     clientMsgID,
+		Timestamp:       time.Now().Unix(),
+		SealedPayload: &protocol.SealedPayload{
+			Alg: "aes-256-gcm", Version: 1, KeyScope: protocol.KeyScopeSession,
+			Epoch: 1, SenderID: deviceID, RecipientID: "phones", Sequence: 1,
+			Nonce: "opaque-nonce", Ciphertext: "opaque-ciphertext",
+		},
+	}
+}
+
+func sealedCatalogEnvelope(deviceID string) *protocol.NekoMessage {
+	return &protocol.NekoMessage{
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportSealed,
+		Type:            protocol.MsgSessionList,
+		DeviceID:        deviceID,
+		Timestamp:       time.Now().Unix(),
+		SealedPayload: &protocol.SealedPayload{
+			Alg: "aes-256-gcm", Version: 1, KeyScope: protocol.KeyScopeDeviceCatalog,
+			Epoch: 1, SenderID: deviceID, RecipientID: "phones", Sequence: 1,
+			Nonce: "catalog-nonce", Ciphertext: "opaque-catalog-without-plaintext",
+		},
+	}
+}
+
 func websocketURL(httpURL, path string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http") + path
 }
@@ -146,6 +189,71 @@ func connectPhone(t *testing.T, httpServer *httptest.Server, secret string) *web
 		}
 	}
 	return conn
+}
+
+func connectSealedDaemonAndPhone(
+	t *testing.T,
+	server *Server,
+	httpServer *httptest.Server,
+	token, secret string,
+) (*websocket.Conn, *websocket.Conn) {
+	t.Helper()
+	daemon, _, err := websocket.DefaultDialer.Dial(websocketURL(httpServer.URL, "/ws/daemon"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = daemon.Close() })
+	if err := daemon.WriteJSON(sealedV1Envelope(protocol.MsgRegisterDevice, "dev1", map[string]any{
+		"device_id": "dev1", "token": token, "daemon_version": buildinfo.Version,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var auth protocol.NekoMessage
+	if err := daemon.ReadJSON(&auth); err != nil || auth.Type != protocol.MsgAuthResponse {
+		t.Fatalf("sealed daemon auth: %#v err=%v", auth, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !server.connMgr.IsDaemonOnline("dev1") {
+		if time.Now().After(deadline) {
+			t.Fatal("sealed daemon did not finish its online transition")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Let the daemon-online broadcast finish before the phone snapshot is read,
+	// so the helper consumes exactly ACK + session_list + device_list.
+	time.Sleep(50 * time.Millisecond)
+	if err := daemon.WriteJSON(sealedCatalogEnvelope("dev1")); err != nil {
+		t.Fatal(err)
+	}
+	catalogDeadline := time.Now().Add(2 * time.Second)
+	for server.connMgr.GetSealedCatalogSnapshot("dev1") == nil {
+		if time.Now().After(catalogDeadline) {
+			t.Fatal("sealed catalog was not cached")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	header := http.Header{"Origin": []string{httpServer.URL}}
+	phone, _, err := websocket.DefaultDialer.Dial(websocketURL(httpServer.URL, "/ws/phone?secret="+secret), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = phone.Close() })
+	if err := phone.WriteJSON(sealedV1Envelope(protocol.MsgSubscribe, "dev1", map[string]any{
+		"subscription_id": "sealed-subscription", "pwa_version": buildinfo.Version,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		var snapshot protocol.NekoMessage
+		if err := phone.ReadJSON(&snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 && snapshot.Type != protocol.MsgSubscribeAck {
+			t.Fatalf("sealed subscribe ACK: %#v", snapshot)
+		}
+	}
+	return daemon, phone
 }
 
 func TestComponentVersionsReportRefreshAndDaemonUpdateState(t *testing.T) {
@@ -322,7 +430,9 @@ func TestUnauthenticatedFirstFrameReadLimit(t *testing.T) {
 		}
 		defer conn.Close()
 		if err := conn.WriteJSON(&protocol.NekoMessage{
-			Type: protocol.MsgRegisterDevice,
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			TransportMode:   protocol.TransportOpen,
+			Type:            protocol.MsgRegisterDevice,
 			Payload: map[string]any{
 				"device_id": "dev1",
 				"token":     token,
@@ -348,8 +458,10 @@ func TestUnauthenticatedFirstFrameReadLimit(t *testing.T) {
 		}
 		defer conn.Close()
 		if err := conn.WriteJSON(&protocol.NekoMessage{
-			Type:     protocol.MsgSubscribe,
-			DeviceID: "dev1",
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			TransportMode:   protocol.TransportOpen,
+			Type:            protocol.MsgSubscribe,
+			DeviceID:        "dev1",
 			Payload: map[string]any{
 				"subscription_id": "oversized-first-frame",
 				"padding":         padding,
@@ -378,9 +490,11 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 	phone := connectPhone(t, httpServer, "phone-secret")
 
 	prompt := &protocol.NekoMessage{
-		Type:      protocol.MsgSendPrompt,
-		DeviceID:  "dev1",
-		SessionID: "session-1",
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgSendPrompt,
+		DeviceID:        "dev1",
+		SessionID:       "session-1",
 		Payload: map[string]any{
 			"prompt":        "hello",
 			"client_msg_id": "local_prompt_1",
@@ -427,9 +541,11 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 		t.Fatalf("pending replay should query status: %#v", statusQuery)
 	}
 	if err := daemon.WriteJSON(&protocol.NekoMessage{
-		Type:     protocol.MsgPromptNotSeen,
-		DeviceID: "dev1",
-		Payload:  map[string]any{"client_msg_id": "local_prompt_1"},
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgPromptNotSeen,
+		DeviceID:        "dev1",
+		Payload:         map[string]any{"client_msg_id": "local_prompt_1"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -444,9 +560,11 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 	}
 
 	if err := daemon.WriteJSON(&protocol.NekoMessage{
-		Type:      protocol.MsgPromptAccepted,
-		DeviceID:  "dev1",
-		SessionID: "session-1",
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgPromptAccepted,
+		DeviceID:        "dev1",
+		SessionID:       "session-1",
 		Payload: map[string]any{
 			"client_msg_id": "local_prompt_1",
 		},
@@ -463,7 +581,7 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 	}
 	select {
 	case ack := <-phoneResult:
-		if ack.Type != protocol.MsgPromptSent || stringPayload(ack.Payload, "client_msg_id") != "local_prompt_1" {
+		if ack.Type != protocol.MsgPromptCommitted || stringPayload(ack.Payload, "client_msg_id") != "local_prompt_1" {
 			t.Fatalf("ACK: %#v", ack)
 		}
 	case err := <-phoneErr:
@@ -471,15 +589,24 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for accepted ACK")
 	}
+	var legacySent protocol.NekoMessage
+	if err := phone.ReadJSON(&legacySent); err != nil {
+		t.Fatal(err)
+	}
+	if legacySent.Type != protocol.MsgPromptSent {
+		t.Fatalf("legacy accepted ACK: %#v", legacySent)
+	}
 
 	// A successful server write of prompt_committed is not a daemon ACK. If
 	// that frame was lost, the daemon keeps its accepted journal entry and
 	// repeats prompt_accepted after reconnect. Even though commit_sent is
 	// already true in SQLite, the server must resend prompt_committed.
 	if err := daemon.WriteJSON(&protocol.NekoMessage{
-		Type:      protocol.MsgPromptAccepted,
-		DeviceID:  "dev1",
-		SessionID: "session-1",
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgPromptAccepted,
+		DeviceID:        "dev1",
+		SessionID:       "session-1",
 		Payload: map[string]any{
 			"client_msg_id": "local_prompt_1",
 		},
@@ -494,24 +621,38 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 		stringPayload(duplicateAcceptedCommit.Payload, "client_msg_id") != "local_prompt_1" {
 		t.Fatalf("duplicate accepted commit recovery: %#v", duplicateAcceptedCommit)
 	}
+	var duplicateAcceptedCommitPhone protocol.NekoMessage
+	if err := phone.ReadJSON(&duplicateAcceptedCommitPhone); err != nil {
+		t.Fatal(err)
+	}
+	if duplicateAcceptedCommitPhone.Type != protocol.MsgPromptCommitted ||
+		stringPayload(duplicateAcceptedCommitPhone.Payload, "client_msg_id") != "local_prompt_1" {
+		t.Fatalf("duplicate accepted commit phone recovery: %#v", duplicateAcceptedCommitPhone)
+	}
 	var duplicateAcceptedAck protocol.NekoMessage
 	if err := phone.ReadJSON(&duplicateAcceptedAck); err != nil {
 		t.Fatal(err)
 	}
-	if duplicateAcceptedAck.Type != protocol.MsgPromptSent ||
-		stringPayload(duplicateAcceptedAck.Payload, "client_msg_id") != "local_prompt_1" {
-		t.Fatalf("duplicate accepted ACK recovery: %#v", duplicateAcceptedAck)
+	if duplicateAcceptedAck.Type != protocol.MsgPromptSent {
+		t.Fatalf("duplicate accepted legacy ACK recovery: %#v", duplicateAcceptedAck)
 	}
 
 	if err := phone.WriteJSON(prompt); err != nil {
 		t.Fatal(err)
+	}
+	var replayCommittedPhone protocol.NekoMessage
+	if err := phone.ReadJSON(&replayCommittedPhone); err != nil {
+		t.Fatal(err)
+	}
+	if replayCommittedPhone.Type != protocol.MsgPromptCommitted {
+		t.Fatalf("accepted replay commit: %#v", replayCommittedPhone)
 	}
 	var replayAck protocol.NekoMessage
 	if err := phone.ReadJSON(&replayAck); err != nil {
 		t.Fatal(err)
 	}
 	if replayAck.Type != protocol.MsgPromptSent {
-		t.Fatalf("accepted replay: %#v", replayAck)
+		t.Fatalf("accepted replay legacy ACK: %#v", replayAck)
 	}
 	var replayCommit protocol.NekoMessage
 	if err := daemon.ReadJSON(&replayCommit); err != nil {
@@ -522,10 +663,12 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 	}
 
 	if err := daemon.WriteJSON(&protocol.NekoMessage{
-		Type:      protocol.MsgSessionUpdate,
-		DeviceID:  "spoofed-device",
-		SessionID: "session-1",
-		Payload:   map[string]any{"status": "idle"},
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgSessionUpdate,
+		DeviceID:        "spoofed-device",
+		SessionID:       "session-1",
+		Payload:         map[string]any{"status": "idle"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -540,6 +683,107 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 	messages, err := server.db.GetMessages("dev1", "session-1", 10)
 	if err != nil || len(messages) != 1 || messages[0].ID != "local_prompt_1" {
 		t.Fatalf("persisted messages: %#v err=%v", messages, err)
+	}
+}
+
+func TestQueuedPromptAdmissionStaysPendingUntilNativeAcceptance(t *testing.T) {
+	oldLimiter := wsRateLimiter
+	wsRateLimiter = newRateLimiter(100, time.Minute)
+	t.Cleanup(func() { wsRateLimiter = oldLimiter })
+
+	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	daemon := connectDaemonReady(t, server, httpServer, token)
+	phone := connectPhone(t, httpServer, "phone-secret")
+	prompt := v1Envelope(protocol.MsgSendPrompt, "dev1", map[string]any{
+		"prompt": "queue this", "client_msg_id": "msg_queue_prompt_1",
+	})
+	prompt.SessionID = "session-queue"
+	if err := phone.WriteJSON(prompt); err != nil {
+		t.Fatal(err)
+	}
+	var forwarded protocol.NekoMessage
+	if err := daemon.ReadJSON(&forwarded); err != nil {
+		t.Fatal(err)
+	}
+	if forwarded.Type != protocol.MsgSendPrompt {
+		t.Fatalf("forwarded: %#v", forwarded)
+	}
+
+	queued := v1Envelope(protocol.MsgPromptAccepted, "dev1", map[string]any{
+		"client_msg_id": "msg_queue_prompt_1", "queued": true, "queue_position": 2,
+	})
+	queued.SessionID = "session-queue"
+	if err := daemon.WriteJSON(queued); err != nil {
+		t.Fatal(err)
+	}
+	var admission protocol.NekoMessage
+	if err := phone.ReadJSON(&admission); err != nil {
+		t.Fatal(err)
+	}
+	if admission.Type != protocol.MsgPromptAccepted || !boolPayload(admission.Payload, "queued") {
+		t.Fatalf("queued admission: %#v", admission)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		cmd, err := server.db.GetPromptCommand("dev1", "msg_queue_prompt_1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cmd.Status == db.PromptPending && !cmd.CommitSent {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queued command did not settle as pending: %#v", cmd)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if count, err := server.db.GetMessageCount("dev1", "session-queue"); err != nil || count != 0 {
+		t.Fatalf("queued command persisted history count=%d err=%v", count, err)
+	}
+
+	accepted := v1Envelope(protocol.MsgPromptAccepted, "dev1", map[string]any{"client_msg_id": "msg_queue_prompt_1"})
+	accepted.SessionID = "session-queue"
+	if err := daemon.WriteJSON(accepted); err != nil {
+		t.Fatal(err)
+	}
+	var commit protocol.NekoMessage
+	if err := daemon.ReadJSON(&commit); err != nil {
+		t.Fatal(err)
+	}
+	if commit.Type != protocol.MsgPromptCommitted {
+		t.Fatalf("commit: %#v", commit)
+	}
+	var committedPhone protocol.NekoMessage
+	if err := phone.ReadJSON(&committedPhone); err != nil {
+		t.Fatal(err)
+	}
+	if committedPhone.Type != protocol.MsgPromptCommitted {
+		t.Fatalf("final phone commit: %#v", committedPhone)
+	}
+	var sent protocol.NekoMessage
+	if err := phone.ReadJSON(&sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.Type != protocol.MsgPromptSent {
+		t.Fatalf("final legacy phone ack: %#v", sent)
+	}
+	if count, err := server.db.GetMessageCount("dev1", "session-queue"); err != nil || count != 1 {
+		t.Fatalf("accepted command history count=%d err=%v", count, err)
+	}
+
+	for _, kind := range []protocol.MessageType{protocol.MsgCancelPrompt, protocol.MsgResumePromptQueue} {
+		request := v1Envelope(kind, "dev1", map[string]any{"client_msg_id": "msg_queue_prompt_1"})
+		request.SessionID = "session-queue"
+		if err := phone.WriteJSON(request); err != nil {
+			t.Fatal(err)
+		}
+		var relayed protocol.NekoMessage
+		if err := daemon.ReadJSON(&relayed); err != nil {
+			t.Fatal(err)
+		}
+		if relayed.Type != kind || relayed.SessionID != "session-queue" {
+			t.Fatalf("%s relay: %#v", kind, relayed)
+		}
 	}
 }
 
@@ -590,9 +834,11 @@ func TestAcceptedPromptPersistenceFailureDefersCommitUntilReconnectHealing(t *te
 	daemon := connectDaemonReady(t, server, httpServer, token)
 	phone := connectPhone(t, httpServer, "phone-secret")
 	prompt := &protocol.NekoMessage{
-		Type:      protocol.MsgSendPrompt,
-		DeviceID:  "dev1",
-		SessionID: "session-persist",
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgSendPrompt,
+		DeviceID:        "dev1",
+		SessionID:       "session-persist",
 		Payload: map[string]any{
 			"prompt":        "must persist before ACK",
 			"client_msg_id": "local_persist_1",
@@ -609,10 +855,12 @@ func TestAcceptedPromptPersistenceFailureDefersCommitUntilReconnectHealing(t *te
 		t.Fatalf("forwarded: %#v", forwarded)
 	}
 	if err := daemon.WriteJSON(&protocol.NekoMessage{
-		Type:      protocol.MsgPromptAccepted,
-		DeviceID:  "dev1",
-		SessionID: "session-persist",
-		Payload:   map[string]any{"client_msg_id": "local_persist_1"},
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgPromptAccepted,
+		DeviceID:        "dev1",
+		SessionID:       "session-persist",
+		Payload:         map[string]any{"client_msg_id": "local_persist_1"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -876,9 +1124,11 @@ func TestFailedResubscribeCannotRouteCommandsToOldDevice(t *testing.T) {
 	phone := connectPhone(t, httpServer, "phone-secret")
 
 	if err := phone.WriteJSON(&protocol.NekoMessage{
-		Type:     protocol.MsgSubscribe,
-		DeviceID: "missing-device",
-		Payload:  map[string]any{"subscription_id": "switch-1"},
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgSubscribe,
+		DeviceID:        "missing-device",
+		Payload:         map[string]any{"subscription_id": "switch-1"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -895,9 +1145,11 @@ func TestFailedResubscribeCannotRouteCommandsToOldDevice(t *testing.T) {
 	}
 
 	if err := phone.WriteJSON(&protocol.NekoMessage{
-		Type:      protocol.MsgSendPrompt,
-		DeviceID:  "missing-device",
-		SessionID: "session-1",
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgSendPrompt,
+		DeviceID:        "missing-device",
+		SessionID:       "session-1",
 		Payload: map[string]any{
 			"prompt":        "must not reach dev1",
 			"client_msg_id": "local_wrong_device",
@@ -1010,9 +1262,11 @@ func TestSessionSnapshotIncludesAgentStartCapabilitiesAndRelaysStartAgent(t *tes
 	}
 
 	if err := phone.WriteJSON(&protocol.NekoMessage{
-		Type:        protocol.MsgStartThread,
-		DeviceID:    "dev1",
-		ClientMsgID: "local_start_kimi_1",
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgStartThread,
+		DeviceID:        "dev1",
+		ClientMsgID:     "local_start_kimi_1",
 		Payload: map[string]any{
 			"agent_type":     "kimi_cli",
 			"project_dir":    "D:/work/project",
@@ -1031,4 +1285,150 @@ func TestSessionSnapshotIncludesAgentStartCapabilitiesAndRelaysStartAgent(t *tes
 		forwarded.ClientMsgID != "local_start_kimi_1" || stringPayload(forwarded.Payload, "operation_id") != "local_start_kimi_1" {
 		t.Fatalf("forwarded start_thread=%#v", forwarded)
 	}
+}
+
+func TestSealedPromptIsOpaqueDurableAndReplaysSameEnvelope(t *testing.T) {
+	oldLimiter := wsRateLimiter
+	wsRateLimiter = newRateLimiter(100, time.Minute)
+	t.Cleanup(func() { wsRateLimiter = oldLimiter })
+
+	database := testDB(t)
+	token, err := database.RegisterDevice("dev1", "PC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewWithSecret(database, "phone-secret")
+	if err := server.SetTransportMode(protocol.TransportSealed); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+	httpServer := httptest.NewServer(CORSMiddleware(mux))
+	t.Cleanup(httpServer.Close)
+	daemon, phone := connectSealedDaemonAndPhone(t, server, httpServer, token, "phone-secret")
+
+	original := &protocol.NekoMessage{
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportSealed,
+		Type:            protocol.MsgSendPrompt,
+		DeviceID:        "dev1",
+		SessionID:       "sealed-session",
+		ClientMsgID:     "local_sealed_msg_1",
+		Timestamp:       123456789,
+		SealedPayload: &protocol.SealedPayload{
+			Alg: "aes-256-gcm", Version: 1, KeyScope: protocol.KeyScopeSession,
+			Epoch: 3, SenderID: "phone-1", RecipientID: "dev1", Sequence: 9,
+			Nonce: "stable-nonce", Ciphertext: "opaque-ciphertext-a",
+		},
+	}
+	server.handlePhoneMessage("dev1", original)
+	registeredDeadline := time.Now().Add(2 * time.Second)
+	for {
+		if stored, lookupErr := database.GetPromptCommand("dev1", original.ClientMsgID); lookupErr == nil {
+			if stored.Status != db.PromptPending && stored.Status != db.PromptRegistered {
+				t.Fatalf("sealed prompt registration status=%s error=%s", stored.Status, stored.Error)
+			}
+			break
+		}
+		if time.Now().After(registeredDeadline) {
+			t.Fatal("sealed prompt was not durably registered")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_ = daemon.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var forwarded protocol.NekoMessage
+	if err := daemon.ReadJSON(&forwarded); err != nil {
+		t.Fatal(err)
+	}
+	if forwarded.ClientMsgID != original.ClientMsgID || forwarded.Timestamp != original.Timestamp ||
+		forwarded.SealedPayload == nil || forwarded.SealedPayload.Nonce != original.SealedPayload.Nonce ||
+		forwarded.SealedPayload.Ciphertext != original.SealedPayload.Ciphertext {
+		t.Fatalf("forwarded sealed prompt changed: %#v", forwarded)
+	}
+
+	if err := daemon.WriteJSON(sealedV1Envelope(protocol.MsgPromptNotSeen, "dev1", map[string]any{
+		"client_msg_id": original.ClientMsgID,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var replay protocol.NekoMessage
+	if err := daemon.ReadJSON(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if replay.ClientMsgID != original.ClientMsgID || replay.Timestamp != original.Timestamp ||
+		replay.SealedPayload == nil || replay.SealedPayload.Nonce != original.SealedPayload.Nonce ||
+		replay.SealedPayload.Ciphertext != original.SealedPayload.Ciphertext {
+		t.Fatalf("replayed sealed prompt changed: %#v", replay)
+	}
+
+	if err := daemon.WriteJSON(sealedApplicationEnvelope(
+		protocol.MsgPromptQueued, "dev1", "sealed-session", original.ClientMsgID,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.WriteJSON(sealedApplicationEnvelope(
+		protocol.MsgPromptAccepted, "dev1", "sealed-session", original.ClientMsgID,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	acceptedDeadline := time.Now().Add(2 * time.Second)
+	for {
+		stored, lookupErr := database.GetPromptCommand("dev1", original.ClientMsgID)
+		if lookupErr == nil && stored.Status == db.PromptAccepted {
+			break
+		}
+		if time.Now().After(acceptedDeadline) {
+			t.Fatalf("sealed prompt was not accepted: stored=%#v err=%v", stored, lookupErr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_ = phone.SetReadDeadline(time.Now().Add(2 * time.Second))
+	committed := false
+	for i := 0; i < 6; i++ {
+		var got protocol.NekoMessage
+		if err := phone.ReadJSON(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Type == protocol.MsgPromptSent {
+			t.Fatalf("sealed prompt leaked deprecated prompt_sent payload: %#v", got.Payload)
+		}
+		if got.Type == protocol.MsgPromptCommitted && promptClientMsgID(&got) == original.ClientMsgID {
+			committed = true
+			break
+		}
+	}
+	if !committed {
+		t.Fatal("sealed prompt never reached committed")
+	}
+
+	stored, err := database.GetPromptCommand("dev1", original.ClientMsgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Prompt != "" || stored.AttachmentsJSON != "[]" || stored.SealedEnvelopeJSON == "" ||
+		strings.Contains(stored.SealedEnvelopeJSON, "private prompt") || strings.Contains(stored.SealedEnvelopeJSON, "D:/private/path") {
+		t.Fatalf("sealed command persistence leaked application plaintext: %#v", stored)
+	}
+	messages, err := database.GetMessages("dev1", "sealed-session", 10)
+	if err != nil || len(messages) != 0 {
+		t.Fatalf("server persisted sealed user history: %#v err=%v", messages, err)
+	}
+
+	conflict := *original
+	conflict.SealedPayload = &protocol.SealedPayload{
+		Alg: "aes-256-gcm", Version: 1, KeyScope: protocol.KeyScopeSession,
+		Epoch: 3, SenderID: "phone-1", RecipientID: "dev1", Sequence: 10,
+		Nonce: "different-nonce", Ciphertext: "opaque-ciphertext-b",
+	}
+	server.handlePhoneMessage("dev1", &conflict)
+	for i := 0; i < 4; i++ {
+		var got protocol.NekoMessage
+		if err := phone.ReadJSON(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Type == protocol.MsgPromptFailed && promptClientMsgID(&got) == original.ClientMsgID {
+			return
+		}
+	}
+	t.Fatal("different sealed envelope reused the same client_msg_id without conflict")
 }

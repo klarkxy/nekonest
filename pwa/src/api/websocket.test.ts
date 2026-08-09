@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_VERSION } from '@/config/version'
 import { NekoWebSocket } from './websocket'
+import { resetTransportModeForTests } from './transport'
 
 type SocketHandler<T = Event> = ((event: T) => void) | null
 
@@ -55,6 +56,7 @@ function latestSubscription(socket: FakeWebSocket) {
     deviceId: frame.device_id as string,
     subscriptionId: frame.payload.subscription_id as string,
     pwaVersion: frame.payload.pwa_version as string
+    , transportMode: frame.transport_mode as string
   }
 }
 
@@ -72,12 +74,14 @@ describe('NekoWebSocket lifecycle', () => {
     vi.useFakeTimers()
     FakeWebSocket.instances = []
     vi.stubGlobal('WebSocket', FakeWebSocket)
+    resetTransportModeForTests('open')
     localStorage.clear()
   })
 
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
+    resetTransportModeForTests()
   })
 
   it('cancels a scheduled reconnect when a manual connect succeeds first', () => {
@@ -87,6 +91,7 @@ describe('NekoWebSocket lifecycle', () => {
     first.open()
     const subscription = latestSubscription(first)
     expect(subscription.pwaVersion).toBe(APP_VERSION)
+    expect(subscription.transportMode).toBe('open')
     first.message({ type: 'session_list', device_id: 'device-a', timestamp: 1, payload: {} })
     expect(client.isConnected()).toBe(false)
     acknowledge(first, subscription.deviceId, subscription.subscriptionId)
@@ -99,6 +104,33 @@ describe('NekoWebSocket lifecycle', () => {
     expect(FakeWebSocket.instances).toHaveLength(2)
     vi.advanceTimersByTime(5000)
     expect(FakeWebSocket.instances).toHaveLength(2)
+  })
+
+  it('does not construct a socket until health provides a valid transport mode', async () => {
+    resetTransportModeForTests()
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ transport_mode: 'sealed' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new NekoWebSocket()
+
+    client.subscribe('device-a')
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    await vi.runAllTimersAsync()
+    await Promise.resolve()
+
+    expect(fetchMock).toHaveBeenCalledWith('/health', { cache: 'no-store' })
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    const socket = FakeWebSocket.instances[0]
+    socket.open()
+    expect(latestSubscription(socket).transportMode).toBe('sealed')
+  })
+
+  it('blocks websocket construction when health fails', async () => {
+    resetTransportModeForTests()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })))
+    const client = new NekoWebSocket()
+    client.subscribe('device-a')
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    await vi.waitFor(() => expect(client.getStatus()).toBe('transport_error'))
   })
 
   it('ignores events retained from a replaced socket', () => {

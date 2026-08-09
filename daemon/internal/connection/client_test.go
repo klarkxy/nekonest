@@ -19,6 +19,16 @@ func websocketTestURL(httpURL string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http")
 }
 
+func testAuthResponse(mode string) map[string]any {
+	return map[string]any{
+		"type":           "auth_response",
+		"transport_mode": mode,
+		"payload": map[string]any{
+			"transport_mode": mode,
+		},
+	}
+}
+
 func TestConnectAdvertisesDaemonApplicationVersion(t *testing.T) {
 	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	authFrames := make(chan map[string]any, 1)
@@ -38,9 +48,11 @@ func TestConnectAdvertisesDaemonApplicationVersion(t *testing.T) {
 		}
 		authFrames <- frame
 		_ = conn.WriteJSON(map[string]any{
-			"type": "auth_response",
+			"type":           "auth_response",
+			"transport_mode": "open",
 			"payload": map[string]any{
 				"server_version": buildinfo.Version,
+				"transport_mode": "open",
 			},
 		})
 		for {
@@ -68,6 +80,41 @@ func TestConnectAdvertisesDaemonApplicationVersion(t *testing.T) {
 	}
 }
 
+func TestConnectUsesConfiguredModeAndRejectsAuthModeMismatch(t *testing.T) {
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	authFrames := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var frame map[string]any
+		if json.Unmarshal(data, &frame) == nil {
+			authFrames <- frame
+		}
+		_ = conn.WriteJSON(testAuthResponse("open"))
+	}))
+	defer server.Close()
+
+	client := NewClient(context.Background(), websocketTestURL(server.URL), "device", "token", "sealed")
+	if err := client.Connect(); err == nil || !strings.Contains(err.Error(), "transport_mode mismatch") {
+		t.Fatalf("Connect error = %v, want transport mismatch", err)
+	}
+	select {
+	case frame := <-authFrames:
+		if frame["transport_mode"] != "sealed" {
+			t.Fatalf("auth transport_mode = %#v", frame["transport_mode"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("auth frame not received")
+	}
+}
+
 func TestConnectDiscardsSocketWhenServerURLChangesDuringAuth(t *testing.T) {
 	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	authStarted := make(chan struct{})
@@ -84,7 +131,7 @@ func TestConnectDiscardsSocketWhenServerURLChangesDuringAuth(t *testing.T) {
 		}
 		close(authStarted)
 		<-releaseFirst
-		_ = conn.WriteJSON(map[string]interface{}{"type": "device_registered"})
+		_ = conn.WriteJSON(testAuthResponse("open"))
 	}))
 	defer first.Close()
 
@@ -99,7 +146,7 @@ func TestConnectDiscardsSocketWhenServerURLChangesDuringAuth(t *testing.T) {
 			return
 		}
 		secondAuths.Add(1)
-		_ = conn.WriteJSON(map[string]interface{}{"type": "device_registered"})
+		_ = conn.WriteJSON(testAuthResponse("open"))
 		// Keep the committed socket alive until the test closes the client.
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
@@ -156,7 +203,7 @@ func TestSetServerURLLinearizesAgainstInFlightMessageDispatch(t *testing.T) {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
 		}
-		if err := conn.WriteJSON(map[string]interface{}{"type": "device_registered"}); err != nil {
+		if err := conn.WriteJSON(testAuthResponse("open")); err != nil {
 			return
 		}
 		for {
@@ -245,7 +292,7 @@ func TestSetServerURLAndPublishMakesEndpointAndRuntimeStateAtomic(t *testing.T) 
 			if _, _, err := conn.ReadMessage(); err != nil {
 				return
 			}
-			if err := conn.WriteJSON(map[string]interface{}{"type": "device_registered"}); err != nil {
+			if err := conn.WriteJSON(testAuthResponse("open")); err != nil {
 				return
 			}
 			for {

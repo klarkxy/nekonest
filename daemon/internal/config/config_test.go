@@ -60,6 +60,9 @@ func TestLoadFrom(t *testing.T) {
 	if cfg.DeviceID != "d1" || cfg.Token != "t" {
 		t.Fatalf("%#v", cfg)
 	}
+	if cfg.TransportMode != TransportOpen {
+		t.Fatalf("legacy config mode = %q, want open", cfg.TransportMode)
+	}
 	if _, err := LoadFrom(filepath.Join(dir, "missing.json")); err == nil {
 		t.Fatal("missing")
 	}
@@ -68,6 +71,23 @@ func TestLoadFrom(t *testing.T) {
 	}
 	if _, err := LoadFrom(path); err == nil {
 		t.Fatal("bad json")
+	}
+}
+
+func TestLoadFromPreservesExplicitSealedTransportMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"server_url":"ws://h","transport_mode":"sealed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TransportMode != TransportSealed {
+		t.Fatalf("mode = %q, want sealed", cfg.TransportMode)
+	}
+	if _, err := NormalizeTransportMode("invalid"); err == nil {
+		t.Fatal("invalid transport mode accepted")
 	}
 }
 

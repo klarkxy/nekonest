@@ -15,7 +15,6 @@ import (
 
 	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
-	"github.com/nekonest/server/internal/protocol"
 	"github.com/nekonest/server/internal/ws"
 )
 
@@ -44,8 +43,11 @@ func main() {
 		log.Fatalf("failed to create data directory: %v", err)
 	}
 	dbPath := filepath.Join(*dataDir, "nekonest.db")
+	// Transport mode is immutable once persisted by the nest. The environment
+	// may select only the first-run mode (or assert the already stored value).
+	transportMode := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
 
-	database, err := db.New(dbPath)
+	database, err := db.NewWithTransportMode(dbPath, transportMode)
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
@@ -82,14 +84,12 @@ func main() {
 
 	server := ws.NewWithSecret(database, phoneSecret)
 	server.SetDataDir(*dataDir)
-	// v0.2 defaults to open across server, daemon, and PWA. Sealed transport is
-	// opt-in until the v1 default cutover.
-	transportMode := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
-	if transportMode == "" {
-		transportMode = string(protocol.TransportOpen)
+	persistedMode, err := database.TransportMode()
+	if err != nil {
+		log.Fatalf("failed to read persistent transport mode: %v", err)
 	}
-	if err := server.SetTransportMode(protocol.TransportMode(transportMode)); err != nil {
-		log.Fatalf("invalid NEKONEST_TRANSPORT_MODE: %v", err)
+	if err := server.SetTransportMode(persistedMode); err != nil {
+		log.Fatalf("invalid persistent transport mode: %v", err)
 	}
 	log.Printf("🔐 transport mode: %s", server.TransportMode())
 

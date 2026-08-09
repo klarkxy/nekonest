@@ -58,6 +58,12 @@ func TestPhoneIdentityLifecycle(t *testing.T) {
 	if !d.PhoneHasDeviceGrant(phoneID, "dev1") {
 		t.Fatal("re-grant failed")
 	}
+	if err := d.SavePushSubscription(&PushSubscription{
+		DeviceID: "dev1", PhoneID: phoneID, Endpoint: "https://push.example/phone",
+		P256DH: "p", Auth: "a",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := d.RevokePhone(phoneID); err != nil {
 		t.Fatal(err)
@@ -67,6 +73,9 @@ func TestPhoneIdentityLifecycle(t *testing.T) {
 	}
 	if d.PhoneHasDeviceGrant(phoneID, "dev1") {
 		t.Fatal("grants cleared on phone revoke")
+	}
+	if subs, err := d.GetPushSubscriptions("dev1"); err != nil || len(subs) != 0 {
+		t.Fatalf("phone push subscriptions must be cleared on revoke: %#v err=%v", subs, err)
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 )
 
 // CurrentProtocolVersion is the server's advertised major.minor wire version.
-const CurrentProtocolVersion = "1.0"
+const CurrentProtocolVersion = "1.1"
 
 // CurrentProtocolMajor is the major component of CurrentProtocolVersion.
 const CurrentProtocolMajor = 1
@@ -26,6 +26,7 @@ const (
 	MsgSendPrompt          MessageType = "send_prompt"
 	MsgPromptStatusQuery   MessageType = "prompt_status_query"
 	MsgPromptNotSeen       MessageType = "prompt_not_seen"
+	MsgPromptQueued        MessageType = "prompt_queued"
 	MsgPromptAccepted      MessageType = "prompt_accepted"
 	MsgPromptCommitted     MessageType = "prompt_committed"
 	MsgPromptFailed        MessageType = "prompt_failed"
@@ -34,6 +35,12 @@ const (
 	MsgDeny                MessageType = "deny"
 	MsgInterrupt           MessageType = "interrupt"
 	MsgSteer               MessageType = "steer"
+	MsgRespondUserInput    MessageType = "respond_user_input"
+	MsgUserInputResult     MessageType = "user_input_result"
+	MsgQueueUpdate         MessageType = "queue_update"
+	MsgCancelPrompt        MessageType = "cancel_prompt"
+	MsgPromptCancelled     MessageType = "prompt_cancelled"
+	MsgResumePromptQueue   MessageType = "resume_prompt_queue"
 	MsgStartThread         MessageType = "start_thread"
 	MsgThreadStarting      MessageType = "thread_starting"
 	MsgThreadOwned         MessageType = "thread_owned"
@@ -120,6 +127,8 @@ type NekoMessage struct {
 	DeviceID        string         `json:"device_id"`
 	SessionID       string         `json:"session_id,omitempty"`
 	ClientMsgID     string         `json:"client_msg_id,omitempty"`
+	Outcome         string         `json:"outcome,omitempty"`
+	RetryAllowed    *bool          `json:"retry_allowed,omitempty"`
 	Timestamp       int64          `json:"timestamp"`
 	Payload         map[string]any `json:"payload,omitempty"`
 	SealedPayload   *SealedPayload `json:"sealed_payload,omitempty"`
@@ -214,16 +223,17 @@ func CapabilityBool(caps *SessionCapabilities, get func(*SessionCapabilities) bo
 
 // AgentSession represents an active agent session on a device.
 type AgentSession struct {
-	ID              string               `json:"id"`
-	DeviceID        string               `json:"device_id"`
-	AgentType       AgentType            `json:"agent_type"`
-	Status          AgentStatus          `json:"status"`
-	Summary         string               `json:"summary"`
-	LastActivity    int64                `json:"last_activity"`
-	ProjectDir      string               `json:"project_dir,omitempty"`
-	Project         string               `json:"project,omitempty"`
-	Capabilities    *SessionCapabilities `json:"capabilities,omitempty"`
-	PendingApproval *PendingApproval     `json:"pending_approval,omitempty"`
+	ID               string               `json:"id"`
+	DeviceID         string               `json:"device_id"`
+	AgentType        AgentType            `json:"agent_type"`
+	Status           AgentStatus          `json:"status"`
+	Summary          string               `json:"summary"`
+	LastActivity     int64                `json:"last_activity"`
+	ProjectDir       string               `json:"project_dir,omitempty"`
+	Project          string               `json:"project,omitempty"`
+	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
+	PendingApproval  *PendingApproval     `json:"pending_approval,omitempty"`
+	PendingUserInput *PendingUserInput    `json:"pending_user_input,omitempty"`
 }
 
 // PendingApproval represents a tool call awaiting user approval.
@@ -232,6 +242,29 @@ type PendingApproval struct {
 	ToolName    string         `json:"tool_name"`
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+type UserInputOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+type UserInputQuestion struct {
+	ID       string            `json:"id"`
+	Header   string            `json:"header"`
+	Question string            `json:"question"`
+	Options  []UserInputOption `json:"options,omitempty"`
+	IsOther  bool              `json:"is_other,omitempty"`
+	IsSecret bool              `json:"is_secret,omitempty"`
+}
+
+// PendingUserInput is independent from approval. ExpiresAt is Unix milliseconds.
+type PendingUserInput struct {
+	RequestID        string              `json:"request_id"`
+	ItemID           string              `json:"item_id"`
+	Questions        []UserInputQuestion `json:"questions"`
+	AutoResolutionMS *uint64             `json:"auto_resolution_ms,omitempty"`
+	ExpiresAt        int64               `json:"expires_at,omitempty"`
 }
 
 // AttachmentRef identifies a phone-uploaded attachment for a first prompt.
@@ -382,6 +415,81 @@ func ValidateEnvelopeForm(msg *NekoMessage) error {
 	return nil
 }
 
+// MessageBodyPolicy describes whether a post-handshake frame carries
+// application data or only relay-visible routing/authentication metadata.
+// The list is deliberately exhaustive: newly added message types fail closed
+// until their confidentiality boundary is chosen explicitly.
+type MessageBodyPolicy uint8
+
+const (
+	MessageBodyUnknown MessageBodyPolicy = iota
+	MessageBodyRouting
+	MessageBodyApplication
+)
+
+// BodyPolicy returns the v1 confidentiality policy for a wire message type.
+func BodyPolicy(msgType MessageType) MessageBodyPolicy {
+	switch msgType {
+	case MsgDeviceOnline, MsgDeviceOffline, MsgDeviceList,
+		MsgPromptStatusQuery, MsgPromptNotSeen, MsgPromptCommitted,
+		MsgHeartbeat, MsgError, MsgRegisterDevice, MsgAuthResponse,
+		MsgPairRequest, MsgPairConfirm, MsgPairReady, MsgPairFailed,
+		MsgKeyPackage, MsgPhoneRevoked, MsgAttentionEvent,
+		MsgSubscribe, MsgSubscribeAck:
+		return MessageBodyRouting
+	case MsgSessionList, MsgSessionUpdate, MsgSessionMessage,
+		MsgSendPrompt, MsgPromptQueued, MsgPromptAccepted, MsgPromptFailed, MsgPromptSent,
+		MsgApprove, MsgDeny, MsgInterrupt, MsgSteer,
+		MsgRespondUserInput, MsgUserInputResult,
+		MsgQueueUpdate, MsgCancelPrompt, MsgPromptCancelled, MsgResumePromptQueue,
+		MsgStartThread, MsgThreadStarting, MsgThreadOwned, MsgThreadFailed, MsgThreadIndeterminate,
+		MsgFetchHistory, MsgSessionHistory:
+		return MessageBodyApplication
+	default:
+		return MessageBodyUnknown
+	}
+}
+
+// ValidateFrameForTransport enforces the negotiated nest mode on every
+// post-handshake frame. In sealed mode, application messages must be opaque to
+// the relay. Routing frames may remain plaintext, but their handlers must
+// continue to validate the small metadata fields they consume.
+func ValidateFrameForTransport(msg *NekoMessage, mode TransportMode) error {
+	if err := ValidateEnvelopeForm(msg); err != nil {
+		return err
+	}
+	if msg == nil {
+		return fmt.Errorf("%s: message required", ErrCodeInvalidEnvelope)
+	}
+	if msg.TransportMode != mode {
+		return fmt.Errorf("%s: frame transport_mode %q does not match %q", ErrCodeTransportModeMismatch, msg.TransportMode, mode)
+	}
+	version, err := ParseProtocolVersion(msg.ProtocolVersion)
+	if err != nil || version.Major != CurrentProtocolMajor {
+		return fmt.Errorf("%s: invalid frame protocol_version", ErrCodeVersionMismatch)
+	}
+	policy := BodyPolicy(msg.Type)
+	if policy == MessageBodyUnknown {
+		return fmt.Errorf("%s: unknown message type %q", ErrCodeInvalidEnvelope, msg.Type)
+	}
+	switch mode {
+	case TransportSealed:
+		if msg.Type == MsgThreadIndeterminate && msg.ClientMsgID != "" && msg.Payload == nil && msg.SealedPayload == nil {
+			return nil
+		}
+		if policy == MessageBodyApplication && msg.SealedPayload == nil {
+			return fmt.Errorf("%s: sealed application frame %q requires sealed_payload", ErrCodeInvalidEnvelope, msg.Type)
+		}
+	case TransportOpen:
+		if msg.SealedPayload != nil {
+			return fmt.Errorf("%s: open frame %q cannot contain sealed_payload", ErrCodeInvalidEnvelope, msg.Type)
+		}
+	default:
+		return fmt.Errorf("%s: invalid negotiated transport mode", ErrCodeTransportModeMismatch)
+	}
+	return nil
+}
+
 // NewMessage creates a new NekoMessage with the current timestamp.
 func NewMessage(msgType MessageType, deviceID string) *NekoMessage {
 	return &NekoMessage{
@@ -421,7 +529,7 @@ type HandshakeResult struct {
 
 // NegotiateHandshake validates client protocol_version and transport_mode against
 // the nest configuration. serverMinor is the server's supported minor for the
-// current major (usually 0 for 1.0).
+// current major (currently 1 for protocol 1.1).
 func NegotiateHandshake(clientVersion string, clientMode string, nestMode TransportMode, serverMinor int) HandshakeResult {
 	if nestMode == "" {
 		nestMode = TransportSealed

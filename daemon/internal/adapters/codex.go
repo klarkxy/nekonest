@@ -21,37 +21,85 @@ var errCodexSubagentRollout = errors.New("codex subagent rollout")
 
 const codexOrphanTaskTimeout = 2 * time.Minute
 
+const (
+	codexRecoveryAttempts = 5
+	codexRecoveryBaseWait = 250 * time.Millisecond
+	codexRecoveryMaxWait  = 4 * time.Second
+)
+
 // CodexAdapter discovers and monitors Codex sessions.
 type CodexAdapter struct {
-	sessionsDir string
-	watcherMu   sync.Mutex
-	watchers    map[string]*fsnotify.Watcher
-	lastPaths   map[string]string
-	commander   *agentexec.CodexCommander
-	appServer   *agentexec.CodexAppServer
-	outputMu    sync.Mutex
-	outputSink  OutputSink
-	appOutput   map[string]string
+	sessionsDir         string
+	watcherMu           sync.Mutex
+	watchers            map[string]*fsnotify.Watcher
+	lastPaths           map[string]string
+	commander           *agentexec.CodexCommander
+	appServer           *agentexec.CodexAppServer
+	outputMu            sync.Mutex
+	outputSink          OutputSink
+	appOutput           map[string]string
+	controlSink         func(ControlEvent)
+	initialTurnCleanup  map[string]func()
+	recoveryMu          sync.Mutex
+	recoveryRunning     bool
+	recoveryDegraded    bool
+	recoveryClosed      bool
+	recoveryCancel      context.CancelFunc
+	recoverySink        func()
+	recoveryEnsure      func() error
+	recoverySleep       func(context.Context, time.Duration) bool
+	recoveryCrashSerial uint64
 }
 
 // NewCodexAdapter creates a new Codex adapter.
 func NewCodexAdapter() *CodexAdapter {
 	home, _ := os.UserHomeDir()
 	adapter := &CodexAdapter{
-		sessionsDir: filepath.Join(home, ".codex", "sessions"),
-		watchers:    make(map[string]*fsnotify.Watcher),
-		lastPaths:   make(map[string]string),
-		commander:   agentexec.NewCodexCommander(),
-		appServer:   agentexec.NewCodexAppServer(),
-		appOutput:   make(map[string]string),
+		sessionsDir:        filepath.Join(home, ".codex", "sessions"),
+		watchers:           make(map[string]*fsnotify.Watcher),
+		lastPaths:          make(map[string]string),
+		commander:          agentexec.NewCodexCommander(),
+		appServer:          agentexec.NewCodexAppServer(),
+		appOutput:          make(map[string]string),
+		initialTurnCleanup: make(map[string]func()),
 	}
 	adapter.appServer.SetNotifyHandler(adapter.handleAppServerNotification)
+	adapter.appServer.SetRequestHandler(adapter.handleAppServerRequest)
+	adapter.appServer.SetExitHandler(adapter.handleAppServerExit)
+	adapter.recoveryEnsure = func() error {
+		if err := adapter.appServer.Ensure(); err != nil {
+			return err
+		}
+		if !adapter.appServer.Initialized() {
+			return fmt.Errorf("codex app-server did not become healthy")
+		}
+		return nil
+	}
+	adapter.recoverySleep = func(ctx context.Context, delay time.Duration) bool {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 	return adapter
 }
 
 // AppServerHealthy reports whether codex app-server completed initialize and is usable.
 func (a *CodexAdapter) AppServerHealthy() bool {
 	if a.appServer == nil {
+		return false
+	}
+	if !a.appServer.FullControlCompatible() {
+		return false
+	}
+	a.recoveryMu.Lock()
+	blocked := a.recoveryRunning || a.recoveryDegraded || a.recoveryClosed
+	a.recoveryMu.Unlock()
+	if blocked {
 		return false
 	}
 	if a.appServer.Initialized() {
@@ -67,6 +115,11 @@ func (a *CodexAdapter) AppServerHealthy() bool {
 // ApplyAppServerOverlay merges live app-server turn/approval state onto a discovered session.
 func (a *CodexAdapter) ApplyAppServerOverlay(s *SessionInfo) {
 	if s == nil || a.appServer == nil || !a.appServer.Initialized() {
+		return
+	}
+	if input := a.appServer.PendingUserInputFor(s.ID); input != nil {
+		s.Status = StatusWaitingUser
+		s.PendingUserInput = userInputInfo(input)
 		return
 	}
 	if snap := a.appServer.PendingApprovalFor(s.ID); snap != nil {
@@ -86,6 +139,30 @@ func (a *CodexAdapter) ApplyAppServerOverlay(s *SessionInfo) {
 		return
 	}
 	applyAppServerTerminalStatus(s, a.appServer.LastTurnStatus(s.ID))
+}
+
+func userInputInfo(input *agentexec.UserInputSnapshot) *UserInputInfo {
+	if input == nil {
+		return nil
+	}
+	out := &UserInputInfo{
+		RequestID: input.RequestID, ItemID: input.ItemID,
+		AutoResolutionMS: input.AutoResolutionMS,
+	}
+	if !input.ExpiresAt.IsZero() {
+		out.ExpiresAt = input.ExpiresAt.UnixMilli()
+	}
+	for _, question := range input.Questions {
+		wireQuestion := UserInputQuestion{
+			ID: question.ID, Header: question.Header, Question: question.Question,
+			IsOther: question.IsOther, IsSecret: question.IsSecret,
+		}
+		for _, option := range question.Options {
+			wireQuestion.Options = append(wireQuestion.Options, UserInputOption{Label: option.Label, Description: option.Description})
+		}
+		out.Questions = append(out.Questions, wireQuestion)
+	}
+	return out
 }
 
 func applyAppServerTerminalStatus(s *SessionInfo, status string) {
@@ -109,12 +186,19 @@ func (a *CodexAdapter) IsAvailable() bool {
 
 // Close releases all file watchers and stops running agent processes.
 func (a *CodexAdapter) Close() error {
+	a.recoveryMu.Lock()
+	a.recoveryClosed = true
+	if a.recoveryCancel != nil {
+		a.recoveryCancel()
+	}
+	a.recoveryMu.Unlock()
 	if a.commander != nil {
 		a.commander.StopAll()
 	}
 	if a.appServer != nil {
 		_ = a.appServer.Close()
 	}
+	a.releaseAllInitialTurnFiles()
 	a.watcherMu.Lock()
 	defer a.watcherMu.Unlock()
 
@@ -719,25 +803,23 @@ func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error
 		defer cancel()
 		// Prefer app-server turns when healthy so approvals/steer/interrupt share one control plane.
 		if _, _, err := a.appServer.ResumeThread(ctx, sessionID); err != nil {
+			if errors.Is(err, agentexec.ErrAppServerExited) {
+				return err
+			}
 			log.Printf("[codex] thread/resume before turn/start: %v", err)
 		}
 		a.appServer.RegisterThreadIDs(sessionID, sessionID, sessionID)
-		if _, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments); err != nil {
+		turnID, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments)
+		if err != nil {
+			if errors.Is(err, agentexec.ErrAppServerExited) {
+				return err
+			}
 			// Fall back to exec resume rather than dropping the user prompt.
 			log.Printf("[codex] app-server turn/start failed, falling back to exec resume: %v", err)
 		} else {
-			// app-server has no process-exit hook; release temp attachments after a short grace
-			// so localImage paths remain readable while the turn begins.
-			if request.OnComplete != nil {
-				done := request.OnComplete
-				if len(request.Attachments) == 0 {
-					done()
-				} else {
-					go func() {
-						time.Sleep(30 * time.Second)
-						done()
-					}()
-				}
+			a.retainInitialTurnFiles(turnID, request.OnComplete)
+			if !a.appServer.IsTurnActive(sessionID) {
+				a.releaseInitialTurnFiles(turnID)
 			}
 			return nil
 		}
@@ -751,6 +833,37 @@ func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error
 		request.Attachments,
 		request.OnComplete,
 	)
+}
+
+// HasActiveTurn reports app-server turn activity only. It intentionally does
+// not inspect the exec-resume commander because durable prompt queueing is a
+// Codex app-server-only capability.
+func (a *CodexAdapter) HasActiveTurn(sessionID string) bool {
+	return a.appServer != nil && a.appServer.Initialized() && a.appServer.IsTurnActive(sessionID)
+}
+
+// SendQueuedPrompt starts a queue-owned prompt through the native app-server.
+// Unlike SendPrompt, it never falls back to exec resume: queue ownership and
+// completion signals would otherwise become ambiguous.
+func (a *CodexAdapter) SendQueuedPrompt(sessionID string, request PromptRequest) error {
+	if a.appServer == nil || !a.AppServerHealthy() {
+		return fmt.Errorf("codex app-server unavailable for queued prompt")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if _, _, err := a.appServer.ResumeThread(ctx, sessionID); err != nil {
+		log.Printf("[codex] thread/resume before queued turn/start: %v", err)
+	}
+	a.appServer.RegisterThreadIDs(sessionID, sessionID, sessionID)
+	turnID, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments)
+	if err != nil {
+		return err
+	}
+	a.retainInitialTurnFiles(turnID, request.OnComplete)
+	if !a.appServer.IsTurnActive(sessionID) {
+		a.releaseInitialTurnFiles(turnID)
+	}
+	return nil
 }
 
 func (a *CodexAdapter) Approve(sessionID string, approvalID string) error {
@@ -780,6 +893,14 @@ func (a *CodexAdapter) Deny(sessionID string, approvalID string) error {
 		}
 	}
 	return a.commander.Deny(sessionID, approvalID)
+}
+
+// RespondUserInput answers a structured Codex requestUserInput request.
+func (a *CodexAdapter) RespondUserInput(requestID string, answers map[string][]string) (string, error) {
+	if a.appServer == nil || !a.appServer.Initialized() {
+		return "indeterminate", fmt.Errorf("codex app-server unavailable for user input")
+	}
+	return a.appServer.RespondUserInput(requestID, answers)
 }
 
 func (a *CodexAdapter) Interrupt(sessionID string) error {
@@ -861,10 +982,62 @@ func (a *CodexAdapter) StartNativeThread(ctx context.Context, request ThreadStar
 	// Once the RPC begins, a timeout or malformed reply cannot prove that no
 	// native thread was created. Fail closed by marking the attempt as started.
 	result := ThreadStartResult{Created: true}
-	started, err := a.appServer.StartThread(ctx, request.ProjectDir, request.Prompt)
+	started, err := a.appServer.StartThreadWithAttachments(ctx, request.ProjectDir, request.Prompt, request.Attachments)
 	result.SessionID = started.WireID()
 	result.PromptAccepted = strings.TrimSpace(request.Prompt) == "" || (started.TurnID != "" && err == nil)
+	if result.PromptAccepted && request.OnComplete != nil {
+		a.retainInitialTurnFiles(started.TurnID, request.OnComplete)
+		// A very fast turn can complete between the RPC response and retaining
+		// its files. In that case completion has already removed active state,
+		// so release immediately rather than retaining a stale temp directory.
+		if !a.appServer.IsTurnActive(result.SessionID) {
+			a.releaseInitialTurnFiles(started.TurnID)
+		}
+	} else if request.OnComplete != nil {
+		request.OnComplete()
+	}
 	return result, err
+}
+
+// retainInitialTurnFiles holds app-server localImage files until the matching
+// native turn completes. Unlike a timed grace period this keeps first-turn
+// attachments valid through approval/user-input pauses as well.
+func (a *CodexAdapter) retainInitialTurnFiles(turnID string, cleanup func()) {
+	if cleanup == nil {
+		return
+	}
+	if strings.TrimSpace(turnID) == "" {
+		cleanup()
+		return
+	}
+	a.outputMu.Lock()
+	a.initialTurnCleanup[turnID] = cleanup
+	a.outputMu.Unlock()
+}
+
+func (a *CodexAdapter) releaseInitialTurnFiles(turnID string) {
+	a.outputMu.Lock()
+	cleanup := a.initialTurnCleanup[turnID]
+	delete(a.initialTurnCleanup, turnID)
+	a.outputMu.Unlock()
+	if cleanup != nil {
+		cleanup()
+	}
+}
+
+func (a *CodexAdapter) releaseAllInitialTurnFiles() {
+	a.outputMu.Lock()
+	cleanups := make([]func(), 0, len(a.initialTurnCleanup))
+	for turnID, cleanup := range a.initialTurnCleanup {
+		delete(a.initialTurnCleanup, turnID)
+		cleanups = append(cleanups, cleanup)
+	}
+	a.outputMu.Unlock()
+	for _, cleanup := range cleanups {
+		if cleanup != nil {
+			cleanup()
+		}
+	}
 }
 
 // --- Codex-specific helpers ---
@@ -935,7 +1108,202 @@ func (a *CodexAdapter) SetOutputSink(sink OutputSink) {
 	}
 }
 
+// SetControlSink installs the immediate approval/question/terminal status sink.
+func (a *CodexAdapter) SetControlSink(sink func(ControlEvent)) {
+	a.outputMu.Lock()
+	a.controlSink = sink
+	a.outputMu.Unlock()
+}
+
+// SetRecoverySink installs a callback used only after a replacement
+// app-server process has completed initialize successfully.
+func (a *CodexAdapter) SetRecoverySink(sink func()) {
+	a.recoveryMu.Lock()
+	a.recoverySink = sink
+	a.recoveryMu.Unlock()
+}
+
+func (a *CodexAdapter) handleAppServerExit(event agentexec.AppServerExit) {
+	a.abortAppServerOutput()
+
+	a.recoveryMu.Lock()
+	if a.recoveryClosed {
+		a.recoveryMu.Unlock()
+		return
+	}
+	a.recoveryCrashSerial++
+	startRecovery := !a.recoveryRunning
+	if startRecovery {
+		ctx, cancel := context.WithCancel(context.Background())
+		a.recoveryRunning = true
+		a.recoveryDegraded = true
+		a.recoveryCancel = cancel
+		go a.recoverAppServer(ctx)
+	}
+	a.recoveryMu.Unlock()
+
+	for _, sessionID := range event.Sessions {
+		a.emitControl(ControlEvent{
+			SessionID:    sessionID,
+			Status:       StatusError,
+			Capabilities: DefaultCapabilities(AgentCodex),
+			Class:        "failed",
+			EventID:      fmt.Sprintf("app_server_exit:%d:%s", event.Generation, sessionID),
+		})
+	}
+}
+
+func (a *CodexAdapter) recoverAppServer(ctx context.Context) {
+	delay := codexRecoveryBaseWait
+	var lastErr error
+	for attempt := 1; attempt <= codexRecoveryAttempts; attempt++ {
+		a.recoveryMu.Lock()
+		if a.recoveryClosed {
+			a.recoveryRunning = false
+			a.recoveryCancel = nil
+			a.recoveryMu.Unlock()
+			return
+		}
+		sleep := a.recoverySleep
+		ensure := a.recoveryEnsure
+		a.recoveryMu.Unlock()
+		if sleep == nil || !sleep(ctx, delay) {
+			a.recoveryMu.Lock()
+			a.recoveryRunning = false
+			a.recoveryCancel = nil
+			a.recoveryMu.Unlock()
+			return
+		}
+
+		a.recoveryMu.Lock()
+		crashSerial := a.recoveryCrashSerial
+		a.recoveryMu.Unlock()
+		if ensure == nil {
+			lastErr = errors.New("codex app-server recovery unavailable")
+		} else {
+			lastErr = ensure()
+		}
+
+		a.recoveryMu.Lock()
+		crashedDuringAttempt := a.recoveryCrashSerial != crashSerial
+		if lastErr == nil && !crashedDuringAttempt && !a.recoveryClosed {
+			sink := a.recoverySink
+			a.recoveryRunning = false
+			a.recoveryDegraded = false
+			a.recoveryCancel = nil
+			a.recoveryMu.Unlock()
+			log.Printf("[codex] app-server recovered after %d attempt(s)", attempt)
+			if sink != nil {
+				sink()
+			}
+			return
+		}
+		if crashedDuringAttempt && lastErr == nil {
+			lastErr = agentexec.ErrAppServerExited
+		}
+		a.recoveryMu.Unlock()
+
+		if delay < codexRecoveryMaxWait {
+			delay *= 2
+			if delay > codexRecoveryMaxWait {
+				delay = codexRecoveryMaxWait
+			}
+		}
+	}
+
+	a.recoveryMu.Lock()
+	a.recoveryRunning = false
+	a.recoveryDegraded = true
+	a.recoveryCancel = nil
+	a.recoveryMu.Unlock()
+	log.Printf("[codex] app-server recovery exhausted after %d attempts: %v", codexRecoveryAttempts, lastErr)
+}
+
+func (a *CodexAdapter) abortAppServerOutput() {
+	a.outputMu.Lock()
+	cleanups := make([]func(), 0, len(a.initialTurnCleanup))
+	for turnID, cleanup := range a.initialTurnCleanup {
+		delete(a.initialTurnCleanup, turnID)
+		cleanups = append(cleanups, cleanup)
+	}
+	a.appOutput = make(map[string]string)
+	a.outputMu.Unlock()
+	for _, cleanup := range cleanups {
+		if cleanup != nil {
+			cleanup()
+		}
+	}
+}
+
+func (a *CodexAdapter) emitControl(event ControlEvent) {
+	a.outputMu.Lock()
+	sink := a.controlSink
+	a.outputMu.Unlock()
+	if sink != nil && event.SessionID != "" {
+		sink(event)
+	}
+}
+
+func (a *CodexAdapter) handleAppServerRequest(req agentexec.ServerRequest) {
+	var meta struct {
+		ThreadID string `json:"threadId"`
+	}
+	_ = json.Unmarshal(req.Params, &meta)
+	if meta.ThreadID == "" || a.appServer == nil {
+		return
+	}
+	sessionID := a.appServer.WireIDForThread(meta.ThreadID)
+	if req.Method == "item/tool/requestUserInput" {
+		input := a.appServer.PendingUserInputFor(sessionID)
+		a.emitControl(ControlEvent{
+			SessionID: sessionID, Status: StatusWaitingUser,
+			PendingUserInput: userInputInfo(input), Class: "waiting_user", EventID: "user_input:" + req.ID,
+		})
+		return
+	}
+	if approval := a.appServer.PendingApprovalFor(sessionID); approval != nil {
+		a.emitControl(ControlEvent{
+			SessionID: sessionID, Status: StatusWaitingApproval,
+			PendingApproval: &ApprovalInfo{
+				ID: approval.ID, ToolName: approval.ToolName, Description: approval.Description,
+			},
+			Class:   "waiting_approval",
+			EventID: "approval:" + req.ID,
+		})
+	}
+}
+
 func (a *CodexAdapter) handleAppServerNotification(method string, params json.RawMessage) {
+	if method == "turn/completed" && a.appServer != nil {
+		var terminal struct {
+			ThreadID string `json:"threadId"`
+			Turn     *struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"turn"`
+		}
+		if json.Unmarshal(params, &terminal) == nil && terminal.ThreadID != "" && terminal.Turn != nil {
+			a.releaseInitialTurnFiles(terminal.Turn.ID)
+			status := StatusIdle
+			className := strings.ToLower(strings.TrimSpace(terminal.Turn.Status))
+			switch className {
+			case "", "completed":
+				className = "completed"
+			case "failed":
+				status = StatusError
+			case "interrupted", "cancelled", "canceled":
+				// A terminal cancellation is not a failure, but queue followers
+				// must remain paused until the user explicitly resumes them.
+			default:
+				className = "failed"
+				status = StatusError
+			}
+			a.emitControl(ControlEvent{
+				SessionID: a.appServer.WireIDForThread(terminal.ThreadID),
+				Status:    status, Class: className, EventID: "turn:" + terminal.Turn.ID + ":" + className,
+			})
+		}
+	}
 	event, ok := agentexec.ParseAppServerOutputNotification(method, params)
 	if !ok || a.appServer == nil {
 		return

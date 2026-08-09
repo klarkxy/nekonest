@@ -33,6 +33,7 @@ type DaemonConn struct {
 	LastPing               time.Time
 	Sessions               map[string]*protocol.AgentSession
 	AgentStartCapabilities []protocol.AgentStartCapability
+	SealedCatalog          *protocol.NekoMessage
 	generation             uint64
 	closed                 bool
 	mu                     sync.RWMutex
@@ -678,6 +679,37 @@ func (cm *ConnectionManager) updateSessionListFromLocked(
 	cm.BroadcastToPhones(dc.DeviceID, msg)
 }
 
+// updateSealedCatalogFromLocked caches and relays an opaque catalog frame for
+// the current daemon generation. The relay never decodes catalog ciphertext.
+func (cm *ConnectionManager) updateSealedCatalogFromLocked(dc *DaemonConn, msg *protocol.NekoMessage) {
+	if dc == nil || dc.closed || msg == nil || msg.SealedPayload == nil {
+		return
+	}
+	cm.mu.RLock()
+	cur, ok := cm.daemonConns[dc.DeviceID]
+	cm.mu.RUnlock()
+	if !ok || cur != dc {
+		return
+	}
+	clone := cloneOpaqueMessage(msg)
+	clone.DeviceID = dc.DeviceID
+	dc.SealedCatalog = clone
+	cm.BroadcastToPhones(dc.DeviceID, clone)
+}
+
+func cloneOpaqueMessage(msg *protocol.NekoMessage) *protocol.NekoMessage {
+	if msg == nil {
+		return nil
+	}
+	clone := *msg
+	clone.Payload = nil
+	if msg.SealedPayload != nil {
+		sealedPayload := *msg.SealedPayload
+		clone.SealedPayload = &sealedPayload
+	}
+	return &clone
+}
+
 func cleanAgentStartCapabilities(in []protocol.AgentStartCapability) []protocol.AgentStartCapability {
 	if in == nil {
 		return nil
@@ -743,4 +775,26 @@ func (cm *ConnectionManager) GetDeviceSessionSnapshot(deviceID string) ([]*proto
 		capabilities = append([]protocol.AgentStartCapability{}, dc.AgentStartCapabilities...)
 	}
 	return sessions, capabilities
+}
+
+// GetSealedCatalogSnapshot returns an opaque copy of the latest live catalog.
+func (cm *ConnectionManager) GetSealedCatalogSnapshot(deviceID string) *protocol.NekoMessage {
+	cm.mu.RLock()
+	dc, ok := cm.daemonConns[deviceID]
+	cm.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	dc.mu.RLock()
+	defer dc.mu.RUnlock()
+	if dc.closed || dc.SealedCatalog == nil {
+		return nil
+	}
+	cm.mu.RLock()
+	cur, live := cm.daemonConns[deviceID]
+	cm.mu.RUnlock()
+	if !live || cur != dc {
+		return nil
+	}
+	return cloneOpaqueMessage(dc.SealedCatalog)
 }

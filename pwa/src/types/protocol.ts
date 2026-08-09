@@ -1,6 +1,8 @@
 /** NekoNest protocol types (PWA) — keep in lockstep with protocol/protocol.json */
 
-export const PROTOCOL_VERSION = '1.0' as const
+import { runtimeTransportMode } from '@/api/transport'
+
+export const PROTOCOL_VERSION = '1.1' as const
 
 export type TransportMode = 'sealed' | 'open'
 
@@ -14,6 +16,7 @@ export type MessageType =
   | 'send_prompt'
   | 'prompt_status_query'
   | 'prompt_not_seen'
+  | 'prompt_queued'
   | 'prompt_accepted'
   | 'prompt_committed'
   | 'prompt_failed'
@@ -22,6 +25,12 @@ export type MessageType =
   | 'deny'
   | 'interrupt'
   | 'steer'
+  | 'respond_user_input'
+  | 'user_input_result'
+  | 'queue_update'
+  | 'cancel_prompt'
+  | 'prompt_cancelled'
+  | 'resume_prompt_queue'
   | 'start_thread'
   | 'thread_starting'
   | 'thread_owned'
@@ -64,6 +73,8 @@ export interface NekoMessage {
   device_id: string
   session_id?: string
   client_msg_id?: string
+  outcome?: string
+  retry_allowed?: boolean
   timestamp: number
   payload?: Record<string, unknown>
   sealed_payload?: SealedPayload
@@ -155,6 +166,7 @@ export interface AgentSession {
   project?: string
   capabilities?: SessionCapabilities
   pending_approval?: PendingApproval
+  pending_user_input?: PendingUserInput
 }
 
 export interface PendingApproval {
@@ -162,6 +174,40 @@ export interface PendingApproval {
   tool_name: string
   description: string
   parameters?: Record<string, unknown>
+}
+
+export interface UserInputOption {
+  label: string
+  description: string
+}
+
+export interface UserInputQuestion {
+  id: string
+  header: string
+  question: string
+  options?: UserInputOption[]
+  is_other?: boolean
+  is_secret?: boolean
+}
+
+export interface PendingUserInput {
+  request_id: string
+  item_id: string
+  questions: UserInputQuestion[]
+  auto_resolution_ms?: number
+  /** Unix milliseconds. */
+  expires_at?: number
+}
+
+export interface QueueItem {
+  client_msg_id: string
+  position: number
+  status: 'queued' | 'paused' | 'starting'
+}
+
+export interface PromptQueueState {
+  paused: boolean
+  items: QueueItem[]
 }
 
 export interface AttachmentRef {
@@ -177,6 +223,7 @@ export type DeliveryStatus =
   | 'queued'
   | 'sending'
   | 'accepted'
+  | 'cancelled'
   | 'committed'
   | 'not_seen'
   | 'failed'
@@ -198,10 +245,12 @@ export interface SessionMessage {
   }
 }
 
-/** Nest transport preference until sealed crypto is fully client-side. */
+/**
+ * The mode is server-owned.  This synchronous helper is intentionally unable
+ * to guess: callers must resolve /health before opening a websocket.
+ */
 export function nestTransportMode(): TransportMode {
-  const raw = (import.meta.env.VITE_NEKONEST_TRANSPORT_MODE as string | undefined)?.trim()
-  if (raw === 'sealed' || raw === 'open') return raw
-  // Default open while E2E crypto lands; sealed becomes default with crypto.
-  return 'open'
+  const mode = runtimeTransportMode()
+  if (mode === 'sealed' || mode === 'open') return mode
+  throw new Error('Nest transport mode has not been verified from /health')
 }

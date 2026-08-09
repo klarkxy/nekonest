@@ -100,15 +100,16 @@ func DefaultCapabilities(agentType AgentType) *SessionCapabilities {
 
 // SessionInfo describes a discovered agent session.
 type SessionInfo struct {
-	ID              string               `json:"id"`
-	AgentType       AgentType            `json:"agent_type"`
-	Status          AgentStatus          `json:"status"`
-	Summary         string               `json:"summary,omitempty"`
-	LastActivity    time.Time            `json:"last_activity"`
-	SessionPath     string               `json:"-"`                     // local store path (jsonl/db), not sent
-	ProjectDir      string               `json:"project_dir,omitempty"` // workspace / project folder on PC
-	Capabilities    *SessionCapabilities `json:"capabilities,omitempty"`
-	PendingApproval *ApprovalInfo        `json:"pending_approval,omitempty"`
+	ID               string               `json:"id"`
+	AgentType        AgentType            `json:"agent_type"`
+	Status           AgentStatus          `json:"status"`
+	Summary          string               `json:"summary,omitempty"`
+	LastActivity     time.Time            `json:"last_activity"`
+	SessionPath      string               `json:"-"`                     // local store path (jsonl/db), not sent
+	ProjectDir       string               `json:"project_dir,omitempty"` // workspace / project folder on PC
+	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
+	PendingApproval  *ApprovalInfo        `json:"pending_approval,omitempty"`
+	PendingUserInput *UserInputInfo       `json:"pending_user_input,omitempty"`
 }
 
 // ApprovalInfo describes a pending tool-call approval.
@@ -116,6 +117,39 @@ type ApprovalInfo struct {
 	ID          string `json:"id"`
 	ToolName    string `json:"tool_name"`
 	Description string `json:"description"`
+}
+
+type UserInputOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+type UserInputQuestion struct {
+	ID       string            `json:"id"`
+	Header   string            `json:"header"`
+	Question string            `json:"question"`
+	Options  []UserInputOption `json:"options,omitempty"`
+	IsOther  bool              `json:"is_other,omitempty"`
+	IsSecret bool              `json:"is_secret,omitempty"`
+}
+
+type UserInputInfo struct {
+	RequestID        string              `json:"request_id"`
+	ItemID           string              `json:"item_id"`
+	Questions        []UserInputQuestion `json:"questions"`
+	AutoResolutionMS *uint64             `json:"auto_resolution_ms,omitempty"`
+	ExpiresAt        int64               `json:"expires_at,omitempty"`
+}
+
+// ControlEvent is a positive app-server status signal for immediate wire updates.
+type ControlEvent struct {
+	SessionID        string
+	Status           AgentStatus
+	Capabilities     *SessionCapabilities
+	PendingApproval  *ApprovalInfo
+	PendingUserInput *UserInputInfo
+	Class            string
+	EventID          string
 }
 
 // HistoryMessage is a chat turn imported from the agent-native store.

@@ -235,7 +235,7 @@ async function sealWithKey(
   const seq = Date.now() % 1_000_000_000
   const ts = timestamp ?? Math.floor(Date.now() / 1000)
   const aad: AADFields = {
-    protocol_version: '1.0',
+    protocol_version: '1.1',
     transport_mode: 'sealed',
     type,
     device_id: deviceId,

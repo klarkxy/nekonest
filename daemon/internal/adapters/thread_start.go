@@ -1,12 +1,22 @@
 package adapters
 
-import "context"
+import (
+	"context"
+
+	"github.com/nekonest/daemon/internal/attach"
+)
 
 // ThreadStartRequest describes an agent-scoped native thread creation.
 // CWD must already belong to the daemon's discovered project set.
 type ThreadStartRequest struct {
 	ProjectDir string
 	Prompt     string
+	// Attachments are materialized by the daemon before native thread/start.
+	// Starters which do not advertise attachment support must leave them unused.
+	Attachments []attach.LocalFile
+	// OnComplete releases attachment files after the initial native turn ends.
+	// It is nil when no files were materialized.
+	OnComplete func()
 }
 
 // ThreadStartResult reports observations at the CLI boundary. None of these

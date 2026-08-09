@@ -12,11 +12,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document a per-harness live capability matrix for Claude Code, Codex, Kilo, Kimi CLI, and Grok Build.
 - Add capability-gated native thread creation for Claude Code, Codex, Kilo,
   Kimi CLI, and Grok Build in directories discovered from native sessions.
+- Complete the Codex 0.146.0 full-control path with structured
+  `requestUserInput` forms, password-safe secret answers, expiry and
+  idempotent/indeterminate response handling.
+- Add a durable per-session Codex FIFO queue with a 20-item limit, native
+  acceptance-based commit, cancel-before-start, pause/resume, reconnect
+  deduplication, and exact sealed-envelope reuse.
+- Add atomic Codex first turns with image and ordinary-file attachments plus
+  fail-closed ownership/acceptance lifecycle results.
+- Supervise `codex app-server` with generation guards, immediate capability
+  downgrade and attention events, bounded recovery, and no replay of uncertain
+  active work.
+- Persist the nest transport mode, default new databases to sealed, classify
+  legacy databases/configs as open, expose the live mode from `/health`, and
+  make the PWA resolve it before WebSocket connection.
+- Upgrade the wire protocol to backward-compatible 1.1 with queue control,
+  structured user input, and stable sealed-safe attention events.
 
 ### Fixed
 
 - Make thread creation fail closed with a durable operation journal and require
   positive native-store ownership before reporting a new thread as owned.
+- Keep sealed prompt commands opaque on the Server, persist and replay their
+  exact envelope, and clear the phone outbox only after durable native commit.
+- Make transport-mode mismatches fail closed across Server startup, Daemon
+  registration/config, and PWA runtime/build assertions.
 
 ## [0.2.3] - 2026-08-04
 

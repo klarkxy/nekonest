@@ -40,6 +40,8 @@ var (
 	forceDiscoverCh = make(chan struct{}, 1)
 )
 
+const maxPromptAttachments = 5
+
 func requestForceDiscover() {
 	select {
 	case forceDiscoverCh <- struct{}{}:
@@ -100,9 +102,19 @@ func main() {
 	log.Printf("🐱 NekoNest Daemon %s starting", buildinfo.Version)
 	log.Printf("   Device: %s", cfg.DeviceID)
 	log.Printf("   Server: %s", cfg.ServerURL)
-	daemonTransport = strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
-	if daemonTransport == "" {
-		daemonTransport = "open"
+	// The mode belongs to the registered nest, not to an ad-hoc process
+	// environment. NEKONEST_TRANSPORT_MODE can only assert the value already
+	// persisted in config; accepting a different value would silently downgrade
+	// (or strand) a sealed nest.
+	daemonTransport = cfg.TransportMode
+	if requested := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE")); requested != "" {
+		mode, modeErr := config.NormalizeTransportMode(requested)
+		if modeErr != nil {
+			log.Fatalf("[daemon] %v", modeErr)
+		}
+		if mode != daemonTransport {
+			log.Fatalf("[daemon] transport_mode mismatch: config is %s, NEKONEST_TRANSPORT_MODE is %s", daemonTransport, mode)
+		}
 	}
 	log.Printf("   Transport: %s", daemonTransport)
 	if sk, err := sealedkeys.LoadOrCreate(sealedkeys.DefaultPath()); err != nil {
@@ -155,6 +167,16 @@ func main() {
 		log.Fatalf("[daemon] cannot safely load prompt journal: %v", journalErr)
 	}
 	log.Printf("   Prompt journal: %s", commandJournal.path)
+	queuePath := promptQueuePath(activeConfigPath, deviceID)
+	durableQueue, queueErr := loadPromptQueue(queuePath)
+	queueAvailable := queueErr == nil
+	if queueErr != nil {
+		// Queueing is an optional capability. Unlike the command journal, a
+		// damaged queue must not permit a fail-open replay, so keep it disabled.
+		log.Printf("   Prompt queue: unavailable (%v)", queueErr)
+	} else {
+		log.Printf("   Prompt queue: %s", queuePath)
+	}
 	threadJournalPath := startjournal.Path(activeConfigPath, deviceID)
 	threadJournal, threadJournalErr := startjournal.Load(threadJournalPath, deviceID)
 	if threadJournalErr != nil {
@@ -180,7 +202,9 @@ func main() {
 	defer cancel()
 
 	// Create server connection
-	client := connection.NewClient(ctx, initialCfg.ServerURL, deviceID, token)
+	client := connection.NewClient(ctx, initialCfg.ServerURL, deviceID, token, daemonTransport)
+	acceptedPrompts := newPromptAcceptanceCache(maxAcceptedPromptIDs)
+	sessionSends := newSessionLockMap()
 
 	// Wire every adapter through one normalized output stream.
 	adapterRegistry.SetOutputSink(func(event adapters.OutputEvent) {
@@ -194,6 +218,84 @@ func main() {
 			event.MessageID,
 		)
 	})
+	var dispatchQueued func(string)
+	if adapter, ok := adapterRegistry.Get("codex"); ok {
+		if codex, ok := adapter.(*adapters.CodexAdapter); ok {
+			codex.SetControlSink(func(event adapters.ControlEvent) {
+				sendControlEvent(client, deviceID, event)
+				if queueAvailable && event.SessionID != "" {
+					switch event.Class {
+					case "completed":
+						if running, ok := durableQueue.running(event.SessionID); ok {
+							if err := durableQueue.complete(event.SessionID, running.ClientMsgID); err != nil {
+								log.Printf("[daemon] complete queued prompt: %v", err)
+							}
+						}
+						sendQueueUpdate(client, deviceID, event.SessionID, durableQueue)
+						if dispatchQueued != nil {
+							go dispatchQueued(event.SessionID)
+						}
+					case "failed", "interrupted", "cancelled", "canceled":
+						if err := durableQueue.pauseSession(event.SessionID); err != nil {
+							log.Printf("[daemon] pause queued prompts: %v", err)
+						}
+						sendQueueUpdate(client, deviceID, event.SessionID, durableQueue)
+					}
+				}
+				requestForceDiscover()
+			})
+			codex.SetRecoverySink(requestForceDiscover)
+			dispatchQueued = func(sessionID string) {
+				unlock := sessionSends.lock(sessionID)
+				defer unlock()
+				if !queueAvailable || !codex.AppServerHealthy() || codex.HasActiveTurn(sessionID) {
+					return
+				}
+				item, ok, claimErr := durableQueue.claimNext(sessionID)
+				if claimErr != nil {
+					log.Printf("[daemon] claim queued prompt: %v", claimErr)
+					return
+				}
+				if !ok {
+					return
+				}
+				sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+
+				prompt, refs, err := queuedPromptPayload(deviceID, sessionID, item)
+				if err == nil && len(refs) > 0 {
+					var files []attach.LocalFile
+					var suffix string
+					var attDir string
+					attDir, files, suffix, err = attach.Materialize(currentConfig().ServerURL, sessionID, refs)
+					if err == nil {
+						if prompt == "" {
+							prompt = "(user sent attachments)"
+						}
+						prompt += suffix
+						defer func() {
+							if err != nil {
+								_ = os.RemoveAll(attDir)
+							}
+						}()
+						if err = dispatchQueuedPrompt(codex, commandJournal, acceptedPrompts, client, deviceID, item, prompt, files, attDir); err == nil {
+							return
+						}
+					}
+				} else if err == nil {
+					err = dispatchQueuedPrompt(codex, commandJournal, acceptedPrompts, client, deviceID, item, prompt, nil, "")
+					if err == nil {
+						return
+					}
+				}
+				log.Printf("[daemon] dispatch queued prompt session=%s client_msg_id=%s: %v", sessionID, item.ClientMsgID, err)
+				if pauseErr := durableQueue.pauseSession(sessionID); pauseErr != nil {
+					log.Printf("[daemon] pause failed queued prompt: %v", pauseErr)
+				}
+				sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+				sendPromptIndeterminate(client, deviceID, sessionID, item.ClientMsgID, "queued prompt was paused before a safe native acceptance: "+err.Error())
+			}
+		}
+	}
 
 	// Session discovery state
 	var (
@@ -201,14 +303,15 @@ func main() {
 		lastSessions          = make(map[string]*adapters.SessionInfo)
 		lastStartCapabilities []map[string]interface{}
 	)
-	sessionSends := newSessionLockMap()
-	acceptedPrompts := newPromptAcceptanceCache(maxAcceptedPromptIDs)
 	startCapabilityCache := newAgentStartCapabilityCache(30 * time.Second)
 	threadStarts := &threadStartCoordinator{
 		journal:       threadJournal,
 		lookupAdapter: adapterRegistry.Get,
 		snapshotProjectDirs: func() []string {
 			return snapshotProjectDirs(&sessionMu, lastSessions)
+		},
+		materializeAttachments: func(operationID string, refs []attach.Ref) (string, []attach.LocalFile, string, error) {
+			return attach.Materialize(currentConfig().ServerURL, operationID, refs)
 		},
 	}
 
@@ -230,6 +333,25 @@ func main() {
 		msgType, _ := msg["type"].(string)
 		sessionID, _ := msg["session_id"].(string)
 		payload, _ := msg["payload"].(map[string]interface{})
+		var sealedPromptWire []byte
+		if msgType == "send_prompt" {
+			if _, sealed := msg["sealed_payload"]; sealed {
+				// A queued retry must preserve the exact original command envelope.
+				sealedPromptWire = bytes.Clone(data)
+			}
+		}
+		if daemonInboundApplicationType(msgType) {
+			decoded, err := decodeInboundApplicationCommand(deviceID, sessionID, msg, msgType)
+			if err != nil {
+				log.Printf("[daemon] rejecting %s transport envelope: %v", msgType, err)
+				sendInboundDecodeFailure(client, deviceID, sessionID, msgType, msg, err)
+				return
+			}
+			payload = decoded
+		} else if err := validateInboundRoutingFrame(msg); err != nil {
+			log.Printf("[daemon] rejecting routing frame %s: %v", msgType, err)
+			return
+		}
 
 		log.Printf("[daemon] received: type=%s session=%s", msgType, sessionID)
 
@@ -253,16 +375,6 @@ func main() {
 			unlock := sessionSends.lock(sessionID)
 			defer unlock()
 
-			// Sealed mode: decrypt application body before dispatch.
-			if sealedObj, ok := msg["sealed_payload"].(map[string]interface{}); ok && daemonSealedKeys != nil {
-				if plain, err := openSealedPrompt(deviceID, sessionID, msg, sealedObj); err != nil {
-					log.Printf("[daemon] sealed send_prompt open: %v", err)
-					sendPromptFailed(client, deviceID, sessionID, "", "sealed payload decrypt failed")
-					return
-				} else if plain != nil {
-					payload = plain
-				}
-			}
 			if payload == nil {
 				payload = map[string]interface{}{}
 			}
@@ -295,14 +407,60 @@ func main() {
 				sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
 				return
 			}
+			if queueAvailable {
+				if queued, exists := durableQueue.item(sessionID, clientMsgID); exists {
+					if queued.Status == promptQueueCancelled {
+						sendPromptCancelled(client, deviceID, sessionID, clientMsgID)
+					} else {
+						sendPromptQueued(client, deviceID, sessionID, clientMsgID, durableQueue.position(sessionID, clientMsgID))
+						sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+					}
+					return
+				}
+			}
 			prompt, _ := payload["prompt"].(string)
 			originalPrompt := prompt
 			// Drop stale attachment blocks if client re-sent an already-augmented draft.
 			prompt = stripNekoAttachSuffix(prompt)
 			refs := parseAttachmentRefs(payload["attachments"])
+			if len(refs) > maxPromptAttachments {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, fmt.Sprintf("too many attachments (limit %d)", maxPromptAttachments))
+				return
+			}
 			if prompt == "" && len(refs) == 0 {
 				log.Printf("[daemon] empty prompt")
 				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "empty prompt")
+				return
+			}
+			if targetAdapter == nil {
+				log.Printf("[daemon] no cached adapter for session %s, probing local agent stores", sessionID)
+				// Prefer single best guess — never blast all agents (that multi-sends).
+				targetAdapter = pickAdapterForSession(sessionID, adapterList)
+			}
+			if targetAdapter == nil {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "session not found on this PC")
+				return
+			}
+			if codex, ok := targetAdapter.(*adapters.CodexAdapter); ok && queueAvailable && codex.AppServerHealthy() &&
+				(codex.HasActiveTurn(sessionID) || durableQueue.hasActive(sessionID)) {
+				queued := promptQueueItem{
+					SessionID: sessionID, ClientMsgID: clientMsgID, AgentType: string(adapters.AgentCodex),
+				}
+				if len(sealedPromptWire) > 0 {
+					queued.SealedEnvelope = sealedPromptWire
+				} else {
+					queued.Prompt = originalPrompt
+					if rawAttachments, err := json.Marshal(payload["attachments"]); err == nil && string(rawAttachments) != "null" {
+						queued.Attachments = rawAttachments
+					}
+				}
+				stored, _, err := durableQueue.enqueue(queued)
+				if err != nil {
+					sendPromptFailed(client, deviceID, sessionID, clientMsgID, "prompt could not be durably queued: "+err.Error())
+					return
+				}
+				sendPromptQueued(client, deviceID, sessionID, clientMsgID, durableQueue.position(sessionID, stored.ClientMsgID))
+				sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 				return
 			}
 
@@ -348,15 +506,6 @@ func main() {
 				)
 			}
 
-			if targetAdapter == nil {
-				log.Printf("[daemon] no cached adapter for session %s, probing local agent stores", sessionID)
-				// Prefer single best guess — never blast all agents (that multi-sends).
-				targetAdapter = pickAdapterForSession(sessionID, adapterList)
-			}
-			if targetAdapter == nil {
-				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "session not found on this PC")
-				return
-			}
 			// Persist before crossing the Agent boundary. If the daemon dies
 			// after this write, startup converts dispatching to indeterminate
 			// and will never automatically execute the command again.
@@ -423,8 +572,22 @@ func main() {
 			defer unlock()
 			clientMsgID, _ := payload["client_msg_id"].(string)
 			if clientMsgID == "" {
+				clientMsgID, _ = msg["client_msg_id"].(string)
+			}
+			if clientMsgID == "" {
 				sendPromptFailed(client, deviceID, sessionID, "", "client_msg_id required")
 				return
+			}
+			if queueAvailable {
+				if queued, exists := durableQueue.item(sessionID, clientMsgID); exists {
+					if queued.Status == promptQueueCancelled {
+						sendPromptCancelled(client, deviceID, sessionID, clientMsgID)
+					} else {
+						sendPromptQueued(client, deviceID, sessionID, clientMsgID, durableQueue.position(sessionID, clientMsgID))
+						sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+					}
+					return
+				}
 			}
 			if recorded, seen := commandJournal.state(sessionID, clientMsgID); seen {
 				if recorded.Status == promptJournalAccepted || recorded.Status == promptJournalCommitted {
@@ -448,6 +611,9 @@ func main() {
 			defer unlock()
 			clientMsgID, _ := payload["client_msg_id"].(string)
 			if clientMsgID == "" {
+				clientMsgID, _ = msg["client_msg_id"].(string)
+			}
+			if clientMsgID == "" {
 				log.Printf("[daemon] prompt_committed without client_msg_id session=%s", sessionID)
 				return
 			}
@@ -470,6 +636,50 @@ func main() {
 				return
 			}
 			log.Printf("[daemon] prompt committed by server session=%s client_msg_id=%s", sessionID, clientMsgID)
+
+		case "cancel_prompt":
+			unlock := sessionSends.lock(sessionID)
+			defer unlock()
+			clientMsgID, _ := payload["client_msg_id"].(string)
+			if clientMsgID == "" {
+				sendPromptFailed(client, deviceID, sessionID, "", "client_msg_id required")
+				return
+			}
+			if !queueAvailable {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "prompt queue unavailable")
+				return
+			}
+			queued, exists := durableQueue.item(sessionID, clientMsgID)
+			if !exists || queued.AgentType != string(adapters.AgentCodex) {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "queued prompt not found")
+				return
+			}
+			if err := durableQueue.cancel(sessionID, clientMsgID); err != nil {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, err.Error())
+				return
+			}
+			sendPromptCancelled(client, deviceID, sessionID, clientMsgID)
+			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+
+		case "resume_prompt_queue":
+			unlock := sessionSends.lock(sessionID)
+			defer unlock()
+			if !queueAvailable {
+				sendPromptFailed(client, deviceID, sessionID, "", "prompt queue unavailable")
+				return
+			}
+			if err := durableQueue.resumeSession(sessionID); err != nil {
+				sendPromptFailed(client, deviceID, sessionID, "", "prompt queue could not be resumed: "+err.Error())
+				return
+			}
+			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+			if dispatchQueued != nil {
+				if adapter, ok := adapterRegistry.Get("codex"); ok {
+					if codex, ok := adapter.(*adapters.CodexAdapter); ok && !codex.HasActiveTurn(sessionID) {
+						go dispatchQueued(sessionID)
+					}
+				}
+			}
 
 		case "approve":
 			approvalID, _ := payload["approval_id"].(string)
@@ -497,6 +707,27 @@ func main() {
 				log.Printf("[daemon] denied: %s", approvalID)
 			}
 
+		case "respond_user_input":
+			requestID, _ := payload["request_id"].(string)
+			answers := parseUserInputAnswers(payload["answers"])
+			codex, _ := targetAdapter.(*adapters.CodexAdapter)
+			if codex == nil {
+				if adapter, exists := adapterRegistry.Get("codex"); exists {
+					codex, _ = adapter.(*adapters.CodexAdapter)
+				}
+			}
+			if codex == nil || strings.TrimSpace(requestID) == "" {
+				sendUserInputResult(client, deviceID, sessionID, requestID, "stale", "pending user input not found")
+				return
+			}
+			status, respondErr := codex.RespondUserInput(requestID, answers)
+			message := ""
+			if respondErr != nil {
+				message = respondErr.Error()
+			}
+			sendUserInputResult(client, deviceID, sessionID, requestID, status, message)
+			requestForceDiscover()
+
 		case "interrupt":
 			if targetAdapter == nil {
 				sendDaemonError(client, deviceID, sessionID, "no adapter for session")
@@ -507,6 +738,14 @@ func main() {
 				sendDaemonError(client, deviceID, sessionID, "interrupt failed: "+err.Error())
 			} else {
 				log.Printf("[daemon] interrupted session %s", sessionID)
+				if queueAvailable {
+					if _, codex := targetAdapter.(*adapters.CodexAdapter); codex {
+						if err := durableQueue.pauseSession(sessionID); err != nil {
+							log.Printf("[daemon] pause queue after interrupt: %v", err)
+						}
+						sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+					}
+				}
 			}
 
 		case "steer":
@@ -535,20 +774,6 @@ func main() {
 			}
 
 		case "start_thread":
-			if sealedObj, ok := msg["sealed_payload"].(map[string]interface{}); ok {
-				if daemonSealedKeys == nil {
-					opID, _ := msg["client_msg_id"].(string)
-					sendThreadResult(client, deviceID, "", opID, "thread_failed", "", false, "sealed thread start is unavailable")
-					return
-				}
-				plain, err := openSealedCommand(deviceID, "", msg, sealedObj, "start_thread")
-				if err != nil {
-					opID, _ := msg["client_msg_id"].(string)
-					sendThreadResult(client, deviceID, "", opID, "thread_failed", "", false, "sealed thread start decrypt failed")
-					return
-				}
-				payload = plain
-			}
 			if payload == nil {
 				payload = map[string]interface{}{}
 			}
@@ -593,11 +818,26 @@ func main() {
 			if opID == "" {
 				opID, _ = msg["client_msg_id"].(string)
 			}
+			refs := parseAttachmentRefs(payload["attachments"])
+			if len(refs) > maxPromptAttachments {
+				sendThreadResult(client, deviceID, string(agentType), opID, "thread_failed", "", false, fmt.Sprintf("too many attachments (limit %d)", maxPromptAttachments))
+				return
+			}
+			// A malformed non-empty attachment list must not be silently dropped
+			// before native thread/start. The phone retains its local draft after
+			// this definitive pre-boundary failure.
+			if raw, present := payload["attachments"]; present && len(refs) == 0 {
+				if list, ok := raw.([]interface{}); !ok || len(list) > 0 {
+					sendThreadResult(client, deviceID, string(agentType), opID, "thread_failed", "", false, "invalid thread-start attachments")
+					return
+				}
+			}
 			command := threadStartCommand{
 				OperationID: opID,
 				AgentType:   agentType,
 				ProjectDir:  projectDir,
 				Prompt:      first,
+				Attachments: refs,
 			}
 			// Native startup can include an ACP handshake plus an ownership wait.
 			// Keep it off the single WebSocket read loop so other sessions and
@@ -676,23 +916,10 @@ func main() {
 					},
 				})
 			}
-			out := map[string]interface{}{
-				"type":       "session_history",
-				"device_id":  deviceID,
-				"session_id": sessionID,
-				"timestamp":  time.Now().Unix(),
-				"payload": map[string]interface{}{
-					"source":    source,
-					"truncated": len(msgs) >= limit,
-					"limit":     limit,
-					"messages":  msgs,
-				},
-			}
-			if e := client.Send(out); e != nil {
-				log.Printf("[daemon] send session_history: %v", e)
-			} else {
-				log.Printf("[daemon] session_history %s source=%s n=%d", sessionID, source, len(msgs))
-			}
+			sendDaemonApplication(client, deviceID, sessionID, "", "session_history", map[string]interface{}{
+				"source": source, "truncated": len(msgs) >= limit, "limit": limit, "messages": msgs,
+			}, false)
+			log.Printf("[daemon] session_history %s source=%s n=%d", sessionID, source, len(msgs))
 
 		case "heartbeat":
 			// Server heartbeat, keep-alive handled by connection layer
@@ -786,6 +1013,7 @@ func main() {
 							Deny:           true,
 							Interrupt:      true,
 							Steer:          true,
+							Queue:          queueAvailable,
 							Spawn:          true,
 							AttachmentMode: adapters.AttachNativeImageAndFile,
 						}
@@ -810,7 +1038,7 @@ func main() {
 				} else {
 					for id, newS := range newSessions {
 						oldS, ok := lastSessions[id]
-						if !ok || oldS.Status != newS.Status || oldS.Summary != newS.Summary || oldS.ProjectDir != newS.ProjectDir || pendingApprovalChanged(oldS, newS) || sessionCapabilitiesChanged(oldS, newS) {
+						if !ok || oldS.Status != newS.Status || oldS.Summary != newS.Summary || oldS.ProjectDir != newS.ProjectDir || pendingApprovalChanged(oldS, newS) || pendingUserInputChanged(oldS, newS) || sessionCapabilitiesChanged(oldS, newS) {
 							changed = true
 							break
 						}
@@ -827,15 +1055,14 @@ func main() {
 
 			// Always report on force (reconnect) or when local list changed
 			if changed {
-				report := map[string]interface{}{
-					"type":      "session_list",
-					"device_id": deviceID,
-					"timestamp": time.Now().Unix(),
-					"payload": map[string]interface{}{
-						// Convert at the wire boundary: unix last_activity + device_id
-						"sessions":           sessionsToWire(deviceID, allSessions),
-						"start_capabilities": startCapabilities,
-					},
+				report, buildErr := buildDaemonApplicationMessage(deviceID, "", "", "session_list", map[string]interface{}{
+					// Convert at the wire boundary: unix last_activity + device_id
+					"sessions":           sessionsToWire(deviceID, allSessions),
+					"start_capabilities": startCapabilities,
+				}, true)
+				if buildErr != nil {
+					log.Printf("[daemon] build session_list: %v", buildErr)
+					return
 				}
 				if err := client.Send(report); err != nil {
 					log.Printf("[daemon] report error: %v", err)
@@ -877,6 +1104,10 @@ func main() {
 	go config.WatchPath(ctx, watchPath, func(newCfg *config.Config) {
 		oldCfg := currentConfig()
 		nextCfg := *newCfg
+		if nextCfg.TransportMode != daemonTransport {
+			log.Printf("[daemon] config transport_mode changed from %s to %s; refusing hot reload (restart and re-pair required)", daemonTransport, nextCfg.TransportMode)
+			return
+		}
 		credChanged := nextCfg.DeviceID != deviceID || nextCfg.Token != token
 		if credChanged {
 			log.Printf("[daemon] config credentials changed but were NOT applied; restart daemon to use the new device_id/token")
@@ -958,6 +1189,18 @@ func pendingApprovalChanged(oldS, newS *adapters.SessionInfo) bool {
 	return o.ID != n.ID || o.ToolName != n.ToolName || o.Description != n.Description
 }
 
+func pendingUserInputChanged(oldS, newS *adapters.SessionInfo) bool {
+	if oldS == nil || newS == nil {
+		return oldS != newS
+	}
+	oldInput, newInput := oldS.PendingUserInput, newS.PendingUserInput
+	if oldInput == nil || newInput == nil {
+		return oldInput != newInput
+	}
+	return oldInput.RequestID != newInput.RequestID || oldInput.ExpiresAt != newInput.ExpiresAt ||
+		!reflect.DeepEqual(oldInput.Questions, newInput.Questions)
+}
+
 func sessionCapabilitiesChanged(oldS, newS *adapters.SessionInfo) bool {
 	if oldS == nil || newS == nil {
 		return oldS != newS
@@ -1027,6 +1270,9 @@ func sessionsToWire(deviceID string, sessions []*adapters.SessionInfo) []map[str
 				"description": s.PendingApproval.Description,
 			}
 		}
+		if s.PendingUserInput != nil {
+			item["pending_user_input"] = s.PendingUserInput
+		}
 		out = append(out, item)
 	}
 	return out
@@ -1070,7 +1316,7 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 	}
 
 	msg := map[string]interface{}{
-		"protocol_version": "1.0",
+		"protocol_version": "1.1",
 		"transport_mode":   daemonTransport,
 		"type":             "session_message",
 		"device_id":        deviceID,
@@ -1085,7 +1331,7 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 			return
 		}
 		aad := sealed.AADFields{
-			ProtocolVersion: "1.0",
+			ProtocolVersion: "1.1",
 			TransportMode:   "sealed",
 			Type:            "session_message",
 			DeviceID:        deviceID,
@@ -1107,6 +1353,168 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 	}
 }
 
+func parseUserInputAnswers(raw interface{}) map[string][]string {
+	out := make(map[string][]string)
+	answers, ok := raw.(map[string]interface{})
+	if !ok {
+		return out
+	}
+	for questionID, rawAnswer := range answers {
+		questionID = strings.TrimSpace(questionID)
+		if questionID == "" {
+			continue
+		}
+		var values []interface{}
+		switch typed := rawAnswer.(type) {
+		case []interface{}:
+			values = typed
+		case map[string]interface{}:
+			values, _ = typed["answers"].([]interface{})
+		}
+		for _, value := range values {
+			if text, ok := value.(string); ok {
+				out[questionID] = append(out[questionID], text)
+			}
+		}
+		if out[questionID] == nil {
+			out[questionID] = []string{}
+		}
+	}
+	return out
+}
+
+// sendControlEvent publishes details immediately while attention_event remains
+// routing-only and safe for generic Web Push.
+func sendControlEvent(client *connection.Client, deviceID string, event adapters.ControlEvent) {
+	if client == nil || event.SessionID == "" {
+		return
+	}
+	ts := time.Now().Unix()
+	session := map[string]interface{}{
+		"id": event.SessionID, "device_id": deviceID, "agent_type": "codex",
+		"status": string(event.Status), "last_activity": ts,
+	}
+	if event.PendingApproval != nil {
+		session["pending_approval"] = event.PendingApproval
+	}
+	if event.PendingUserInput != nil {
+		session["pending_user_input"] = event.PendingUserInput
+	}
+	if event.Capabilities != nil {
+		session["capabilities"] = event.Capabilities
+	}
+	inner := map[string]interface{}{"session": session}
+	msg := map[string]interface{}{
+		"protocol_version": "1.1", "transport_mode": daemonTransport,
+		"type": "session_update", "device_id": deviceID,
+		"session_id": event.SessionID, "timestamp": ts,
+	}
+	if daemonTransport == "sealed" {
+		if daemonSealedKeys == nil {
+			log.Printf("[daemon] refusing plaintext session_update in sealed mode")
+			return
+		}
+		plain, err := json.Marshal(inner)
+		if err != nil {
+			return
+		}
+		aad := sealed.AADFields{
+			ProtocolVersion: "1.1", TransportMode: "sealed", Type: "session_update",
+			DeviceID: deviceID, SessionID: event.SessionID, Timestamp: ts,
+		}
+		wire, err := daemonSealedKeys.SealSession(event.SessionID, deviceID, "phones", aad, plain)
+		if err != nil {
+			log.Printf("[daemon] seal session_update: %v", err)
+			return
+		}
+		msg["sealed_payload"] = wire
+	} else {
+		msg["payload"] = inner
+	}
+	if err := client.Send(msg); err != nil {
+		log.Printf("[daemon] send session_update: %v", err)
+	}
+	attention := map[string]interface{}{
+		"protocol_version": "1.1", "transport_mode": daemonTransport,
+		"type": "attention_event", "device_id": deviceID,
+		"session_id": event.SessionID, "timestamp": ts,
+		"payload": map[string]interface{}{
+			"event_id": event.EventID, "class": event.Class, "occurred_at": ts,
+		},
+	}
+	if err := client.Send(attention); err != nil {
+		log.Printf("[daemon] send attention_event: %v", err)
+	}
+}
+
+func sendUserInputResult(client *connection.Client, deviceID, sessionID, requestID, status, message string) {
+	payload := map[string]interface{}{"request_id": requestID, "status": status}
+	if message != "" {
+		payload["message"] = message
+	}
+	sendDaemonApplication(client, deviceID, sessionID, "", "user_input_result", payload, false)
+}
+
+func buildDaemonApplicationMessage(
+	deviceID, sessionID, clientMsgID, msgType string,
+	payload map[string]interface{},
+	useCatalog bool,
+) (map[string]interface{}, error) {
+	ts := time.Now().Unix()
+	msg := map[string]interface{}{
+		"protocol_version": "1.1", "transport_mode": daemonTransport,
+		"type": msgType, "device_id": deviceID, "timestamp": ts,
+	}
+	if sessionID != "" {
+		msg["session_id"] = sessionID
+	}
+	if clientMsgID != "" {
+		msg["client_msg_id"] = clientMsgID
+	}
+	if daemonTransport == "open" {
+		msg["payload"] = payload
+		return msg, nil
+	}
+	if daemonSealedKeys == nil {
+		return nil, errors.New("sealed keys unavailable")
+	}
+	plain, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	aad := sealed.AADFields{
+		ProtocolVersion: "1.1", TransportMode: "sealed", Type: msgType,
+		DeviceID: deviceID, SessionID: sessionID, ClientMsgID: clientMsgID, Timestamp: ts,
+	}
+	var wire *sealed.WireSealed
+	if useCatalog {
+		wire, err = daemonSealedKeys.SealCatalog(deviceID, "phones", aad, plain)
+	} else {
+		wire, err = daemonSealedKeys.SealSession(sessionID, deviceID, "phones", aad, plain)
+	}
+	if err != nil {
+		return nil, err
+	}
+	msg["sealed_payload"] = wire
+	return msg, nil
+}
+
+func sendDaemonApplication(
+	client *connection.Client,
+	deviceID, sessionID, clientMsgID, msgType string,
+	payload map[string]interface{},
+	useCatalog bool,
+) {
+	msg, err := buildDaemonApplicationMessage(deviceID, sessionID, clientMsgID, msgType, payload, useCatalog)
+	if err != nil {
+		log.Printf("[daemon] build %s: %v", msgType, err)
+		return
+	}
+	if err := client.Send(msg); err != nil {
+		log.Printf("[daemon] send %s: %v", msgType, err)
+	}
+}
+
 // handleRegistration registers this device with the server via REST and saves config.
 func handleRegistration(deviceName string) {
 	fmt.Println("🐱 NekoNest Device Registration")
@@ -1119,6 +1527,9 @@ func handleRegistration(deviceName string) {
 
 	// Already registered?
 	if existing, err := config.Load(); err == nil && existing.Token != "" && existing.DeviceID != "" {
+		if _, modeErr := registrationTransportMode(existing.TransportMode, os.Getenv("NEKONEST_TRANSPORT_MODE")); modeErr != nil {
+			log.Fatalf("registered config transport_mode: %v", modeErr)
+		}
 		fmt.Printf("Already registered.\n")
 		fmt.Printf("  Device: %s\n", existing.DeviceID)
 		fmt.Printf("  Server: %s\n", existing.ServerURL)
@@ -1158,6 +1569,7 @@ func handleRegistration(deviceName string) {
 		"ed25519_public":       st.Ed25519Public,
 		"x25519_public":        st.X25519Public,
 		"identity_fingerprint": st.Fingerprint,
+		"transport_mode":       strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE")),
 	})
 	req, err := http.NewRequest(http.MethodPost, httpBase+"/api/devices/register", bytes.NewReader(body))
 	if err != nil {
@@ -1178,21 +1590,27 @@ func handleRegistration(deviceName string) {
 	}
 
 	var result struct {
-		DeviceID string `json:"device_id"`
-		Token    string `json:"token"`
-		Name     string `json:"name"`
+		DeviceID      string `json:"device_id"`
+		Token         string `json:"token"`
+		Name          string `json:"name"`
+		TransportMode string `json:"transport_mode"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		log.Fatalf("parse register response: %v", err)
+	}
+	mode, modeErr := registrationTransportMode(result.TransportMode, os.Getenv("NEKONEST_TRANSPORT_MODE"))
+	if modeErr != nil {
+		log.Fatalf("register response transport_mode: %v; response=%s", modeErr, string(respBody))
 	}
 	if result.DeviceID == "" || result.Token == "" {
 		log.Fatalf("register response missing device_id/token: %s", string(respBody))
 	}
 
 	cfg := &config.Config{
-		ServerURL: wsURL,
-		DeviceID:  result.DeviceID,
-		Token:     result.Token,
+		ServerURL:     wsURL,
+		DeviceID:      result.DeviceID,
+		Token:         result.Token,
+		TransportMode: mode,
 	}
 	if err := cfg.Save(); err != nil {
 		log.Fatalf("Failed to save config: %v", err)
@@ -1208,12 +1626,36 @@ func handleRegistration(deviceName string) {
 		fmt.Println("You can still list the device on phone if you use the phone secret.")
 	} else {
 		fmt.Printf("\n📱 Phone pair code: %s (expires ~%s)\n", code, exp.Local().Format("15:04:05"))
-		qr := identity.BuildPairQR(httpBase, result.DeviceID, result.Name, code, exp.Unix(), st, "open")
+		qr := identity.BuildPairQR(httpBase, result.DeviceID, result.Name, code, exp.Unix(), st, mode)
 		qrJSON, _ := json.Marshal(qr)
 		fmt.Println(string(qrJSON))
 		fmt.Println("1. Open PWA → 配对电脑 → enter code / paste QR payload")
 		fmt.Println("2. Start daemon: nekonest-daemon.exe")
 	}
+}
+
+// registrationTransportMode rejects incomplete registration responses before
+// credentials are persisted. The server selects a nest-wide immutable mode;
+// an optional environment request is only a first-registration assertion.
+func registrationTransportMode(serverMode, requested string) (string, error) {
+	if strings.TrimSpace(serverMode) == "" {
+		return "", errors.New("missing transport_mode")
+	}
+	mode, err := config.NormalizeTransportMode(serverMode)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(requested) == "" {
+		return mode, nil
+	}
+	want, err := config.NormalizeTransportMode(requested)
+	if err != nil {
+		return "", err
+	}
+	if want != mode {
+		return "", fmt.Errorf("requested %s, server returned %s", want, mode)
+	}
+	return mode, nil
 }
 
 // handlePairing generates a short-lived pair code for an already-registered device.
@@ -1239,11 +1681,7 @@ func handlePairing(code string) {
 		log.Fatalf("generate pair code: %v", err)
 	}
 	httpBase := config.HTTPBaseURL(cfg.ServerURL)
-	transportMode := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
-	if transportMode == "" {
-		transportMode = "open"
-	}
-	qr := identity.BuildPairQR(httpBase, cfg.DeviceID, "", pairCode, exp.Unix(), st, transportMode)
+	qr := identity.BuildPairQR(httpBase, cfg.DeviceID, "", pairCode, exp.Unix(), st, cfg.TransportMode)
 	qrJSON, _ := json.Marshal(qr)
 	fmt.Printf("Device: %s\n", cfg.DeviceID)
 	fmt.Printf("Fingerprint: %s\n", st.Fingerprint)
@@ -1379,6 +1817,130 @@ func parseAttachmentRefs(raw interface{}) []attach.Ref {
 	return out
 }
 
+func queuedPromptPayload(deviceID, sessionID string, item promptQueueItem) (string, []attach.Ref, error) {
+	if len(item.SealedEnvelope) > 0 {
+		var wire map[string]interface{}
+		if err := json.Unmarshal(item.SealedEnvelope, &wire); err != nil {
+			return "", nil, fmt.Errorf("decode saved sealed prompt: %w", err)
+		}
+		sealedObj, ok := wire["sealed_payload"].(map[string]interface{})
+		if !ok || daemonSealedKeys == nil {
+			return "", nil, errors.New("saved sealed prompt cannot be opened")
+		}
+		payload, err := openSealedPrompt(deviceID, sessionID, wire, sealedObj)
+		if err != nil {
+			return "", nil, err
+		}
+		return queuedPromptPayloadFromMap(payload)
+	}
+	var raw interface{}
+	if len(item.Attachments) > 0 && json.Unmarshal(item.Attachments, &raw) != nil {
+		return "", nil, errors.New("saved prompt attachments are invalid")
+	}
+	refs := parseAttachmentRefs(raw)
+	if len(refs) > maxPromptAttachments {
+		return "", nil, fmt.Errorf("too many attachments (limit %d)", maxPromptAttachments)
+	}
+	return stripNekoAttachSuffix(item.Prompt), refs, nil
+}
+
+func queuedPromptPayloadFromMap(payload map[string]interface{}) (string, []attach.Ref, error) {
+	if payload == nil {
+		return "", nil, errors.New("saved prompt payload is empty")
+	}
+	prompt, _ := payload["prompt"].(string)
+	refs := parseAttachmentRefs(payload["attachments"])
+	if len(refs) > maxPromptAttachments {
+		return "", nil, fmt.Errorf("too many attachments (limit %d)", maxPromptAttachments)
+	}
+	if prompt == "" && len(refs) == 0 {
+		return "", nil, errors.New("saved prompt is empty")
+	}
+	return stripNekoAttachSuffix(prompt), refs, nil
+}
+
+// dispatchQueuedPrompt is called only after the queue persisted running. It
+// records dispatching immediately before the native RPC and accepts only after
+// that RPC positively returns; no exec-resume fallback can cross this boundary.
+func dispatchQueuedPrompt(
+	codex *adapters.CodexAdapter,
+	journal *promptJournal,
+	accepted *promptAcceptanceCache,
+	client *connection.Client,
+	deviceID string,
+	item promptQueueItem,
+	prompt string,
+	files []attach.LocalFile,
+	attachmentDir string,
+) error {
+	cleanup := func() {
+		if attachmentDir != "" {
+			if err := os.RemoveAll(attachmentDir); err != nil {
+				log.Printf("[daemon] remove queued attachment directory %s: %v", attachmentDir, err)
+			}
+		}
+	}
+	if err := journal.markDispatching(item.SessionID, item.ClientMsgID, item.Prompt); err != nil {
+		cleanup()
+		return fmt.Errorf("persist queued dispatch: %w", err)
+	}
+	if err := codex.SendQueuedPrompt(item.SessionID, adapters.PromptRequest{
+		Prompt: prompt, Attachments: files, OnComplete: cleanup,
+	}); err != nil {
+		cleanup()
+		if journalErr := journal.markIndeterminate(item.SessionID, item.ClientMsgID); journalErr != nil {
+			log.Printf("[daemon] mark queued prompt indeterminate: %v", journalErr)
+		}
+		return err
+	}
+	if err := journal.markAccepted(item.SessionID, item.ClientMsgID); err != nil {
+		return fmt.Errorf("persist queued acceptance: %w", err)
+	}
+	acceptedPrompt := acceptedPrompt{prompt: boundedPromptEcho(item.Prompt)}
+	accepted.add(item.SessionID, item.ClientMsgID, acceptedPrompt)
+	sendPromptAccepted(client, deviceID, item.SessionID, item.ClientMsgID, acceptedPrompt)
+	return nil
+}
+
+func sendPromptQueued(client *connection.Client, deviceID, sessionID, clientMsgID string, position int) {
+	sendDaemonApplication(client, deviceID, sessionID, clientMsgID, "prompt_queued", map[string]interface{}{
+		"client_msg_id": clientMsgID, "queued": true, "queue_position": position,
+	}, false)
+}
+
+func sendPromptCancelled(client *connection.Client, deviceID, sessionID, clientMsgID string) {
+	sendDaemonApplication(client, deviceID, sessionID, clientMsgID, "prompt_cancelled", map[string]interface{}{
+		"client_msg_id": clientMsgID,
+	}, false)
+}
+
+func sendQueueUpdate(client *connection.Client, deviceID, sessionID string, queue *promptQueue) {
+	if client == nil || queue == nil {
+		return
+	}
+	items := queue.list(sessionID)
+	wireItems := make([]map[string]interface{}, 0, len(items))
+	paused := false
+	for _, item := range items {
+		if item.Status == promptQueueCancelled {
+			continue
+		}
+		if item.Status == promptQueuePaused {
+			paused = true
+		}
+		status := string(item.Status)
+		if item.Status == promptQueueRunning {
+			status = "starting"
+		}
+		wireItems = append(wireItems, map[string]interface{}{
+			"client_msg_id": item.ClientMsgID, "position": queue.position(sessionID, item.ClientMsgID), "status": status,
+		})
+	}
+	sendDaemonApplication(client, deviceID, sessionID, "", "queue_update", map[string]interface{}{
+		"session_id": sessionID, "paused": paused, "items": wireItems,
+	}, false)
+}
+
 func sendPromptAccepted(
 	client *connection.Client,
 	deviceID, sessionID, clientMsgID string,
@@ -1388,12 +1950,9 @@ func sendPromptAccepted(
 		"client_msg_id": clientMsgID,
 		"prompt":        accepted.prompt,
 	}
-	msg := map[string]interface{}{
-		"type":       "prompt_accepted",
-		"device_id":  deviceID,
-		"session_id": sessionID,
-		"timestamp":  time.Now().Unix(),
-		"payload":    payload,
+	msg, err := buildDaemonApplicationMessage(deviceID, sessionID, clientMsgID, "prompt_accepted", payload, false)
+	if err != nil {
+		return err
 	}
 	if err := client.Send(msg); err != nil {
 		// The accepted ID remains cached. A server retransmission will only
@@ -1414,10 +1973,13 @@ func sendPromptIndeterminate(client *connection.Client, deviceID, sessionID, cli
 
 func sendPromptNotSeen(client *connection.Client, deviceID, sessionID, clientMsgID string) {
 	msg := map[string]interface{}{
-		"type":       "prompt_not_seen",
-		"device_id":  deviceID,
-		"session_id": sessionID,
-		"timestamp":  time.Now().Unix(),
+		"protocol_version": "1.1",
+		"transport_mode":   daemonTransport,
+		"type":             "prompt_not_seen",
+		"device_id":        deviceID,
+		"session_id":       sessionID,
+		"client_msg_id":    clientMsgID,
+		"timestamp":        time.Now().Unix(),
 		"payload": map[string]interface{}{
 			"client_msg_id": clientMsgID,
 		},
@@ -1432,19 +1994,21 @@ func sendPromptFailure(
 	deviceID, sessionID, clientMsgID, message, outcome string,
 	retryAllowed bool,
 ) {
-	msg := map[string]interface{}{
-		"type":       "prompt_failed",
-		"device_id":  deviceID,
-		"session_id": sessionID,
-		"timestamp":  time.Now().Unix(),
-		"payload": map[string]interface{}{
-			"client_msg_id": clientMsgID,
-			"error":         message,
-			"message":       message,
-			"outcome":       outcome,
-			"retry_allowed": retryAllowed,
-		},
+	msg, err := buildDaemonApplicationMessage(deviceID, sessionID, clientMsgID, "prompt_failed", map[string]interface{}{
+		"client_msg_id": clientMsgID,
+		"error":         message,
+		"message":       message,
+		"outcome":       outcome,
+		"retry_allowed": retryAllowed,
+	}, false)
+	if err != nil {
+		log.Printf("[daemon] build prompt_failed client_msg_id=%s: %v", clientMsgID, err)
+		return
 	}
+	// Delivery state is relay-visible event metadata; application error text
+	// remains inside sealed_payload.
+	msg["outcome"] = outcome
+	msg["retry_allowed"] = retryAllowed
 	if err := client.Send(msg); err != nil {
 		log.Printf("[daemon] send prompt_failed failed client_msg_id=%s: %v", clientMsgID, err)
 	}
@@ -1475,7 +2039,7 @@ func buildThreadResultMessage(deviceID, agentType, opID, msgType, threadID strin
 		payload["reason"] = errMsg
 	}
 	msg := map[string]interface{}{
-		"protocol_version": "1.0",
+		"protocol_version": "1.1",
 		"transport_mode":   daemonTransport,
 		"type":             msgType,
 		"device_id":        deviceID,
@@ -1494,7 +2058,7 @@ func buildThreadResultMessage(deviceID, agentType, opID, msgType, threadID strin
 				degradeSealedThreadResult(msg)
 			} else {
 				aad := sealed.AADFields{
-					ProtocolVersion: "1.0",
+					ProtocolVersion: "1.1",
 					TransportMode:   "sealed",
 					Type:            msgType,
 					DeviceID:        deviceID,
@@ -1527,6 +2091,113 @@ func degradeSealedThreadResult(msg map[string]interface{}) {
 	delete(msg, "sealed_payload")
 }
 
+func daemonInboundApplicationType(msgType string) bool {
+	switch msgType {
+	case "send_prompt", "approve", "deny", "respond_user_input", "interrupt", "steer",
+		"cancel_prompt", "resume_prompt_queue", "start_thread", "fetch_history":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateInboundRoutingFrame(msg map[string]interface{}) error {
+	if msg == nil {
+		return errors.New("message required")
+	}
+	version, _ := msg["protocol_version"].(string)
+	if !strings.HasPrefix(version, "1.") {
+		return errors.New("protocol_version mismatch")
+	}
+	mode, _ := msg["transport_mode"].(string)
+	if mode != daemonTransport {
+		return fmt.Errorf("transport_mode mismatch: daemon=%s frame=%s", daemonTransport, mode)
+	}
+	msgType, _ := msg["type"].(string)
+	switch msgType {
+	case "pair_ready", "prompt_status_query", "prompt_committed", "heartbeat",
+		"key_package", "phone_revoked", "attention_event", "error":
+		return nil
+	default:
+		return fmt.Errorf("unexpected routing message type %q", msgType)
+	}
+}
+
+func decodeInboundApplicationCommand(deviceID, sessionID string, msg map[string]interface{}, expectedType string) (map[string]interface{}, error) {
+	if msg == nil {
+		return nil, errors.New("message required")
+	}
+	version, _ := msg["protocol_version"].(string)
+	if !strings.HasPrefix(version, "1.") {
+		return nil, errors.New("protocol_version mismatch")
+	}
+	mode, _ := msg["transport_mode"].(string)
+	if mode != daemonTransport {
+		return nil, fmt.Errorf("transport_mode mismatch: daemon=%s frame=%s", daemonTransport, mode)
+	}
+	actualType, _ := msg["type"].(string)
+	if actualType != expectedType {
+		return nil, errors.New("message type mismatch")
+	}
+	plainRaw, hasPlain := msg["payload"]
+	sealedRaw, hasSealed := msg["sealed_payload"]
+	if hasPlain && hasSealed {
+		return nil, errors.New("payload and sealed_payload are mutually exclusive")
+	}
+	if daemonTransport == "open" {
+		if hasSealed {
+			return nil, errors.New("open mode rejects sealed_payload")
+		}
+		if !hasPlain || plainRaw == nil {
+			return map[string]interface{}{}, nil
+		}
+		payload, ok := plainRaw.(map[string]interface{})
+		if !ok {
+			return nil, errors.New("payload must be an object")
+		}
+		return payload, nil
+	}
+	if !hasSealed || hasPlain {
+		return nil, errors.New("sealed application command requires sealed_payload only")
+	}
+	if daemonSealedKeys == nil {
+		return nil, errors.New("sealed keys unavailable")
+	}
+	sealedObj, ok := sealedRaw.(map[string]interface{})
+	if !ok {
+		return nil, errors.New("sealed_payload must be an object")
+	}
+	payload, err := openSealedCommand(deviceID, sessionID, msg, sealedObj, expectedType)
+	if err != nil {
+		return nil, err
+	}
+	outerClientMsgID, _ := msg["client_msg_id"].(string)
+	if innerClientMsgID, _ := payload["client_msg_id"].(string); innerClientMsgID != "" && innerClientMsgID != outerClientMsgID {
+		return nil, errors.New("inner client_msg_id does not match envelope")
+	}
+	if expectedType == "start_thread" {
+		if operationID, _ := payload["operation_id"].(string); operationID != "" && operationID != outerClientMsgID {
+			return nil, errors.New("operation_id does not match envelope")
+		}
+	}
+	return payload, nil
+}
+
+func sendInboundDecodeFailure(client *connection.Client, deviceID, sessionID, msgType string, msg map[string]interface{}, cause error) {
+	clientMsgID, _ := msg["client_msg_id"].(string)
+	switch msgType {
+	case "send_prompt", "cancel_prompt", "resume_prompt_queue":
+		sendPromptFailed(client, deviceID, sessionID, clientMsgID, "authenticated command could not be decoded")
+	case "respond_user_input":
+		sendUserInputResult(client, deviceID, sessionID, "", "indeterminate", "authenticated command could not be decoded")
+	case "start_thread":
+		sendThreadResult(client, deviceID, "", clientMsgID, "thread_failed", "", false, "authenticated command could not be decoded")
+	default:
+		sendDaemonError(client, deviceID, sessionID, "authenticated command could not be decoded")
+	}
+	_ = cause
+}
+
 // openSealedPrompt decrypts a sealed send_prompt body into a payload map.
 func openSealedPrompt(deviceID, sessionID string, msg map[string]interface{}, sealedObj map[string]interface{}) (map[string]interface{}, error) {
 	return openSealedCommand(deviceID, sessionID, msg, sealedObj, "send_prompt")
@@ -1549,7 +2220,7 @@ func openSealedCommand(deviceID, sessionID string, msg map[string]interface{}, s
 		}
 	}
 	aad := sealed.AADFields{
-		ProtocolVersion: "1.0",
+		ProtocolVersion: "1.1",
 		TransportMode:   "sealed",
 		Type:            messageType,
 		DeviceID:        deviceID,
@@ -1731,12 +2402,27 @@ func publishCatalogKeysForAllGrants(cfg *config.Config) {
 
 // sendDaemonError reports an error back to the server (forwarded to phones).
 func sendDaemonError(client *connection.Client, deviceID, sessionID, message string) {
+	if daemonTransport == "sealed" {
+		msg := map[string]interface{}{
+			"message": map[string]interface{}{
+				"id":        fmt.Sprintf("error-%d", time.Now().UnixNano()),
+				"role":      "assistant",
+				"content":   message,
+				"type":      "error",
+				"timestamp": time.Now().Unix(),
+			},
+		}
+		sendDaemonApplication(client, deviceID, sessionID, "", "session_message", msg, false)
+		return
+	}
 	msg := map[string]interface{}{
-		"type":       "error",
-		"device_id":  deviceID,
-		"session_id": sessionID,
-		"timestamp":  time.Now().Unix(),
-		"payload":    map[string]interface{}{"message": message},
+		"protocol_version": "1.1",
+		"transport_mode":   daemonTransport,
+		"type":             "error",
+		"device_id":        deviceID,
+		"session_id":       sessionID,
+		"timestamp":        time.Now().Unix(),
+		"payload":          map[string]interface{}{"message": message},
 	}
 	if err := client.Send(msg); err != nil {
 		log.Printf("[daemon] send error message failed: %v", err)
@@ -1760,18 +2446,18 @@ func runDoctor(configPath string) int {
 
 	check("daemon_version", true, buildinfo.Version)
 	check("os", true, runtime.GOOS+"/"+runtime.GOARCH)
-	transport := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
-	if transport == "" {
-		transport = "open"
-	}
-	check("transport_mode", transport == "open" || transport == "sealed", transport)
-
 	cfg, err := config.LoadFrom(configPath)
 	if err != nil {
 		check("config", false, err.Error())
 	} else {
 		check("config", cfg.DeviceID != "" && cfg.Token != "" && cfg.ServerURL != "",
 			fmt.Sprintf("device=%s server=%s path=%s", cfg.DeviceID, cfg.ServerURL, configPath))
+		transportOK := true
+		if requested := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE")); requested != "" {
+			mode, modeErr := config.NormalizeTransportMode(requested)
+			transportOK = modeErr == nil && mode == cfg.TransportMode
+		}
+		check("transport_mode", transportOK, cfg.TransportMode)
 	}
 
 	idPath := identity.PathBesideConfig(configPath)
@@ -1825,6 +2511,7 @@ func runDoctor(configPath string) int {
 			if resp.StatusCode == http.StatusOK {
 				var health struct {
 					ServerVersion string `json:"server_version"`
+					TransportMode string `json:"transport_mode"`
 				}
 				if readErr != nil {
 					check("component_versions", false, readErr.Error())
@@ -1836,6 +2523,8 @@ func runDoctor(configPath string) int {
 						health.ServerVersion == buildinfo.Version,
 						fmt.Sprintf("daemon=%s server=%s", buildinfo.Version, health.ServerVersion),
 					)
+					check("server_transport_mode", health.TransportMode == cfg.TransportMode,
+						fmt.Sprintf("daemon=%s server=%s", cfg.TransportMode, health.TransportMode))
 				}
 			}
 		}
@@ -1843,8 +2532,19 @@ func runDoctor(configPath string) int {
 
 	// Codex app-server probe (non-fatal if missing — exec resume still works).
 	cas := agentexec.NewCodexAppServer()
+	codexVersion, codexVersionOK, codexVersionErr := cas.CodexVersion()
+	if codexVersionErr != nil {
+		fmt.Printf("[info] codex full-control version: unavailable (%v), minimum=%s\n", codexVersionErr, agentexec.MinimumCodexFullControlVersion)
+	} else {
+		fmt.Printf("[info] codex full-control version: installed=%s minimum=%s compatible=%v\n",
+			codexVersion, agentexec.MinimumCodexFullControlVersion, codexVersionOK)
+	}
 	probe := cas.ProbeMethods()
-	fmt.Printf("[info] codex app-server: available=%v ensure=%v\n", probe["available"], probe["ensure"])
+	fmt.Printf("[info] codex app-server: available=%v schema=%v initialize=%v full_control=%v\n",
+		probe["available"], probe["schema"], probe["initialize"], probe["full_control"])
+	for _, method := range []string{"thread/start", "turn/start", "turn/steer", "turn/interrupt", "approval", "request_user_input", "collaboration_mode"} {
+		fmt.Printf("  - %s: %v\n", method, probe[method])
+	}
 	_ = cas.Close()
 
 	if skPath := sealedkeys.DefaultPath(); skPath != "" {

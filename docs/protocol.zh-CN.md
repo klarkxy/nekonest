@@ -15,10 +15,10 @@ JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致
 
 | 字段 | 规则 |
 |---|---|
-| `protocol_version` | `major.minor`（当前 **1.0**）。主版本不匹配则拒绝；次版本向后兼容（未知可选字段忽略）。 |
-| `transport_mode` | 全窝统一 `sealed` \| `open`。一窝一种模式；**禁止** sealed→open 自动降级。v0.2 默认 **open**；v1 验收切换后新窝默认 sealed。 |
+| `protocol_version` | `major.minor`（当前 **1.1**）。主版本不匹配则拒绝；次版本向后兼容（忽略未知可选字段，缺省能力标志为 false）。 |
+| `transport_mode` | 全窝统一 `sealed` \| `open`。一窝一种持久化模式；**禁止** sealed→open 自动降级。新数据库默认 sealed；无元数据旧库一次性认定为 open。 |
 
-首帧（daemon 的 `register_device`、手机的 `subscribe`）**必须**带上述字段。Server 在 `auth_response` / `subscribe_ack` 返回协商结果。稳定错误码：`version_mismatch`、`transport_mode_mismatch`、`invalid_envelope`。
+首帧（daemon 的 `register_device`、手机的 `subscribe`）**必须**带上述字段。之后每一帧都按已协商的主版本、传输模式和明确的「路由/应用正文」策略校验：sealed 模式的应用帧必须有 `sealed_payload`，open 模式拒绝它，混合正文始终拒绝。Server 在 `auth_response` / `subscribe_ack` 返回协商结果。稳定错误码：`version_mismatch`、`transport_mode_mismatch`、`invalid_envelope`。
 
 ### 应用发行版本
 
@@ -86,10 +86,11 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 | `id` | 公开/线会话 id |
 | `device_id` | 所属设备 |
 | `agent_type` | 线 agent id |
-| `status` | `running` \| `idle` \| `waiting_approval` |
+| `status` | `running` \| `idle` \| `waiting_user` \| `waiting_approval` \| `error` |
 | `summary`, `last_activity` | 列表 UX |
 | `project_dir` / `project` | 目录分组 |
 | `pending_approval` | 可选工具审批结构 |
+| `pending_user_input` | 可选的 Codex 结构化提问请求；与审批相互独立 |
 
 ### SessionCapabilities
 
@@ -108,6 +109,12 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 ### 原生开线程载荷
 
 `start_thread.payload` 使用 `agent_type`、`operation_id`、`project_dir`、`prompt`；`cwd` 与 `initial_prompt` 仍是可选的遗留别名。该 prompt 是原生线程首条提示词，不是先由手机创建的会话。sealed 模式会用设备目录密钥加密整个正文；relay 只能看到路由元数据与稳定 operation id。发送前 PWA 必须把本地草稿与该 operation id 持久绑定；刷新后不得另造 operation 或重试未决新建。`thread_*` 载荷为兼容保留 `operation_id`、`session_id`、`thread_id`、`error`、`message`；sealed 模式下这些结果载荷也用设备目录密钥加密，外层仅保留状态、operation id 与原生 session id 作为路由元数据。可见的路由元数据不等于已认证的业务结果：结果密文缺失或认证失败时，PWA 必须本地降为 `thread_indeterminate`，绝不能采信外层 `thread_owned` 或 `thread_failed`。`thread_owned` 必须同时具备原生 store 所有权与首条提示词正向确认，因此其 `prompt_accepted` 必须为 true；任一证据缺失都须使用 `thread_indeterminate` 并保留本地草稿。
+
+附件属于同一个首回合：Daemon 在 `thread/start` 前完成下载与校验，随后在第一次 `turn/start` 中一并发送提示词和附件。创建前下载失败为 `thread_failed`；原生线程创建后结果未知为 `thread_indeterminate`。
+
+### 结构化用户输入
+
+`pending_user_input` 完整保留 app-server 的 `request_id`、`item_id`、过期时间以及每个问题的 `id`、header、正文、选项、`isOther`、`isSecret`。手机通过 `respond_user_input` 按 0.146 的精确形状回答：`question_id -> { "answers": ["..."] }`。`user_input_result` 返回 `accepted`、`expired`、`stale` 或 `indeterminate`。request id 幂等；app-server 是否收到无法确认时禁止自动重答。Secret 不写入草稿、历史、日志、Server 持久化或 attention event。
 
 ### SessionMessage
 
@@ -156,12 +163,16 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 | `send_prompt` | 手机 → … → daemon：用户提示词（+ 附件） |
 | `prompt_status_query` | 查询投递状态 |
 | `prompt_not_seen` | 对端无此 id 记录 |
-| `prompt_accepted` | 已纳入 daemon 管线 |
-| `prompt_committed` | journal 已提交 |
+| `prompt_queued` | 已持久进入 Codex FIFO，但尚未得到原生 `turn/start` 接受 |
+| `prompt_accepted` | 原生 agent 控制路径已正向接受（outbox 不清除） |
+| `prompt_committed` | journal 已提交；此时清除持久 outbox |
 | `prompt_failed` | 可见失败 |
-| `prompt_sent` | 客户端发送/ack 信号（outbox 清理） |
+| `prompt_sent` | 已弃用的过渡别名；客户端以 `prompt_committed` 为准 |
 
 **不要**把「WebSocket 写成功」等同于 `prompt_accepted` / 业务成功。
+`prompt_queued` 单独报告 FIFO 位置，不启动接受状态轮询。只有该条目得到原生 `turn/start` 接受并收到 `prompt_committed` 后，手机才清除持久 outbox。接收端继续兼容旧版 `prompt_accepted{queued:true}` 入队形状。
+
+断线恢复/状态查询会为同一个 `client_msg_id` 重用完全相同的密封信封。明确且允许重试的 `prompt_failed` 由用户显式重试时，必须生成**新的** `client_msg_id` 和新密封命令；`indeterminate` 绝不提供普通重试入口。
 
 ### 控制与生命周期（v1）
 
@@ -170,6 +181,10 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 | `approve` / `deny` | 工具审批（有能力时为 Codex app-server） |
 | `interrupt` | 停止运行中的工作 |
 | `steer` | 回合中修正（Codex） |
+| `respond_user_input` / `user_input_result` | Codex 结构化问答响应与终态 |
+| `queue_update` | FIFO 快照，含 queued/running/paused 条目 |
+| `cancel_prompt` / `prompt_cancelled` | 取消尚未开始的队列条目 |
+| `resume_prompt_queue` | 显式恢复按会话暂停的队列 |
 | `start_thread` / `thread_*` | agent 范围的手机本地草稿：在获准的已发现目录用首条提示词原生开线程 |
 | `pair_*` / `key_package` / `phone_revoked` | 配对与 E2E 密钥分发 |
 | `attention_event` | 通用、适合密封模式推送的事件类别 |
@@ -215,7 +230,7 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/health` | 无鉴权存活 |
+| GET | `/health` | 无鉴权存活检查，以及 `protocol_version`、`server_version` 和权威 `transport_mode` |
 | GET | `/api/devices` | 设备列表 |
 | POST | `/api/devices/register` | Bootstrap 头 |
 | GET | `/api/devices/sessions` | 会话 |

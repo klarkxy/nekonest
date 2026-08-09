@@ -4,9 +4,9 @@ import type { NekoMessage } from '@/types/protocol'
 
 const harness = vi.hoisted(() => ({
   subscribedDevice: null as string | null,
-  status: 'disconnected' as 'connecting' | 'connected' | 'disconnected' | 'auth_error',
+  status: 'disconnected' as 'connecting' | 'connected' | 'disconnected' | 'auth_error' | 'transport_error',
   handlers: new Map<string, (msg: NekoMessage) => void>(),
-  statusHandlers: new Map<string, (status: 'connecting' | 'connected' | 'disconnected' | 'auth_error') => void>()
+  statusHandlers: new Map<string, (status: 'connecting' | 'connected' | 'disconnected' | 'auth_error' | 'transport_error') => void>()
 }))
 
 vi.mock('@/api/http', () => ({
@@ -26,11 +26,13 @@ vi.mock('@/api/websocket', () => {
     },
     onStatusChange(
       id: string,
-      handler: (status: 'connecting' | 'connected' | 'disconnected' | 'auth_error') => void
+      handler: (status: 'connecting' | 'connected' | 'disconnected' | 'auth_error' | 'transport_error') => void
     ) {
       harness.statusHandlers.set(id, handler)
       handler(harness.status)
     }
+    ,
+    getTransportError() { return 'Transport mode mismatch: web app expects open, nest server is sealed' }
   }
   return { nekoWS: () => socket }
 })

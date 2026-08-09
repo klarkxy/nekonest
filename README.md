@@ -51,8 +51,9 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 - **Reliable resume** — independent accepted / committed / failed delivery states; transport success is not agent acceptance.
 - **History + streaming** — merge native history, server durability, and live output with stable message ids; CLI stderr stays diagnostic.
 - **Attachments** — phone upload → daemon per-run temp dir → agent-specific wiring (max 5 files, 4 MB each).
-- **Codex full control** — native app-server send, approve/deny, steer, interrupt, and image/file attachments; honest `exec resume` fallback when unhealthy. All five agents may expose an agent-scoped native start only after their own starter probe succeeds.
-- **Transport negotiation** — one fixed `open` or `sealed` mode per nest; v0.2 defaults to open while sealed remains an explicit v1 preview.
+- **Codex full control** — on `codex-cli >= 0.146.0`, native app-server send, structured questions, approve/deny, steer, interrupt, a durable FIFO follow-up queue, atomic image/file first turns, and supervised recovery; honest `exec resume` fallback when unavailable. All five agents may expose an agent-scoped native start only after their own starter probe succeeds.
+- **Persistent transport mode** — one immutable `open` or `sealed` mode per nest. New databases default to sealed; legacy databases without mode metadata are persisted as open; mismatches fail closed.
+- **Phone-side downgrade guard** — the PWA pins mode per origin; a sealed origin cannot silently become open, and first use of an intentional open relay requires explicit confirmation.
 - **Mobile UX** — installable PWA, drafts, per-thread or whole-project phone-local archive, sanitized Markdown, reconnect outbox, optional Web Push.
 - **Version diagnostics** — compare the loaded PWA with the live server at page level; each machine reports its own daemon release and update state on its device card.
 - **Safe defaults** — admin bootstrap, revocable phone identities, daemon registration token, origin checks, attachment validation, size limits, controlled proxy trust.
@@ -66,6 +67,26 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 | Kilo | Kilo / OpenCode local DB | Compatibility resume via `kilo run --session` | Native `--file` (advertised `path_best_effort`) |
 | Kimi CLI | `.kimi-code` (legacy `.kimi`) | Compatibility resume via `kimi --session` | Paths in prompt; CLI file permissions apply |
 | Grok Build | `~/.grok/sessions` | Compatibility resume via `grok --resume` | Paths in prompt; non-interactive safe mode |
+
+### Capability implementation status (live v0.2)
+
+Legend: ✅ implemented and advertised · ⚙️ implemented with a runtime, probe, or fallback limitation · ❌ not implemented/advertised on the phone path.
+
+| Capability | Claude Code | Codex | Kilo | Kimi CLI | Grok Build |
+|---|---|---|---|---|---|
+| Discover / list | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Ownership gate | ✅ | ✅ | ✅ | ✅ | ✅ |
+| History | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Send + stream | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Interrupt | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Start native thread | ⚙️ starter probe | ⚙️ healthy app-server | ⚙️ ACP starter probe | ⚙️ ACP starter probe | ⚙️ starter probe |
+| Image / file attachments | ⚙️ path best-effort | ⚙️ native image + same-turn materialized file path; fallback is image-only | ⚙️ native `--file`, conservatively advertised best-effort | ⚙️ path best-effort | ⚙️ path best-effort |
+| Approve / deny | ❌ | ⚙️ app-server only | ❌ | ❌ | ❌ |
+| Steer active turn | ❌ | ⚙️ app-server only | ❌ | ❌ | ❌ |
+| Follow-up queue | ❌ | ⚙️ app-server + writable queue journal | ❌ | ❌ | ❌ |
+| Waiting-state signals | ⚙️ approval status only; no phone action | ⚙️ approval + structured user input via app-server | ❌ | ❌ | ❌ |
+
+Runtime-gated rows are advertised only after the installed CLI/control path passes its probe. Native thread start is a device-level `start_capabilities` entry, not a promise that every existing session has `capabilities.spawn=true`. Codex falls back to `exec resume` when app-server is unhealthy; that fallback keeps resume, stream, interrupt, and image input, but not approval, steer, ordinary-file input, or native thread start.
 
 A missing CLI or empty store for one agent does not disable the others.
 
@@ -92,9 +113,10 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/serve
 
 export NEKONEST_ADMIN_SECRET='long-random-string'
 export NEKONEST_BOOTSTRAP_TOKEN='another-long-random-string'
-export NEKONEST_TRANSPORT_MODE='open'
 ./nekonest-server -port 8080 -data ./data -pwa ../pwa/dist
 ```
+
+A new data directory is initialized as `sealed`. Set `NEKONEST_TRANSPORT_MODE=open` only on the first start when intentionally creating an administrator-selected open nest. Later values are assertions and must match the persisted mode.
 
 Terminate public HTTPS/WSS at the reverse proxy to `127.0.0.1:8080`. Full systemd/Caddy/Nginx notes: [docs/deploy-vps.md](docs/deploy-vps.md).
 
@@ -133,7 +155,7 @@ Acceptance checklist: [docs/e2e-smoke.md](docs/e2e-smoke.md).
 | `NEKONEST_ADMIN_SECRET` | Admin bootstrap and phone-token minting (**required** on public VPS) |
 | `NEKONEST_PHONE_SECRET` | Deprecated compatibility alias for the admin secret |
 | `NEKONEST_BOOTSTRAP_TOKEN` | Daemon register gate (**required** on public VPS; ≠ phone secret) |
-| `NEKONEST_TRANSPORT_MODE` | Fixed nest mode; v0.2 defaults to `open`, sealed is opt-in preview |
+| `NEKONEST_TRANSPORT_MODE` | Optional first-start choice / later assertion; new DB defaults `sealed`, legacy DB is fixed `open` |
 | `NEKONEST_ALLOWED_ORIGINS` | Browser origin allowlist |
 | `NEKONEST_TRUST_PROXY` | `1` only behind a proxy that **overwrites** XFF |
 | `NEKONEST_TRUSTED_PROXY_CIDRS` | Trusted proxy CIDRs when proxy is not loopback |
@@ -145,7 +167,7 @@ Acceptance checklist: [docs/e2e-smoke.md](docs/e2e-smoke.md).
 
 Full flags, `config.json` fields, routes, and limits: [docs/configuration.md](docs/configuration.md). Trust model: [docs/security.md](docs/security.md).
 
-In v0.2 the operational default is `open`, so the VPS can relay and persist application plaintext; treat the host and `data/` as sensitive. Sealed E2E is an explicit preview mode and becomes the new-nest default only at the v1 acceptance cutover.
+The Server persists the selected mode in SQLite and exposes it from `/health`; the PWA reads that runtime value before opening WebSocket. Existing open nests remain open. Moving one to sealed requires the offline backup-and-wipe migration and re-pairing; setting an environment variable cannot silently convert it.
 
 ## Documentation
 
@@ -227,7 +249,7 @@ These are stable product limits, not a todo list:
 
 - Phone primarily resumes native threads. Any supported agent may expose agent-scoped `start_thread` only after its native starter is installed/probed; the phone keeps a local draft until its first prompt creates the native thread in the daemon's current union of discovered project directories.
 - Codex is the only full-control agent (send, approve/deny, interrupt, steer, and full native attachments); the other four remain compatibility-resume adapters even when they advertise native thread start.
-- v0.2 defaults every peer to `open` transport. Sealed transport is opt-in preview; one nest has one fixed mode and never downgrades automatically.
+- New nests default to sealed; existing databases/configs without mode metadata are classified once as open. One nest has one persisted mode and never downgrades automatically.
 - Kimi CLI and Grok Build receive attachment **paths** in the prompt; reads depend on CLI permissions.
 - Web Push needs VAPID; without it, no real push is sent.
 - Daemon supports **Windows and Linux**; macOS remains later.

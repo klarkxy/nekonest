@@ -1,10 +1,12 @@
 import type { NekoMessage } from '@/types/protocol'
 import { nestTransportMode, PROTOCOL_VERSION } from '@/types/protocol'
+import { ensureTransportMode, runtimeTransportMode, transportModeError } from './transport'
 import { APP_VERSION } from '@/config/version'
 import { getAuthCredential, getPhoneSecret, getPhoneToken } from './http'
 
 type MessageHandler = (msg: NekoMessage) => void
-type StatusHandler = (status: 'connecting' | 'connected' | 'disconnected' | 'auth_error') => void
+type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'auth_error' | 'transport_error'
+type StatusHandler = (status: ConnectionStatus) => void
 
 /**
  * NekoNest WebSocket 客户端
@@ -20,7 +22,7 @@ export class NekoWebSocket {
   private reconnectTimer: number | null = null
   private reconnectAttempts = 0
   private intentionalClose = false
-  private status: 'connecting' | 'connected' | 'disconnected' | 'auth_error' = 'disconnected'
+  private status: ConnectionStatus = 'disconnected'
   private sessionReady = false
   private onReady: Array<() => void> = []
   /** Invalidates callbacks from sockets that have already been replaced. */
@@ -55,7 +57,8 @@ export class NekoWebSocket {
     this.setStatus('connecting')
 
     const generation = ++this.generation
-    try {
+    const openSocket = () => {
+      if (generation !== this.generation || this.intentionalClose) return
       const previous = this.ws
       if (previous) {
         try {
@@ -138,13 +141,26 @@ export class NekoWebSocket {
           this.setStatus('disconnected')
         }
       }
-    } catch (err) {
+    }
+
+    // Reconnects and tests commonly already have a verified mode. Keep that
+    // path synchronous so replacing a socket cannot race one microtask behind
+    // a second connect() call.
+    if (runtimeTransportMode()) {
+      openSocket()
+      return
+    }
+
+    void ensureTransportMode().then(openSocket).catch((err) => {
       if (generation === this.generation) {
         this.ws = null
+        this.sessionReady = false
+        this.pendingSubscription = null
+        this.setStatus('transport_error')
       }
-      console.error('[ws] connect error:', err)
+      console.error('[ws] transport mode error:', err)
       this.scheduleReconnect()
-    }
+    })
   }
 
   /** Called once when the latest subscribe request is explicitly acknowledged. */
@@ -239,7 +255,13 @@ export class NekoWebSocket {
       msg.protocol_version = PROTOCOL_VERSION
     }
     if (!msg.transport_mode) {
-      msg.transport_mode = nestTransportMode()
+      try {
+        msg.transport_mode = nestTransportMode()
+      } catch (err) {
+        console.error('[ws] send blocked:', err)
+        this.setStatus('transport_error')
+        return false
+      }
     }
 
     if (this.ws?.readyState !== WebSocket.OPEN || !this.sessionReady) {
@@ -320,7 +342,11 @@ export class NekoWebSocket {
     return this.ws === socket && this.generation === generation
   }
 
-  private setStatus(status: 'connecting' | 'connected' | 'disconnected' | 'auth_error') {
+  getTransportError(): string {
+    return transportModeError()
+  }
+
+  private setStatus(status: ConnectionStatus) {
     this.status = status
     this.statusHandlers.forEach(h => h(status))
   }

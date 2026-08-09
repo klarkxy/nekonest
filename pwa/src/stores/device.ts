@@ -7,6 +7,10 @@ import { APP_VERSION } from '@/config/version'
 import { tGlobal } from '@/i18n'
 import { componentVersionStatus } from '@/utils/componentVersions'
 import { useBindingStore } from './binding'
+import {
+  acknowledgeOpenTransport,
+  openTransportConsentRequired
+} from '@/api/transport'
 
 export const useDeviceStore = defineStore('devices', () => {
   const devices = ref<Device[]>([])
@@ -15,6 +19,8 @@ export const useDeviceStore = defineStore('devices', () => {
   const loadError = ref('')
   const connected = ref(false)
   const authError = ref(false)
+  const transportError = ref('')
+  const needsOpenTransportConsent = ref(false)
   const serverVersion = ref('')
 
   const versionStatus = computed(() => componentVersionStatus({
@@ -58,6 +64,8 @@ export const useDeviceStore = defineStore('devices', () => {
     ws.onStatusChange(HANDLER_ID, (status) => {
       connected.value = status === 'connected'
       authError.value = status === 'auth_error'
+      transportError.value = status === 'transport_error' ? ws.getTransportError() : ''
+      needsOpenTransportConsent.value = status === 'transport_error' && openTransportConsentRequired()
     })
 
     // Connect once we have a device to subscribe to
@@ -70,10 +78,18 @@ export const useDeviceStore = defineStore('devices', () => {
     }
   }
 
+  function confirmOpenTransport() {
+    acknowledgeOpenTransport()
+    transportError.value = ''
+    needsOpenTransportConsent.value = false
+    nekoWS().connect()
+  }
+
   async function fetchDevices() {
     loading.value = true
     loadError.value = ''
     authError.value = false
+    transportError.value = ''
     try {
       const res = await apiFetch('/api/devices')
       if (res.status === 401) {
@@ -117,10 +133,13 @@ export const useDeviceStore = defineStore('devices', () => {
     loadError,
     connected,
     authError,
+    transportError,
+    needsOpenTransportConsent,
     frontendVersion: APP_VERSION,
     serverVersion,
     versionStatus,
     initWebSocket,
+    confirmOpenTransport,
     fetchDevices
   }
 })

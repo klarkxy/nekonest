@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,30 +23,53 @@ const (
 
 // Client manages the WebSocket connection to the NekoNest server.
 type Client struct {
-	serverURL  string
-	deviceID   string
-	token      string
-	conn       *websocket.Conn
-	mu         sync.Mutex
-	connectMu  sync.Mutex
-	dispatchMu sync.RWMutex // linearizes callbacks against endpoint changes/Close
-	onMessage  func([]byte)
-	onConnect  func() // called after successful auth (initial + reconnect)
-	connected  bool
-	reconnects int
-	closed     bool
-	generation uint64        // incremented whenever the desired endpoint changes
-	closeCh    chan struct{} // closed when Close() is called
+	serverURL     string
+	deviceID      string
+	token         string
+	transportMode string
+	conn          *websocket.Conn
+	mu            sync.Mutex
+	connectMu     sync.Mutex
+	dispatchMu    sync.RWMutex // linearizes callbacks against endpoint changes/Close
+	onMessage     func([]byte)
+	onConnect     func() // called after successful auth (initial + reconnect)
+	connected     bool
+	reconnects    int
+	closed        bool
+	generation    uint64        // incremented whenever the desired endpoint changes
+	closeCh       chan struct{} // closed when Close() is called
 }
 
 // NewClient creates a new connection client.
-func NewClient(ctx context.Context, serverURL, deviceID, token string) *Client {
-	return &Client{
-		serverURL: serverURL,
-		deviceID:  deviceID,
-		token:     token,
-		closeCh:   make(chan struct{}),
+func NewClient(ctx context.Context, serverURL, deviceID, token string, modes ...string) *Client {
+	transportMode := "open" // compatibility for callers compiled against the legacy constructor
+	if len(modes) > 0 {
+		transportMode = strings.TrimSpace(modes[0])
 	}
+	return &Client{
+		serverURL:     serverURL,
+		deviceID:      deviceID,
+		token:         token,
+		transportMode: transportMode,
+		closeCh:       make(chan struct{}),
+	}
+}
+
+// SetTransportMode sets the persistent nest mode before connecting. Runtime
+// config reloads must not call this: changing modes requires re-pairing and a
+// fresh daemon process.
+func (c *Client) SetTransportMode(mode string) error {
+	mode = strings.TrimSpace(mode)
+	if mode != "open" && mode != "sealed" {
+		return fmt.Errorf("invalid transport_mode %q", mode)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.connected && c.transportMode != mode {
+		return fmt.Errorf("transport_mode is immutable while connected")
+	}
+	c.transportMode = mode
+	return nil
 }
 
 // OnMessage sets the callback for incoming messages.
@@ -115,6 +137,7 @@ func (c *Client) Connect() error {
 		serverURL := c.serverURL
 		deviceID := c.deviceID
 		token := c.token
+		transportMode := c.transportMode
 		generation := c.generation
 		c.mu.Unlock()
 
@@ -129,14 +152,11 @@ func (c *Client) Connect() error {
 			return fmt.Errorf("dial: %w", err)
 		}
 
-		// Transport mode must match the nest. Default open until sealed crypto is
-		// fully wired; override with NEKONEST_TRANSPORT_MODE.
-		transportMode := "open"
-		if v := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE")); v != "" {
-			transportMode = v
+		if transportMode != "open" && transportMode != "sealed" {
+			return fmt.Errorf("invalid configured transport_mode %q", transportMode)
 		}
 		authMsg := map[string]interface{}{
-			"protocol_version": "1.0",
+			"protocol_version": "1.1",
 			"transport_mode":   transportMode,
 			"type":             "register_device",
 			"device_id":        deviceID,
@@ -182,6 +202,20 @@ func (c *Client) Connect() error {
 		if resp["type"] == "error" {
 			_ = conn.Close()
 			return fmt.Errorf("auth failed: %v", resp["payload"])
+		}
+		if resp["type"] != "auth_response" {
+			_ = conn.Close()
+			return fmt.Errorf("auth failed: expected auth_response, got %v", resp["type"])
+		}
+		serverMode, _ := resp["transport_mode"].(string)
+		if serverMode == "" {
+			if payload, ok := resp["payload"].(map[string]interface{}); ok {
+				serverMode, _ = payload["transport_mode"].(string)
+			}
+		}
+		if serverMode != transportMode {
+			_ = conn.Close()
+			return fmt.Errorf("auth failed: transport_mode mismatch: configured %s, server %q", transportMode, serverMode)
 		}
 		if payload, ok := resp["payload"].(map[string]interface{}); ok {
 			serverVersion, _ := payload["server_version"].(string)

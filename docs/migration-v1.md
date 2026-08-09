@@ -28,19 +28,18 @@ The command:
 2. Writes `nekonest.db.sha256` for the backup database.
 3. Opens the live DB, runs additive schema migrations, then deletes plaintext content tables listed above.
 4. Clears the live attachments directory (restorable from backup).
+5. Atomically persists `transport_mode=sealed` in the same transaction as the plaintext cleanup.
 
-Then upgrade binaries (server, daemon, PWA), set:
+Then upgrade binaries (server, daemon, PWA). Do not assert `open`: the migrated database is now sealed. The Server may omit the mode variable or assert the persisted value:
 
 ```bash
-# Until sealed application payloads are fully enabled nest-wide:
-export NEKONEST_TRANSPORT_MODE=open
-# Production target:
-# export NEKONEST_TRANSPORT_MODE=sealed
+# Optional assertion; mismatch refuses startup.
+export NEKONEST_TRANSPORT_MODE=sealed
 export NEKONEST_ADMIN_SECRET=...   # was NEKONEST_PHONE_SECRET
 export NEKONEST_BOOTSTRAP_TOKEN=...
 ```
 
-Start server, run `nekonest-daemon -doctor` on each host, `nekonest-daemon -pair gen`, re-pair phones.
+Start Server, register or update each Daemon so `config.json` persists sealed mode, run `nekonest-daemon -doctor`, generate a new pair code, and re-pair phones. An existing open nest that has **not** run this migration remains open; changing only the environment is intentionally rejected.
 
 ## Rollback
 

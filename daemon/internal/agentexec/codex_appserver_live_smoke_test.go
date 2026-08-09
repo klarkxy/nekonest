@@ -139,7 +139,11 @@ func TestLiveCodexAppServerSmoke(t *testing.T) {
 	if string(b) != `{"decision":"accept"}` {
 		t.Fatalf("accept payload %s", b)
 	}
-	report["probe"] = c.ProbeMethods()
+	probe := c.ProbeMethods()
+	report["probe"] = probe
+	if !probe["full_control"] {
+		t.Fatalf("installed Codex does not expose the required 0.146 full-control surface: %#v", probe)
+	}
 }
 
 func TestLiveCodexAppServerSteerSmoke(t *testing.T) {
@@ -381,6 +385,240 @@ func TestLiveCodexAppServerApprovalSmoke(t *testing.T) {
 	)
 }
 
+func TestLiveCodexAppServerUserInputSmoke(t *testing.T) {
+	if os.Getenv("NEKONEST_LIVE_CODEX") != "1" {
+		t.Skip("set NEKONEST_LIVE_CODEX=1 for live app-server smoke")
+	}
+	workspace := liveCodexWorkspace(t)
+	requests := make(chan ServerRequest, 8)
+	events := make(chan struct {
+		method string
+		output *AppServerOutput
+		status string
+	}, 256)
+	c := NewCodexAppServer()
+	c.SetRequestHandler(func(request ServerRequest) {
+		select {
+		case requests <- request:
+		default:
+		}
+	})
+	c.SetNotifyHandler(func(method string, params json.RawMessage) {
+		event := struct {
+			method string
+			output *AppServerOutput
+			status string
+		}{method: method}
+		if output, ok := ParseAppServerOutputNotification(method, params); ok {
+			copy := output
+			event.output = &copy
+		}
+		if method == "turn/completed" {
+			var completed struct {
+				Turn *struct {
+					Status string `json:"status"`
+				} `json:"turn"`
+			}
+			_ = json.Unmarshal(params, &completed)
+			if completed.Turn != nil {
+				event.status = completed.Turn.Status
+			}
+		}
+		select {
+		case events <- event:
+		default:
+		}
+	})
+	defer c.Close()
+	if err := c.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	started, err := c.StartThread(ctx, workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	modeRaw, err := c.Call(ctx, "collaborationMode/list", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var modes struct {
+		Data []struct {
+			Name            string  `json:"name"`
+			Mode            *string `json:"mode"`
+			Model           *string `json:"model"`
+			ReasoningEffort *string `json:"reasoning_effort"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(modeRaw, &modes); err != nil {
+		t.Fatal(err)
+	}
+	modelRaw, err := c.Call(ctx, "model/list", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var models struct {
+		Data []struct {
+			Model     string `json:"model"`
+			IsDefault bool   `json:"isDefault"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(modelRaw, &models); err != nil {
+		t.Fatal(err)
+	}
+	defaultModel := ""
+	for _, model := range models.Data {
+		if model.IsDefault {
+			defaultModel = model.Model
+			break
+		}
+	}
+	if defaultModel == "" && len(models.Data) > 0 {
+		defaultModel = models.Data[0].Model
+	}
+	var planMode map[string]any
+	for _, mode := range modes.Data {
+		if mode.Mode == nil || *mode.Mode != "plan" {
+			continue
+		}
+		model := defaultModel
+		if mode.Model != nil && *mode.Model != "" {
+			model = *mode.Model
+		}
+		if model == "" {
+			continue
+		}
+		settings := map[string]any{"model": model, "developer_instructions": nil}
+		if mode.ReasoningEffort != nil {
+			settings["reasoning_effort"] = *mode.ReasoningEffort
+		}
+		planMode = map[string]any{"mode": "plan", "settings": settings}
+		break
+	}
+	if planMode == nil {
+		t.Fatalf("Codex did not advertise a Plan collaboration mode: %s", modeRaw)
+	}
+	input, err := buildTurnInput(
+		"Use the request_user_input tool exactly once. Ask one question with id `choice`, header `Choice`, question `Pick one`, and options `Alpha` and `Beta`. After the answer, reply exactly NEKONEST_USER_INPUT_OK and do nothing else.", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := buildTurnStartParams(c.ResolveThreadID(started.WireID()), input)
+	params["collaborationMode"] = planMode
+	turnRaw, err := c.Call(ctx, "turn/start", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turnID := parseTurnID(turnRaw); turnID != "" {
+		c.setStartingTurn(started.WireID(), turnID)
+	}
+
+	var request ServerRequest
+	select {
+	case request = <-requests:
+	case <-time.After(45 * time.Second):
+		t.Fatal("timed out waiting for requestUserInput")
+	}
+	if request.Method != "item/tool/requestUserInput" {
+		t.Fatalf("unexpected server request %q", request.Method)
+	}
+	pending := c.PendingUserInputFor(started.WireID())
+	if pending == nil || len(pending.Questions) != 1 {
+		t.Fatalf("structured request was not tracked: %#v", pending)
+	}
+	questionID := pending.Questions[0].ID
+	if questionID == "" {
+		t.Fatal("requestUserInput question id is empty")
+	}
+	if status, err := c.RespondUserInput(pending.RequestID, map[string][]string{questionID: {"Alpha"}}); err != nil || status != "accepted" {
+		t.Fatalf("respond user input status=%q err=%v", status, err)
+	}
+
+	var finalAssistant string
+	deadline := time.NewTimer(60 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case event := <-events:
+			if event.output != nil && event.output.Type == "assistant" && event.output.Final {
+				finalAssistant = event.output.Content
+			}
+			if event.method != "turn/completed" {
+				continue
+			}
+			if event.status != "completed" || !strings.Contains(finalAssistant, "NEKONEST_USER_INPUT_OK") {
+				t.Fatalf("turn status=%q assistant=%q", event.status, finalAssistant)
+			}
+			return
+		case <-deadline.C:
+			t.Fatal("timed out waiting for requestUserInput turn completion")
+		}
+	}
+}
+
+func TestLiveCodexAppServerExitRecoverySmoke(t *testing.T) {
+	if os.Getenv("NEKONEST_LIVE_CODEX") != "1" {
+		t.Skip("set NEKONEST_LIVE_CODEX=1 for live app-server smoke")
+	}
+	c := NewCodexAppServer()
+	defer c.Close()
+	exits := make(chan AppServerExit, 1)
+	c.SetExitHandler(func(event AppServerExit) {
+		select {
+		case exits <- event:
+		default:
+		}
+	})
+	if err := c.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	started, err := c.StartThread(ctx, liveCodexWorkspace(t), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnID, err := c.StartTurn(ctx, started.WireID(), "Think silently for a while, then reply RECOVERY_TEST_DONE.", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the real wire id bound to the current process generation even if a
+	// very fast model completes before the deliberate kill reaches the process.
+	c.SetActiveTurn(started.WireID(), turnID)
+	c.mu.Lock()
+	generation := c.generation
+	process := c.cmd.Process
+	c.mu.Unlock()
+	if process == nil {
+		t.Fatal("app-server process is missing")
+	}
+	if err := process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-exits:
+		if event.Generation != generation || len(event.Sessions) == 0 {
+			t.Fatalf("unexpected exit event: %#v", event)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for app-server exit event")
+	}
+	if c.Initialized() || c.ActiveTurnID(started.WireID()) != "" {
+		t.Fatal("unexpected exit retained initialized/active state")
+	}
+	if err := c.Ensure(); err != nil {
+		t.Fatalf("bounded recovery initialize: %v", err)
+	}
+	c.mu.Lock()
+	recoveredGeneration := c.generation
+	c.mu.Unlock()
+	if recoveredGeneration <= generation || !c.Initialized() {
+		t.Fatalf("recovery generation=%d old=%d initialized=%v", recoveredGeneration, generation, c.Initialized())
+	}
+}
+
 func TestLiveCodexAppServerAttachmentSmoke(t *testing.T) {
 	if os.Getenv("NEKONEST_LIVE_CODEX") != "1" {
 		t.Skip("set NEKONEST_LIVE_CODEX=1 for live app-server smoke")
@@ -450,14 +688,8 @@ func TestLiveCodexAppServerAttachmentSmoke(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	started, err := c.StartThread(ctx, workspace, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	report["thread_id"] = started.ThreadID
-	turnID, err := c.StartTurn(
-		ctx,
-		started.WireID(),
+	started, err := c.StartThreadWithAttachments(
+		ctx, workspace,
 		"Inspect both supplied attachments without modifying them. The image should visibly show lavender cat ears around a peach face. Read the text file too. If both checks succeed, reply exactly NEKONEST_ATTACHMENT_LIVE_OK.",
 		[]attach.LocalFile{
 			{Path: imagePath, Name: "pwa-192x192.png", MIME: "image/png"},
@@ -467,7 +699,8 @@ func TestLiveCodexAppServerAttachmentSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report["turn_id"] = turnID
+	report["thread_id"] = started.ThreadID
+	report["turn_id"] = started.TurnID
 
 	var finalAssistant string
 	deadline := time.NewTimer(90 * time.Second)

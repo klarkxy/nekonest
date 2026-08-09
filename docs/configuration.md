@@ -33,7 +33,7 @@ Do not put an unauthenticated server behind a LAN-facing proxy.
 | `NEKONEST_ADMIN_SECRET` | **Yes** | Preferred admin bootstrap secret. It can authenticate directly and mint independent phone identities/tokens. |
 | `NEKONEST_PHONE_SECRET` | Compatibility | Deprecated one-release alias for `NEKONEST_ADMIN_SECRET`. |
 | `NEKONEST_BOOTSTRAP_TOKEN` | **Yes** | Protects `POST /api/devices/register` via `X-Neko-Bootstrap`. Must differ from the admin secret. |
-| `NEKONEST_TRANSPORT_MODE` | No | Nest-wide `open` \| `sealed`; v0.2 defaults to `open`. Sealed is an explicit preview mode and every peer must match. |
+| `NEKONEST_TRANSPORT_MODE` | No | First start: optional `open` \| `sealed` selection (new DB defaults sealed). Later starts: an assertion that must match the immutable SQLite value. A legacy DB without metadata is persisted as open and cannot be switched by env. |
 | `NEKONEST_ALLOWED_ORIGINS` | Recommended | Comma-separated browser origin allowlist (e.g. `https://nekonest.example.com`). |
 | `NEKONEST_TRUST_PROXY` | If behind reverse proxy | Set to `1` or `true` only when the reverse proxy **overwrites** `X-Forwarded-For` / `X-Real-IP`. Used for rate-limit client IP. |
 | `NEKONEST_TRUSTED_PROXY_CIDRS` | If proxy not on loopback | Comma-separated CIDRs/IPs of trusted reverse proxies when they are not loopback. |
@@ -64,7 +64,7 @@ Treat this directory as sensitive. Back it up with the same care as device token
 
 | Path | Role | Auth |
 |---|---|---|
-| `GET /health` | Liveness plus `server_version` and `protocol_version` | None |
+| `GET /health` | Liveness plus `server_version`, `protocol_version`, and authoritative `transport_mode` | None |
 | `GET /ws/phone` | Phone WebSocket | Phone secret |
 | `GET /ws/daemon` | Daemon WebSocket | Device token after register |
 | `GET /api/devices` | List devices | Phone secret |
@@ -104,7 +104,7 @@ Binary: `nekonest-daemon.exe` (`daemon/cmd/daemon`).
 |---|---|---|
 | `NEKONEST_SERVER` | `-register` | VPS base URL, e.g. `https://nekonest.example.com` (http(s) is normalized to ws(s) for the dial) |
 | `NEKONEST_BOOTSTRAP_TOKEN` | `-register` on public VPS | Same value as server `NEKONEST_BOOTSTRAP_TOKEN`; sent as `X-Neko-Bootstrap` |
-| `NEKONEST_TRANSPORT_MODE` | All runs | `open` (v0.2 default) or `sealed`; must match the server and PWA build. |
+| `NEKONEST_TRANSPORT_MODE` | Registration / optional assertion | Registration reads the Server mode and persists it. If supplied, the value must match. Existing daemon configs without the field are legacy open. |
 
 Steady-state runs load credentials from the config file, not from these env vars.
 
@@ -118,6 +118,7 @@ Default path: `%USERPROFILE%\.nekonest\config.json`
 | Device ID | `device_id` | Assigned at registration |
 | Token | `token` | Device auth token; **secret** |
 | Work dir | `work_dir` | Optional base directory hint for agent sessions |
+| Transport mode | `transport_mode` | Immutable mode received from Server at registration; missing legacy field means open |
 
 Example shape (placeholders only):
 
@@ -126,7 +127,8 @@ Example shape (placeholders only):
   "server_url": "wss://nekonest.example.com",
   "device_id": "device_…",
   "token": "…",
-  "work_dir": ""
+  "work_dir": "",
+  "transport_mode": "sealed"
 }
 ```
 
@@ -136,6 +138,11 @@ Example shape (placeholders only):
 |---|---|
 | `<config>.daemon.lock` | Single-instance lock; a second process with the same config is refused |
 | Prompt journal (beside config, device-scoped) | Durable prompt accept/commit state for at-most-once delivery |
+| Prompt queue (beside config, device-scoped) | Durable per-session FIFO; at most 20 entries per session; running entries restart paused |
+
+The phone pins the verified transport mode per web origin. A previously sealed
+origin refuses open-mode downgrade, and the first connection to an
+administrator-selected open relay requires an explicit in-app confirmation.
 
 ### Config hot-reload
 
@@ -163,7 +170,7 @@ Deploy guide: [deploy-windows.md](./deploy-windows.md).
 
 | Build variable | Default | Description |
 |---|---|---|
-| `VITE_NEKONEST_TRANSPORT_MODE` | `open` | Must match the server and daemon. Set `sealed` only for an explicitly configured sealed preview nest. |
+| `VITE_NEKONEST_TRANSPORT_MODE` | unset | Development/build assertion only. The PWA reads `/health.transport_mode` before WebSocket; a supplied override that differs displays an error and stops connection. |
 
 ---
 

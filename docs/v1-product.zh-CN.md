@@ -137,8 +137,8 @@ v1.0.0 = **单人运维自托管窝**可日常在路上使用的功能完备版�
 | 迁移 | 一次显式破坏性 v0.1→v1 迁移；无长期 v0/v1 混跑协议。保留 daemon 设备 ID/令牌哈希与原生 store。验证备份后清理旧 VPS 明文消息、prompt、配对码与附件。手机重新登录/配对。 |
 | 协议兼容 | 版本为 `major.minor`。major 不匹配则拒绝。minor 向后兼容：未知可选字段忽略；缺省能力为 false/unsupported。E2E、身份或投递语义破坏须升 major。永不把密封降为开放。 |
 | 正式主机 OS | **Windows + Linux**。macOS 更后。 |
-| 主 agent | **Codex** 为唯一全控制 v1 agent。规范路径：`codex app-server` JSON-RPC；钉选/探测最低兼容 CLI，自本地已验证的 0.144.1 协议面起。 |
-| Codex 控制 | 发送、approve/deny、中断、steer 为 **MUST**。后续排队为 **SHOULD**。遗留 `codex exec resume` 为能力降级兼容路径。 |
+| 主 agent | **Codex** 为唯一全控制 v1 agent。规范路径：`codex app-server` JSON-RPC；全控制最低基线为 **codex-cli 0.146.0**，并实时探测 schema/initialize。 |
+| Codex 控制 | 发送、结构化问答、approve/deny、中断、steer 与持久 FIFO 后续队列均为已实现全控制面。遗留 `codex exec resume` 为能力降级兼容路径。 |
 | 开线程 | **按 agent 与能力门控。** 手机先打开仅本地草稿；只在发送首条提示词时创建原生线程。已安装并探测通过的 starter 只能进入 daemon **当前由原生会话发现的项目目录并集**。禁止任意路径输入或扫盘。生命周期：`starting → owned \| failed \| indeterminate`（无永久幽灵行）；`owned` 须有首条提示词正向确认和原生 store 所有权。 |
 | 其他 agent | Claude Code、Kilo、Kimi CLI、Grok Build：**兼容续聊** — 发现、所有权、历史、发送/流、中断、按宣告能力的附件；仅在原生 `spawn` 确已安装、探测通过且已宣告时可开线程。**不**承诺审批/steer/排队。 |
 | 附件 | Codex app-server **MUST** 端到端支持图片与普通文件。其他适配器宣告 `native_image`、`path_best_effort` 或 `unsupported`；UI 不得暗示更高等级。 |
@@ -206,7 +206,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 
 | Wire id | 产品 | 角色 | 保证 |
 |---|---|---|---|
-| `codex` | Codex | **唯一全控制 v1 agent** | 发现、所有权、历史、发送/流、中断、**approve/deny**、**steer**、**附件 `native_image_and_file`**，经 `codex app-server`。仅当原生 starter 已安装、探测通过时可宣告 **spawn/`start_thread`**。排队在协议能保证顺序时为 SHOULD。遗留 `codex exec resume` 仅为降级兼容（如实宣告能力）。主列表排除 subagent。自 0.144.1 面钉选/探测最低 CLI。 |
+| `codex` | Codex | **唯一全控制 v1 agent** | 发现、所有权、历史、发送/流、中断、**approve/deny**、结构化问答、**steer**、持久 FIFO 队列、监督恢复与**附件 `native_image_and_file`**，经 `codex app-server`。仅当原生 starter 已安装、探测通过时可宣告 **spawn/`start_thread`**。遗留 `codex exec resume` 仅为降级兼容（如实宣告能力）。主列表排除 subagent。全控制最低 CLI 为 **0.146.0**。 |
 
 #### 7.3.2 兼容续聊 agent（MUST）
 
@@ -545,7 +545,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | 1 | **E2E 默认** | 新窝默认密封。开放中继保留、默认关闭、**仅管理员**启用。一窝一模式；不混用；不自动降级。 |
 | 2 | **开线程 UX** | 先为仅本地草稿；首条提示词使用所选 agent 已安装并探测通过的原生 starter。目标**仅**为 daemon **当前已发现原生项目目录并集**。禁止任意路径输入；v1 不要求单独运维白名单文件。 |
 | 3 | **鉴权演进** | 管理员引导密钥（`NEKONEST_ADMIN_SECRET`，单版本 `NEKONEST_PHONE_SECRET` 别名）。一般访问：**独立可撤销手机令牌** + 设备授权。多手机密钥按手机包装。 |
-| 4 | **Codex 审批传输** | 规范路径：**`codex app-server` JSON-RPC**。自本地已验证 **0.144.1** 协议面钉选/探测最低兼容 CLI。遗留 `exec resume` 仅降级。Claude Code 等 v1 不承诺审批。 |
+| 4 | **Codex 审批传输** | 规范路径：**`codex app-server` JSON-RPC**，要求 **codex-cli 0.146.0+** 并探测 schema/initialize。遗留 `exec resume` 仅降级。Claude Code 等 v1 不承诺审批。 |
 | 5 | **扩展 agent** | v1.0.0 **无**额外要求。无「至少两个」门槛。 |
 | 6 | **消息类型名** | 按计划目录在实现中钉选：`start_thread`、`thread_starting`、`thread_owned`、`thread_failed`、`thread_indeterminate`、`steer`、`pair_request`、`pair_confirm`、`pair_ready`、`pair_failed`、`key_package`、`phone_revoked`、`attention_event`；状态含 `waiting_user`。精确 schema 在 Phase 1 `protocol.json` 落地。 |
 | 7 | **正式 OS** | Windows + Linux MUST；macOS LATER。 |

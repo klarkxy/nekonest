@@ -12,11 +12,20 @@ import (
 
 // DB wraps the SQLite database connection.
 type DB struct {
-	conn *sql.DB
+	conn                   *sql.DB
+	preexistingApplication bool
 }
 
 // New creates and initializes a new database.
 func New(dbPath string) (*DB, error) {
+	return NewWithTransportMode(dbPath, "")
+}
+
+// NewWithTransportMode creates and initializes a database, then establishes
+// its one persistent transport mode. requestedMode is only meaningful for the
+// first initialization; a later mismatch is rejected rather than silently
+// changing how a nest carries application data.
+func NewWithTransportMode(dbPath, requestedMode string) (*DB, error) {
 	// modernc.org/sqlite applies connection-local PRAGMAs through repeated
 	// _pragma query parameters. The similarly named _journal_mode and
 	// _busy_timeout parameters are not recognized by this driver, which leaves
@@ -30,6 +39,16 @@ func New(dbPath string) (*DB, error) {
 	}
 
 	db := &DB{conn: conn}
+	hadApplicationTables, err := db.hasApplicationTables()
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	db.preexistingApplication = hadApplicationTables
+	if _, err := db.bootstrapTransportMode(requestedMode); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	if err := db.migrate(); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -105,6 +124,7 @@ func (db *DB) migrate() error {
 			session_id TEXT NOT NULL,
 			prompt TEXT NOT NULL,
 			attachments_json TEXT NOT NULL DEFAULT '[]',
+			sealed_envelope_json TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'registered'
 				CHECK(status IN ('registered', 'pending', 'accepted', 'failed', 'indeterminate')),
 			error TEXT NOT NULL DEFAULT '',
@@ -163,6 +183,17 @@ func (db *DB) migrate() error {
 			UNIQUE(phone_id, device_id, scope, session_id, epoch)
 		);
 		CREATE INDEX IF NOT EXISTS idx_key_packages_phone ON key_packages(phone_id, device_id);
+
+		-- Sealed-safe attention routing events.  The server intentionally stores
+		-- no prompt, answer, path, approval detail, or event class here.
+		CREATE TABLE IF NOT EXISTS attention_events (
+			device_id TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (device_id, event_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_attention_events_created_at
+			ON attention_events(created_at);
 	`)
 	if err != nil {
 		return err
@@ -180,6 +211,153 @@ func (db *DB) migrate() error {
 		return err
 	}
 	return db.ensureSchemaVersion()
+}
+
+// hasApplicationTables reports whether this database already contained
+// NekoNest data before the current migration created its tables. schema_meta is
+// deliberately excluded so a brand-new database remains distinguishable.
+func (db *DB) hasApplicationTables() (bool, error) {
+	const q = `SELECT 1 FROM sqlite_master
+		WHERE type = 'table' AND name IN (
+			'devices', 'pair_codes', 'user_tokens', 'session_messages',
+			'push_subscriptions', 'prompt_commands', 'phone_identities',
+			'phone_device_grants', 'key_packages', 'attention_events'
+		) LIMIT 1`
+	var one int
+	err := db.conn.QueryRow(q).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// InitializeTransportMode returns the immutable mode for this nest. Existing
+// mode metadata is authoritative. A legacy application database with no mode
+// metadata is explicitly classified as open once; a genuinely new nest starts
+// sealed unless an explicit first-run mode was supplied.
+func (db *DB) InitializeTransportMode(requestedMode string) (protocol.TransportMode, error) {
+	return initializeTransportMode(db.conn, db.preexistingApplication, requestedMode)
+}
+
+type transportModeStore interface {
+	QueryRow(query string, args ...any) *sql.Row
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// bootstrapTransportMode creates and pins the immutable nest mode in one
+// transaction before application tables are migrated. If startup is
+// interrupted after this point, a new sealed database can never be mistaken
+// for a legacy open database merely because some tables already exist.
+func (db *DB) bootstrapTransportMode(requestedMode string) (protocol.TransportMode, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS schema_meta (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`); err != nil {
+		return "", err
+	}
+	mode, err := initializeTransportMode(tx, db.preexistingApplication, requestedMode)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
+func initializeTransportMode(store transportModeStore, preexistingApplication bool, requestedMode string) (protocol.TransportMode, error) {
+	requestedMode = strings.TrimSpace(requestedMode)
+	var requested protocol.TransportMode
+	if requestedMode != "" {
+		parsed, err := protocol.ParseTransportMode(requestedMode)
+		if err != nil {
+			return "", fmt.Errorf("invalid requested transport_mode: %w", err)
+		}
+		requested = parsed
+	}
+
+	var stored string
+	err := store.QueryRow(`SELECT value FROM schema_meta WHERE key = 'transport_mode'`).Scan(&stored)
+	if err == nil {
+		mode, parseErr := protocol.ParseTransportMode(stored)
+		if parseErr != nil {
+			return "", fmt.Errorf("stored transport_mode is invalid: %w", parseErr)
+		}
+		if requested != "" && requested != mode {
+			return "", fmt.Errorf("transport_mode mismatch: persisted %s, requested %s", mode, requested)
+		}
+		return mode, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", err
+	}
+
+	mode := protocol.TransportSealed
+	if preexistingApplication {
+		mode = protocol.TransportOpen
+	}
+	if requested != "" {
+		if preexistingApplication && requested != protocol.TransportOpen {
+			return "", fmt.Errorf("transport_mode mismatch: legacy nest is open; use the offline migration before sealed")
+		}
+		mode = requested
+	}
+	if _, err := store.Exec(`INSERT INTO schema_meta (key, value) VALUES ('transport_mode', ?)`, string(mode)); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
+// TransportMode reads the persistent mode. Callers must treat an error as a
+// fail-closed startup condition rather than choosing a fallback relay mode.
+func (db *DB) TransportMode() (protocol.TransportMode, error) {
+	var raw string
+	if err := db.conn.QueryRow(`SELECT value FROM schema_meta WHERE key = 'transport_mode'`).Scan(&raw); err != nil {
+		return "", err
+	}
+	mode, err := protocol.ParseTransportMode(raw)
+	if err != nil {
+		return "", fmt.Errorf("stored transport_mode is invalid: %w", err)
+	}
+	return mode, nil
+}
+
+const attentionEventTTL = 24 * time.Hour
+
+// AcceptAttentionEvent durably deduplicates an event across server instances.
+// Only the routing identifiers and timestamp are persisted. Old event ids are
+// removed opportunistically to bound the table.
+func (db *DB) AcceptAttentionEvent(deviceID, eventID string, createdAt time.Time) (bool, error) {
+	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(eventID) == "" {
+		return false, fmt.Errorf("device_id and event_id required")
+	}
+	now := createdAt.Unix()
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM attention_events WHERE created_at < ?`, now-int64(attentionEventTTL/time.Second)); err != nil {
+		return false, err
+	}
+	result, err := tx.Exec(
+		`INSERT INTO attention_events (device_id, event_id, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT(device_id, event_id) DO NOTHING`,
+		deviceID, eventID, now,
+	)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return err == nil && n == 1, err
 }
 
 // SchemaVersion is the current server schema generation.
@@ -329,6 +507,16 @@ func (db *DB) ClearPlaintextContentForV1() error {
 	); err != nil {
 		return err
 	}
+	// This routine is reachable only from the offline migrator after a verified
+	// backup and plaintext cleanup. Make the sealed cutover part of the same
+	// database transaction; normal startup can never switch an existing nest.
+	if _, err := tx.Exec(
+		`INSERT INTO schema_meta (key, value) VALUES ('transport_mode', ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		string(protocol.TransportSealed),
+	); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -390,7 +578,8 @@ func (db *DB) migratePromptCommands() error {
 		strings.Contains(compact, "'indeterminate'") &&
 		strings.Contains(compact, "retry_allowed") &&
 		strings.Contains(compact, "outcome") &&
-		strings.Contains(compact, "commit_sent") {
+		strings.Contains(compact, "commit_sent") &&
+		strings.Contains(compact, "sealed_envelope_json") {
 		return nil
 	}
 
@@ -407,6 +596,7 @@ func (db *DB) migratePromptCommands() error {
 			session_id TEXT NOT NULL,
 			prompt TEXT NOT NULL,
 			attachments_json TEXT NOT NULL DEFAULT '[]',
+			sealed_envelope_json TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'registered'
 				CHECK(status IN ('registered', 'pending', 'accepted', 'failed', 'indeterminate')),
 			error TEXT NOT NULL DEFAULT '',
@@ -418,9 +608,9 @@ func (db *DB) migratePromptCommands() error {
 			PRIMARY KEY (device_id, client_msg_id)
 		);
 		INSERT INTO prompt_commands_v2
-			(device_id, client_msg_id, session_id, prompt, attachments_json,
+			(device_id, client_msg_id, session_id, prompt, attachments_json, sealed_envelope_json,
 			 status, error, outcome, retry_allowed, commit_sent, created_at, updated_at)
-			SELECT device_id, client_msg_id, session_id, prompt, attachments_json,
+			SELECT device_id, client_msg_id, session_id, prompt, attachments_json, '',
 			       status, error,
 			       CASE status
 			           WHEN 'accepted' THEN 'accepted'

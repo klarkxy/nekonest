@@ -168,7 +168,7 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 		authMsg.ProtocolVersion,
 		string(authMsg.TransportMode),
 		s.TransportMode(),
-		0,
+		1,
 	)
 	_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 		Type:      protocol.MsgAuthResponse,
@@ -220,6 +220,14 @@ func (s *Server) daemonReadLoop(dc *DaemonConn) {
 			log.Printf("[ws] daemon unmarshal error: %v", err)
 			continue
 		}
+		if err := protocol.ValidateFrameForTransport(&msg, s.TransportMode()); err != nil {
+			log.Printf("[ws] rejecting daemon frame type=%s device=%s: %v", msg.Type, dc.DeviceID, err)
+			_ = dc.Conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
+				Type: protocol.MsgError, DeviceID: dc.DeviceID, Timestamp: time.Now().Unix(),
+				Payload: map[string]any{"error_code": protocol.ErrCodeInvalidEnvelope, "message": "invalid transport envelope"},
+			}))
+			return
+		}
 
 		dc.mu.Lock()
 		dc.LastPing = time.Now()
@@ -243,6 +251,10 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 	msg.DeviceID = dc.DeviceID
 	switch msg.Type {
 	case protocol.MsgSessionList:
+		if msg.SealedPayload != nil {
+			s.connMgr.updateSealedCatalogFromLocked(dc, msg)
+			return
+		}
 		// Daemon reported session list
 		sessionsData, ok := msg.Payload["sessions"]
 		if !ok {
@@ -293,32 +305,12 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		}
 
 	case protocol.MsgAttentionEvent:
+		if !s.acceptAttentionEvent(dc.DeviceID, msg) {
+			return
+		}
 		// Generic sealed-safe push: no application plaintext in notification body.
 		s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
-		className := ""
-		if msg.Payload != nil {
-			if c, ok := msg.Payload["class"].(string); ok {
-				className = c
-			}
-			if c, ok := msg.Payload["event_class"].(string); ok && c != "" {
-				className = c
-			}
-		}
-		title := "NekoNest"
-		body := "有一个会话需要处理"
-		switch className {
-		case "waiting_approval", "approval":
-			body = "有会话等待审批"
-		case "waiting_user", "needs_you":
-			body = "有会话在等你"
-		case "failed", "error":
-			body = "有会话运行失败"
-		case "completed", "success":
-			body = "有会话已完成"
-		case "device_offline":
-			body = "设备已离线"
-		}
-		s.sendPushNotification(dc.DeviceID, msg.SessionID, title, body)
+		s.sendPushNotification(dc.DeviceID, msg.SessionID, "NekoNest", "有一个会话需要处理")
 
 	case protocol.MsgSessionMessage:
 		// Open mode: persist plaintext message. Sealed mode: persist opaque
@@ -348,7 +340,16 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 			s.sendPushNotification(dc.DeviceID, msg.SessionID, "⚠️ 操作需要审批", "点击查看详情")
 		}
 
+	case protocol.MsgPromptQueued, protocol.MsgUserInputResult, protocol.MsgQueueUpdate, protocol.MsgPromptCancelled:
+		s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
+
 	case protocol.MsgSessionHistory:
+		if msg.SealedPayload != nil {
+			// Native history is authoritative. The relay forwards the opaque
+			// bundle without decoding application content.
+			s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
+			return
+		}
 		// Imported PC transcript — persist (best-effort) then forward
 		if raw, ok := msg.Payload["messages"].([]any); ok {
 			for _, item := range raw {
@@ -384,7 +385,11 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 			return
 		}
 		retry := promptCommandMessage(cmd)
-		if err := s.connMgr.sendToDaemonLocked(dc, retry); err != nil {
+		if retry == nil {
+			log.Printf("[ws] stored prompt envelope is invalid for %s/%s", dc.DeviceID, clientMsgID)
+			return
+		}
+		if err := s.connMgr.sendToDaemonLocked(dc, s.stampEnvelope(retry)); err != nil {
 			// Keep pending. The next phone outbox flush will query again.
 			log.Printf("[ws] resend not-seen prompt %s/%s: %v", dc.DeviceID, clientMsgID, err)
 		}
@@ -393,6 +398,12 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		clientMsgID := promptClientMsgID(msg)
 		if clientMsgID == "" {
 			log.Printf("[ws] prompt_accepted without valid client_msg_id from %s", dc.DeviceID)
+			return
+		}
+		// Backward compatibility for daemons that predate prompt_queued. Queue
+		// admission is not native turn acceptance and must remain pending.
+		if queued, _ := msg.Payload["queued"].(bool); queued {
+			s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
 			return
 		}
 		cmd, _, err := s.db.MarkPromptAccepted(dc.DeviceID, clientMsgID)
@@ -425,6 +436,12 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		failure := "daemon rejected prompt"
 		outcome := db.PromptFailed
 		retryAllowed := true
+		if strings.TrimSpace(msg.Outcome) != "" {
+			outcome = strings.TrimSpace(msg.Outcome)
+			if msg.RetryAllowed != nil {
+				retryAllowed = *msg.RetryAllowed
+			}
+		}
 		if msg.Payload != nil {
 			if value, ok := msg.Payload["error"].(string); ok && strings.TrimSpace(value) != "" {
 				failure = strings.TrimSpace(value)
@@ -453,7 +470,11 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 			return
 		}
 		if cmd.Status == db.PromptFailed || cmd.Status == db.PromptIndeterminate {
-			s.broadcastPromptFailed(cmd)
+			if msg.SealedPayload != nil {
+				s.connMgr.BroadcastToPhones(dc.DeviceID, msg)
+			} else {
+				s.broadcastPromptFailed(cmd)
+			}
 		}
 
 	case protocol.MsgError:
@@ -666,16 +687,22 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 
 // pushPhoneSnapshot sends session_list + device_list for the subscribed device.
 func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
-	sessions, startCapabilities := s.connMgr.GetDeviceSessionSnapshot(deviceID)
-	if sessions == nil {
-		sessions = []*protocol.AgentSession{}
+	if s.TransportMode() == protocol.TransportSealed {
+		if catalog := s.connMgr.GetSealedCatalogSnapshot(deviceID); catalog != nil {
+			s.connMgr.SafeWritePhone(conn, catalog)
+		}
+	} else {
+		sessions, startCapabilities := s.connMgr.GetDeviceSessionSnapshot(deviceID)
+		if sessions == nil {
+			sessions = []*protocol.AgentSession{}
+		}
+		sessionMsg := s.stampEnvelope(protocol.NewMessage(protocol.MsgSessionList, deviceID))
+		sessionMsg.Payload = map[string]any{"sessions": sessions}
+		if startCapabilities != nil {
+			sessionMsg.Payload["start_capabilities"] = startCapabilities
+		}
+		s.connMgr.SafeWritePhone(conn, sessionMsg)
 	}
-	sessionMsg := protocol.NewMessage(protocol.MsgSessionList, deviceID)
-	sessionMsg.Payload = map[string]any{"sessions": sessions}
-	if startCapabilities != nil {
-		sessionMsg.Payload["start_capabilities"] = startCapabilities
-	}
-	s.connMgr.SafeWritePhone(conn, sessionMsg)
 
 	devices, _ := s.db.ListDevices()
 	onlineDevices := s.connMgr.GetOnlineDevices()
@@ -690,7 +717,7 @@ func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
 		}
 	}
 
-	statusMsg := protocol.NewMessage(protocol.MsgDeviceList, "")
+	statusMsg := s.stampEnvelope(protocol.NewMessage(protocol.MsgDeviceList, ""))
 	statusMsg.Payload = map[string]any{"devices": devices}
 	s.connMgr.SafeWritePhone(conn, statusMsg)
 }
@@ -724,6 +751,11 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID string) string {
 		var msg protocol.NekoMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
+		}
+		if err := protocol.ValidateFrameForTransport(&msg, s.TransportMode()); err != nil {
+			log.Printf("[ws] rejecting phone frame type=%s device=%s: %v", msg.Type, deviceID, err)
+			s.writePhoneError(conn, deviceID, msg.SessionID, "invalid transport envelope")
+			return deviceID
 		}
 
 		if msg.Type == protocol.MsgSubscribe {
@@ -803,7 +835,7 @@ func allowDeviceSwitch(switches *[]time.Time, now time.Time) bool {
 }
 
 func (s *Server) writePhoneError(conn *websocket.Conn, deviceID, sessionID, message string) {
-	errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, sessionID)
+	errMsg := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgError, deviceID, sessionID))
 	errMsg.Payload = map[string]any{"message": message}
 	s.connMgr.SafeWritePhone(conn, errMsg)
 }
@@ -812,7 +844,7 @@ func (s *Server) writeSubscribeError(
 	conn *websocket.Conn,
 	requestedDeviceID, subscriptionID, message string,
 ) {
-	errMsg := protocol.NewMessage(protocol.MsgError, requestedDeviceID)
+	errMsg := s.stampEnvelope(protocol.NewMessage(protocol.MsgError, requestedDeviceID))
 	errMsg.Payload = map[string]any{
 		"message":         message,
 		"device_id":       requestedDeviceID,
@@ -873,10 +905,16 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 		limit := historyLimit(msg.Payload)
 		msg.Payload["limit"] = limit
 		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
+			if s.TransportMode() == protocol.TransportSealed {
+				errMsg := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID))
+				errMsg.Payload = map[string]any{"message": "device offline"}
+				s.connMgr.BroadcastToPhones(deviceID, errMsg)
+				return
+			}
 			// Fallback: whatever NekoNest already persisted
 			rows, dbErr := s.db.GetMessages(deviceID, msg.SessionID, limit+1)
 			if dbErr != nil {
-				errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID)
+				errMsg := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID))
 				errMsg.Payload = map[string]any{"message": "device offline"}
 				s.connMgr.BroadcastToPhones(deviceID, errMsg)
 				return
@@ -886,7 +924,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 			for _, m := range rows {
 				msgs = append(msgs, m)
 			}
-			out := protocol.NewMessageWithSession(protocol.MsgSessionHistory, deviceID, msg.SessionID)
+			out := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgSessionHistory, deviceID, msg.SessionID))
 			out.Payload = map[string]any{
 				"source":    "server_db",
 				"truncated": truncated,
@@ -898,6 +936,10 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 
 	case protocol.MsgSendPrompt:
 		msg.DeviceID = deviceID
+		if msg.SealedPayload != nil {
+			s.handleSealedPrompt(deviceID, msg)
+			return
+		}
 		promptText := ""
 		if msg.Payload == nil {
 			msg.Payload = map[string]any{}
@@ -978,8 +1020,9 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 					cmd.DeviceID,
 					cmd.SessionID,
 				)
+				query.ClientMsgID = cmd.ClientMsgID
 				query.Payload = map[string]any{"client_msg_id": cmd.ClientMsgID}
-				if err := s.connMgr.SendToDaemon(deviceID, query); err != nil {
+				if err := s.connMgr.SendToDaemon(deviceID, s.stampEnvelope(query)); err != nil {
 					// Keep pending; a later outbox flush can query again.
 					log.Printf("[ws] prompt status query %s/%s: %v", deviceID, clientMsgID, err)
 				}
@@ -1034,10 +1077,11 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 			}
 		}
 
-	case protocol.MsgApprove, protocol.MsgDeny:
+	case protocol.MsgApprove, protocol.MsgDeny, protocol.MsgRespondUserInput,
+		protocol.MsgCancelPrompt, protocol.MsgResumePromptQueue:
 		msg.DeviceID = deviceID
 		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
-			errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID)
+			errMsg := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID))
 			errMsg.Payload = map[string]any{"message": "device offline"}
 			s.connMgr.BroadcastToPhones(deviceID, errMsg)
 		}
@@ -1045,7 +1089,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 	case protocol.MsgInterrupt:
 		msg.DeviceID = deviceID
 		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
-			errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID)
+			errMsg := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID))
 			errMsg.Payload = map[string]any{"message": "device offline"}
 			s.connMgr.BroadcastToPhones(deviceID, errMsg)
 		}
@@ -1053,7 +1097,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 	case protocol.MsgSteer:
 		msg.DeviceID = deviceID
 		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
-			errMsg := protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID)
+			errMsg := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgError, deviceID, msg.SessionID))
 			errMsg.Payload = map[string]any{"message": "device offline"}
 			s.connMgr.BroadcastToPhones(deviceID, errMsg)
 		}
@@ -1104,6 +1148,112 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 	default:
 		log.Printf("[ws] unexpected message type from phone: %s", msg.Type)
 	}
+}
+
+// handleSealedPrompt runs the same durable at-most-once state machine as the
+// open path without inspecting or persisting application plaintext. The exact
+// sealed command is the immutable conflict fingerprint and reconnect replay.
+func (s *Server) handleSealedPrompt(deviceID string, msg *protocol.NekoMessage) {
+	if msg == nil || msg.SealedPayload == nil || msg.Payload != nil {
+		s.broadcastPromptFailure(deviceID, "", "", "invalid sealed prompt envelope")
+		return
+	}
+	if strings.TrimSpace(msg.SessionID) == "" {
+		s.broadcastPromptFailure(deviceID, "", msg.ClientMsgID, "session_id required")
+		return
+	}
+	rawClientMsgID := strings.TrimSpace(msg.ClientMsgID)
+	clientMsgID := sanitizeClientMsgID(rawClientMsgID)
+	if clientMsgID == "" {
+		s.broadcastPromptFailure(deviceID, msg.SessionID, rawClientMsgID, "valid top-level client_msg_id required for sealed prompt")
+		return
+	}
+	msg.DeviceID = deviceID
+	msg.ClientMsgID = clientMsgID
+	wire, err := json.Marshal(msg)
+	if err != nil {
+		s.broadcastPromptFailure(deviceID, msg.SessionID, clientMsgID, "invalid sealed prompt envelope")
+		return
+	}
+	cmd, shouldForward, err := s.db.RegisterPromptCommand(&db.PromptCommand{
+		DeviceID:           deviceID,
+		ClientMsgID:        clientMsgID,
+		SessionID:          msg.SessionID,
+		AttachmentsJSON:    "[]",
+		SealedEnvelopeJSON: string(wire),
+	}, false)
+	if err != nil {
+		message := "failed to register sealed prompt"
+		if errors.Is(err, db.ErrPromptCommandConflict) {
+			message = "client_msg_id already used for another prompt"
+		}
+		s.broadcastPromptFailure(deviceID, msg.SessionID, clientMsgID, message)
+		return
+	}
+	if !shouldForward {
+		switch cmd.Status {
+		case db.PromptAccepted:
+			s.sendPromptCommitted(cmd)
+		case db.PromptFailed, db.PromptIndeterminate:
+			s.broadcastPromptFailed(cmd)
+		case db.PromptPending:
+			query := protocol.NewMessageWithSession(protocol.MsgPromptStatusQuery, cmd.DeviceID, cmd.SessionID)
+			query.ClientMsgID = cmd.ClientMsgID
+			query.Payload = map[string]any{"client_msg_id": cmd.ClientMsgID}
+			if err := s.connMgr.SendToDaemon(deviceID, s.stampEnvelope(query)); err != nil {
+				log.Printf("[ws] sealed prompt status query %s/%s: %v", deviceID, clientMsgID, err)
+			}
+		}
+		return
+	}
+
+	if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
+		outcome := "transport_error"
+		retryAllowed := true
+		failureMessage := "device offline"
+		if !errors.Is(err, ErrDeviceOffline) {
+			outcome = db.PromptIndeterminate
+			retryAllowed = false
+			failureMessage = "prompt delivery outcome is indeterminate"
+		}
+		failed, _, markErr := s.db.MarkPromptFailed(deviceID, clientMsgID, failureMessage, outcome, retryAllowed)
+		if markErr != nil {
+			log.Printf("[ws] mark sealed prompt forward failure: %v", markErr)
+			failed = cmd
+			failed.Status = db.PromptFailed
+			if outcome == db.PromptIndeterminate {
+				failed.Status = db.PromptIndeterminate
+			}
+			failed.Error = failureMessage
+			failed.Outcome = outcome
+			failed.RetryAllowed = retryAllowed
+		}
+		if failed.Status == db.PromptAccepted {
+			s.sendPromptCommitted(failed)
+		} else {
+			s.broadcastPromptFailed(failed)
+		}
+		return
+	}
+	if _, _, err := s.db.MarkPromptForwarded(deviceID, clientMsgID); err != nil {
+		log.Printf("[ws] mark sealed prompt forwarded %s/%s: %v", deviceID, clientMsgID, err)
+	}
+}
+
+func (s *Server) acceptAttentionEvent(deviceID string, msg *protocol.NekoMessage) bool {
+	if s == nil || msg == nil || msg.Payload == nil {
+		return false
+	}
+	eventID := strings.TrimSpace(stringPayload(msg.Payload, "event_id"))
+	if eventID == "" || len(eventID) > 256 {
+		return false
+	}
+	accepted, err := s.db.AcceptAttentionEvent(deviceID, eventID, time.Now())
+	if err != nil {
+		log.Printf("[ws] persist attention event error: %v", err)
+		return false
+	}
+	return accepted
 }
 
 func threadStartRelayFailure(err error) (protocol.MessageType, string) {
@@ -1218,7 +1368,10 @@ func promptClientMsgID(msg *protocol.NekoMessage) string {
 	if msg == nil {
 		return ""
 	}
-	return sanitizeClientMsgID(stringPayload(msg.Payload, "client_msg_id"))
+	if clientMsgID := sanitizeClientMsgID(stringPayload(msg.Payload, "client_msg_id")); clientMsgID != "" {
+		return clientMsgID
+	}
+	return sanitizeClientMsgID(msg.ClientMsgID)
 }
 
 func stringPayload(payload map[string]any, key string) string {
@@ -1242,6 +1395,13 @@ func promptAttachments(cmd *db.PromptCommand) []map[string]any {
 }
 
 func promptCommandMessage(cmd *db.PromptCommand) *protocol.NekoMessage {
+	if cmd != nil && cmd.SealedEnvelopeJSON != "" {
+		var sealed protocol.NekoMessage
+		if err := json.Unmarshal([]byte(cmd.SealedEnvelopeJSON), &sealed); err == nil && sealed.SealedPayload != nil {
+			return &sealed
+		}
+		return nil
+	}
 	msg := protocol.NewMessageWithSession(protocol.MsgSendPrompt, cmd.DeviceID, cmd.SessionID)
 	msg.Payload = map[string]any{
 		"prompt":        cmd.Prompt,
@@ -1256,6 +1416,11 @@ func promptCommandMessage(cmd *db.PromptCommand) *protocol.NekoMessage {
 func (s *Server) persistAcceptedPrompt(cmd *db.PromptCommand) error {
 	if cmd == nil {
 		return errors.New("nil accepted prompt")
+	}
+	if cmd.SealedEnvelopeJSON != "" {
+		// Native history remains authoritative. The relay must not synthesize or
+		// persist application plaintext for a sealed command.
+		return nil
 	}
 	attachments := promptAttachments(cmd)
 	userMsg := protocol.SessionMessage{
@@ -1278,7 +1443,10 @@ func (s *Server) broadcastPromptSent(cmd *db.PromptCommand) {
 	if cmd == nil {
 		return
 	}
-	ack := protocol.NewMessageWithSession(protocol.MsgPromptSent, cmd.DeviceID, cmd.SessionID)
+	if cmd.SealedEnvelopeJSON != "" {
+		return
+	}
+	ack := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgPromptSent, cmd.DeviceID, cmd.SessionID))
 	ack.Payload = map[string]any{
 		"client_msg_id": cmd.ClientMsgID,
 		"message_id":    cmd.ClientMsgID,
@@ -1294,28 +1462,35 @@ func promptCommittedMessage(cmd *db.PromptCommand) *protocol.NekoMessage {
 		cmd.DeviceID,
 		cmd.SessionID,
 	)
+	msg.ClientMsgID = cmd.ClientMsgID
 	msg.Payload = map[string]any{"client_msg_id": cmd.ClientMsgID}
 	return msg
 }
 
 func (s *Server) sendPromptCommittedLocked(dc *DaemonConn, cmd *db.PromptCommand) {
-	if err := s.connMgr.sendToDaemonLocked(dc, promptCommittedMessage(cmd)); err != nil {
+	committed := s.stampEnvelope(promptCommittedMessage(cmd))
+	if err := s.connMgr.sendToDaemonLocked(dc, committed); err != nil {
 		log.Printf("[ws] send prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
 		return
 	}
 	if err := s.db.MarkPromptCommitted(cmd.DeviceID, cmd.ClientMsgID); err != nil {
 		log.Printf("[ws] persist prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+		return
 	}
+	s.connMgr.BroadcastToPhones(cmd.DeviceID, committed)
 }
 
 func (s *Server) sendPromptCommitted(cmd *db.PromptCommand) {
-	if err := s.connMgr.SendToDaemon(cmd.DeviceID, promptCommittedMessage(cmd)); err != nil {
+	committed := s.stampEnvelope(promptCommittedMessage(cmd))
+	if err := s.connMgr.SendToDaemon(cmd.DeviceID, committed); err != nil {
 		log.Printf("[ws] resend prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
 		return
 	}
 	if err := s.db.MarkPromptCommitted(cmd.DeviceID, cmd.ClientMsgID); err != nil {
 		log.Printf("[ws] persist prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+		return
 	}
+	s.connMgr.BroadcastToPhones(cmd.DeviceID, committed)
 }
 
 func (s *Server) replayPromptCommits(dc *DaemonConn) {
@@ -1338,7 +1513,7 @@ func (s *Server) replayPromptCommits(dc *DaemonConn) {
 			}
 			if err := s.connMgr.SendToDaemon(
 				dc.DeviceID,
-				promptCommittedMessage(cmd),
+				s.stampEnvelope(promptCommittedMessage(cmd)),
 			); err != nil {
 				log.Printf("[ws] replay prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
 				return
@@ -1371,13 +1546,19 @@ func (s *Server) broadcastPromptFailed(cmd *db.PromptCommand) {
 	if message == "" {
 		message = "prompt failed"
 	}
-	failed := protocol.NewMessageWithSession(protocol.MsgPromptFailed, cmd.DeviceID, cmd.SessionID)
-	failed.Payload = map[string]any{
-		"client_msg_id": cmd.ClientMsgID,
-		"message":       message,
-		"error":         message,
-		"outcome":       cmd.Outcome,
-		"retry_allowed": cmd.RetryAllowed && cmd.Status == db.PromptFailed,
+	failed := s.stampEnvelope(protocol.NewMessageWithSession(protocol.MsgPromptFailed, cmd.DeviceID, cmd.SessionID))
+	failed.ClientMsgID = cmd.ClientMsgID
+	failed.Outcome = cmd.Outcome
+	retryAllowed := cmd.RetryAllowed && cmd.Status == db.PromptFailed
+	failed.RetryAllowed = &retryAllowed
+	if s.TransportMode() == protocol.TransportOpen {
+		failed.Payload = map[string]any{
+			"client_msg_id": cmd.ClientMsgID,
+			"message":       message,
+			"error":         message,
+			"outcome":       cmd.Outcome,
+			"retry_allowed": retryAllowed,
+		}
 	}
 	s.connMgr.BroadcastToPhones(cmd.DeviceID, failed)
 }
