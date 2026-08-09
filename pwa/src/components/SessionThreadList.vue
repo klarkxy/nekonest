@@ -149,7 +149,7 @@
               v-if="agentStartOption(project, agent)"
               type="button"
               class="agent-add-btn"
-              :disabled="!deviceOnline || !agentStartOption(project, agent)?.enabled"
+              :disabled="!deviceOnline"
               :title="agentStartTitle(project, agent)"
               :aria-label="agentStartAria(project, agent)"
               @click.stop="onNewThread(project, agent.type)"
@@ -391,31 +391,17 @@ function agentStartOption(
   if (!KNOWN_AGENT_TYPES.some(agentType => agentType === agent.type)) return null
   const advertised = projectStartOptions(project)
     .find(option => option.agentType === agent.type)
-  if (advertised) return advertised
-
-  // Older daemons omit the device-level catalog. Keep the control attached to
-  // its harness, but fail closed and explain why it cannot start yet.
-  const path = (project.path || '').trim()
-  if (!path || project.uncategorized) return null
-  if (!props.sessions.some(session => projectKeyFromDir(session.project_dir) === project.key)) {
-    return null
-  }
-  return {
-    agentType: agent.type,
-    label: agent.label,
-    enabled: false,
-    reason: t('threadList.startCatalogUnavailable')
-  }
+  return advertised?.enabled ? advertised : null
 }
 
 function agentStartReason(project: SessionTreeProject, agent: SessionTreeAgent): string {
   if (!deviceOnline.value) return t('threadList.startOffline')
-  return agentStartOption(project, agent)?.reason || t('threadList.startUnavailableDefault')
+  return agentStartOption(project, agent)?.reason || ''
 }
 
 function agentStartUnavailable(project: SessionTreeProject, agent: SessionTreeAgent): boolean {
   const option = agentStartOption(project, agent)
-  return Boolean(option && (!deviceOnline.value || !option.enabled))
+  return Boolean(option && !deviceOnline.value)
 }
 
 function agentSubtitle(project: SessionTreeProject, agent: SessionTreeAgent): string {

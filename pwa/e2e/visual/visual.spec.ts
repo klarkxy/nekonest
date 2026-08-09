@@ -100,14 +100,14 @@ test.describe('390px primary visual matrix', () => {
     await capture(page, 'device-full-tree.png')
   })
 
-  test('device harness controls survive collapse and start the matching local draft', async ({ page, request }) => {
+  test('only available harness controls survive collapse and start the matching local draft', async ({ page, request }) => {
     await openScenario(page, request, 'device-full', devicePath)
     const project = page.locator('.project-group').filter({ hasText: 'nekonest' }).first()
     const projectHeader = project.locator('.project-header')
     const codexStart = project.getByRole('button', { name: '使用 Codex 在“nekonest”里新建线团' })
     const claudeStart = project.getByRole('button', { name: '使用 Claude Code 在“nekonest”里新建线团' })
     const kimiStart = project.getByRole('button', { name: '使用 Kimi CLI 在“nekonest”里新建线团' })
-    const kiloStart = project.getByRole('button', { name: /Kilo：不可用/ })
+    const kiloGroup = project.locator('.agent-group').filter({ hasText: 'Kilo' })
 
     await expect(codexStart).toBeVisible()
     await expect(claudeStart).toBeVisible()
@@ -115,9 +115,9 @@ test.describe('390px primary visual matrix', () => {
     await expect(
       project.locator('.agent-group').filter({ hasText: 'Kimi CLI' }).getByText('0 条线团')
     ).toBeVisible()
-    await expect(kiloStart).toBeVisible()
-    await expect(kiloStart).toBeDisabled()
-    await expect(project.getByText('ACP starter probe failed', { exact: true })).toBeVisible()
+    await expect(kiloGroup.locator('.agent-add-btn')).toHaveCount(0)
+    await expect(kiloGroup.getByText('1 条线团', { exact: true })).toBeVisible()
+    await expect(project.getByText('ACP starter probe failed', { exact: true })).toHaveCount(0)
 
     await page.getByLabel('猫娘', { exact: true }).selectOption('kimi_cli')
     await expect(page.locator('.project-group')).toHaveCount(2)

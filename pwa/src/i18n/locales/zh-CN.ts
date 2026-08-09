@@ -188,8 +188,6 @@ export default {
     newThreadTitle: '在“{project}”里新建 {agent} 线团',
     newThreadAria: '使用 {agent} 在“{project}”里新建线团',
     startOffline: '主机当前离线',
-    startCatalogUnavailable: '主机尚未报告该 harness 的新建能力',
-    startUnavailableDefault: '该 harness 没有可用的原生启动器',
     draftBadge: '草稿',
     draftSummary: '未发送的新线团'
   },
