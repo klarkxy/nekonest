@@ -378,11 +378,7 @@ func (c *Client) StartHeartbeat(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			msg := map[string]interface{}{
-				"type":      "heartbeat",
-				"device_id": c.deviceID,
-				"timestamp": time.Now().Unix(),
-			}
+			msg := c.heartbeatMessage(time.Now())
 			if err := c.Send(msg); err != nil {
 				log.Printf("[conn] heartbeat error: %v", err)
 			}
@@ -392,6 +388,20 @@ func (c *Client) StartHeartbeat(ctx context.Context) {
 		case <-c.closeCh:
 			return
 		}
+	}
+}
+
+func (c *Client) heartbeatMessage(now time.Time) map[string]interface{} {
+	c.mu.Lock()
+	deviceID := c.deviceID
+	transportMode := c.transportMode
+	c.mu.Unlock()
+	return map[string]interface{}{
+		"protocol_version": "1.1",
+		"transport_mode":   transportMode,
+		"type":             "heartbeat",
+		"device_id":        deviceID,
+		"timestamp":        now.Unix(),
 	}
 }
 

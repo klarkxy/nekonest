@@ -115,6 +115,19 @@ func TestConnectUsesConfiguredModeAndRejectsAuthModeMismatch(t *testing.T) {
 	}
 }
 
+func TestHeartbeatCarriesNegotiatedTransportEnvelope(t *testing.T) {
+	now := time.Unix(1234, 0)
+	client := NewClient(context.Background(), "ws://example.invalid", "device-a", "token", "open")
+
+	frame := client.heartbeatMessage(now)
+	if frame["protocol_version"] != "1.1" || frame["transport_mode"] != "open" {
+		t.Fatalf("heartbeat envelope = %#v", frame)
+	}
+	if frame["type"] != "heartbeat" || frame["device_id"] != "device-a" || frame["timestamp"] != int64(1234) {
+		t.Fatalf("heartbeat identity = %#v", frame)
+	}
+}
+
 func TestConnectDiscardsSocketWhenServerURLChangesDuringAuth(t *testing.T) {
 	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	authStarted := make(chan struct{})
