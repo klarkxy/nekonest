@@ -70,18 +70,22 @@ jobs:
             source/daemon/go.sum
 
       - name: Test Server
+        if: github.event_name != 'workflow_dispatch'
         working-directory: source/server
         run: go test -count=1 ./...
 
       - name: Vet Server
+        if: github.event_name != 'workflow_dispatch'
         working-directory: source/server
         run: go vet ./...
 
       - name: Test Daemon
+        if: github.event_name != 'workflow_dispatch'
         working-directory: source/daemon
         run: go test -count=1 ./...
 
       - name: Vet Daemon
+        if: github.event_name != 'workflow_dispatch'
         working-directory: source/daemon
         run: go vet ./...
 
@@ -102,10 +106,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Test PWA
+        if: github.event_name != 'workflow_dispatch'
         working-directory: source/pwa
         run: pnpm test
 
       - name: Type-check PWA
+        if: github.event_name != 'workflow_dispatch'
         working-directory: source/pwa
         run: pnpm type-check
 

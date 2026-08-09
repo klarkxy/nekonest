@@ -74,6 +74,11 @@ should link the README quick start and deploy docs (EN + ZH).
 To repair missing assets on an existing immutable tag, run **Release binaries**
 manually with the exact tag. The workflow checks out that tag's source but uses
 the automation from the selected workflow revision; it never moves the tag.
+Repair runs still validate version surfaces, build the tagged PWA and all five
+packages, execute same-architecture binary smoke checks, and publish checksums.
+They do not re-run an old tag's unit suites, whose runner assumptions may have
+drifted; the original tag acceptance remains authoritative. Normal tag-triggered
+runs always execute the full Server, Daemon, and PWA gates.
 
 ## 4. Production update and live acceptance
 

@@ -263,6 +263,10 @@ func randomHex(n int) (string, error) {
 }
 
 func sanitizeFilename(name string) string {
+	// Treat both wire-level path separators consistently. filepath.Base only
+	// recognizes the current OS separator, but upload names may come from a
+	// Windows phone/host while the Server runs on Linux (or vice versa).
+	name = strings.ReplaceAll(name, `\`, "/")
 	name = filepath.Base(name)
 	name = strings.ReplaceAll(name, "..", "")
 	name = strings.Map(func(r rune) rune {

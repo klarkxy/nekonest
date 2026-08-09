@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document direct installation from GitHub Release archives in both READMEs;
   Server packages include the matching PWA build.
 
+### Fixed
+
+- Normalize both slash styles before attachment filename sanitization so Linux
+  and Windows Servers derive the same safe basename from uploaded paths.
+
 ## [0.2.4] - 2026-08-09
 
 ### Added

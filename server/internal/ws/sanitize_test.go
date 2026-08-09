@@ -129,7 +129,8 @@ func TestSanitizeFilename(t *testing.T) {
 		in, want string
 	}{
 		{"../../etc/passwd", "passwd"},
-		// filepath.Base first → only last segment
+		{`..\..\Windows\system.ini`, "system.ini"},
+		// Both slash styles are path separators regardless of the Server OS.
 		{`a/b\c:d*e?.txt`, "c_d_e_.txt"},
 		{"  hi  ", "hi"},
 		{"", "."}, // filepath.Base("") == "."
