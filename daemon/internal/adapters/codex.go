@@ -33,6 +33,8 @@ type CodexAdapter struct {
 	watcherMu           sync.Mutex
 	watchers            map[string]*fsnotify.Watcher
 	lastPaths           map[string]string
+	discoveryCache      *fileDiscoveryCache[*SessionInfo]
+	attentionCache      *fileDiscoveryCache[*SessionInfo]
 	commander           *agentexec.CodexCommander
 	appServer           *agentexec.CodexAppServer
 	outputMu            sync.Mutex
@@ -58,6 +60,8 @@ func NewCodexAdapter() *CodexAdapter {
 		sessionsDir:        filepath.Join(home, ".codex", "sessions"),
 		watchers:           make(map[string]*fsnotify.Watcher),
 		lastPaths:          make(map[string]string),
+		discoveryCache:     newFileDiscoveryCache[*SessionInfo](),
+		attentionCache:     newFileDiscoveryCache[*SessionInfo](),
 		commander:          agentexec.NewCodexCommander(),
 		appServer:          agentexec.NewCodexAppServer(),
 		appOutput:          make(map[string]string),
@@ -114,7 +118,7 @@ func (a *CodexAdapter) AppServerHealthy() bool {
 
 // ApplyAppServerOverlay merges live app-server turn/approval state onto a discovered session.
 func (a *CodexAdapter) ApplyAppServerOverlay(s *SessionInfo) {
-	if s == nil || a.appServer == nil || !a.appServer.Initialized() {
+	if s == nil || a.appServer == nil {
 		return
 	}
 	if input := a.appServer.PendingUserInputFor(s.ID); input != nil {
@@ -215,6 +219,9 @@ func (a *CodexAdapter) Close() error {
 // Discover finds all Codex sessions.
 func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 	var sessions []*SessionInfo
+	now := time.Now()
+	cutoff := recentSessionCutoff(now)
+	keep := make(map[string]struct{})
 
 	// Current Codex layout:
 	// ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
@@ -232,8 +239,24 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 		if info.IsDir() || !strings.HasPrefix(info.Name(), "rollout-") || !strings.HasSuffix(info.Name(), ".jsonl") {
 			return nil
 		}
+		oldFile := info.ModTime().Before(cutoff)
+		var session *SessionInfo
+		var parseErr error
+		if oldFile {
+			cached, cachedErr, ok := a.discoveryCache.peek(path, info)
+			if ok {
+				if cachedErr != nil || cached == nil {
+					return nil
+				}
+				session, parseErr = a.parseRolloutFile(path, info)
+			} else {
+				session, parseErr = a.probeOldRolloutAttention(path, info)
+			}
+		} else {
+			keep[normalizedDiscoveryPath(path)] = struct{}{}
+			session, parseErr = a.parseRolloutFile(path, info)
+		}
 
-		session, parseErr := a.parseRolloutFile(path, info)
 		if parseErr != nil {
 			if errors.Is(parseErr, errCodexSubagentRollout) {
 				return nil
@@ -242,9 +265,14 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 			return nil
 		}
 
-		// 7-day window so phone sees historical sessions too
-		if time.Since(session.LastActivity) > 7*24*time.Hour {
+		// Live app-server state is authoritative even when the native rollout is
+		// old. Apply it before visibility so a cold-start active thread surfaces.
+		a.ApplyAppServerOverlay(session)
+		if !sessionIsVisible(session, now) {
 			return nil
+		}
+		if oldFile {
+			keep[normalizedDiscoveryPath(path)] = struct{}{}
 		}
 
 		// One logical session may have multiple rollout files; keep the newest.
@@ -256,6 +284,8 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk error: %w", err)
 	}
+	a.discoveryCache.prune(keep)
+	a.attentionCache.pruneMissing()
 
 	for _, s := range byID {
 		a.watcherMu.Lock()
@@ -264,6 +294,121 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 		sessions = append(sessions, s)
 	}
 	return sessions, nil
+}
+
+func (a *CodexAdapter) probeOldRolloutAttention(path string, info os.FileInfo) (*SessionInfo, error) {
+	cached, err := a.attentionCache.load(path, info, func() (*SessionInfo, error) {
+		probe, probeErr := readJSONLAttentionProbe(path, info)
+		if probeErr != nil {
+			return nil, probeErr
+		}
+		return parseCodexAttentionProbe(path, info, probe)
+	})
+	if err != nil || cached == nil {
+		return nil, err
+	}
+	session := *cached
+	if cached.PendingApproval != nil {
+		pending := *cached.PendingApproval
+		session.PendingApproval = &pending
+	}
+	if a.commander != nil && a.commander.IsSessionRunning(session.ID) {
+		session.Status = StatusRunning
+	}
+	return &session, nil
+}
+
+func parseCodexAttentionProbe(path string, info os.FileInfo, probe jsonlAttentionProbe) (*SessionInfo, error) {
+	sessionID := codexSessionIDFromFilename(filepath.Base(path))
+	projectDir := ""
+	lastTime := info.ModTime()
+	for _, line := range probe.head {
+		var msg map[string]interface{}
+		if json.Unmarshal(line, &msg) != nil {
+			continue
+		}
+		payload, _ := msg["payload"].(map[string]interface{})
+		if eventType, _ := msg["type"].(string); eventType == "session_meta" && payload != nil {
+			if isCodexSubagentSessionMeta(payload) {
+				return nil, errCodexSubagentRollout
+			}
+			if id, _ := payload["id"].(string); id != "" {
+				sessionID = id
+			} else if id, _ := payload["session_id"].(string); id != "" {
+				sessionID = id
+			}
+			for _, key := range []string{"cwd", "workdir", "working_directory", "dir"} {
+				if value, _ := payload[key].(string); value != "" {
+					projectDir = value
+					break
+				}
+			}
+			break
+		}
+	}
+	if sessionID == "" {
+		sessionID = filepath.Base(filepath.Dir(path))
+	}
+	if sessionID == "" || sessionID == "." || sessionID == string(filepath.Separator) {
+		return nil, fmt.Errorf("could not determine session id for %s", path)
+	}
+
+	status := StatusIdle
+	var pending *ApprovalInfo
+	lastMessage := ""
+	lines := probe.tail
+	if probe.whole {
+		lines = probe.head
+	}
+	for index, line := range lines {
+		var msg map[string]interface{}
+		if json.Unmarshal(line, &msg) != nil {
+			continue
+		}
+		if eventTime := parseCodexTimestamp(msg["timestamp"]); eventTime.After(lastTime) {
+			lastTime = eventTime
+		}
+		eventType, _ := msg["type"].(string)
+		payload, _ := msg["payload"].(map[string]interface{})
+		payloadType := ""
+		if payload != nil {
+			payloadType, _ = payload["type"].(string)
+			if payloadType == "agent_message" {
+				if message, _ := payload["message"].(string); message != "" {
+					lastMessage = truncate(message, 120)
+				}
+			}
+		}
+		switch {
+		case payloadType == "approval_request" || eventType == "approval_request":
+			values := payload
+			if values == nil {
+				values = msg
+			}
+			toolName, _ := values["tool_name"].(string)
+			description, _ := values["description"].(string)
+			if toolName == "" {
+				toolName = "unknown_tool"
+			}
+			if description == "" {
+				description = "Codex tool call"
+			}
+			status = StatusWaitingApproval
+			pending = &ApprovalInfo{
+				ID:       fmt.Sprintf("codex_approval_%s_probe_%d", sessionID, index),
+				ToolName: toolName, Description: description,
+			}
+		case payloadType == "approval_response" || eventType == "approval_response" ||
+			payloadType == "turn_aborted" || payloadType == "task_complete":
+			status = StatusIdle
+			pending = nil
+		}
+	}
+	return &SessionInfo{
+		ID: sessionID, AgentType: AgentCodex, Status: status,
+		Summary: lastMessage, LastActivity: lastTime, SessionPath: path,
+		ProjectDir: projectDir, PendingApproval: pending,
+	}, nil
 }
 
 // OwnsSession checks the Codex rollout store for an exact session ID.
@@ -456,6 +601,28 @@ func (a *CodexAdapter) resolveSessionPath(sessionID string) string {
 }
 
 func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*SessionInfo, error) {
+	cached, err := a.discoveryCache.load(path, info, func() (*SessionInfo, error) {
+		return a.parseRolloutFileUncached(path, info)
+	})
+	if err != nil || cached == nil {
+		return nil, err
+	}
+	session := *cached
+	if cached.PendingApproval != nil {
+		pending := *cached.PendingApproval
+		session.PendingApproval = &pending
+	}
+	commanderRunning := a.commander != nil && a.commander.IsSessionRunning(session.ID)
+	if commanderRunning {
+		session.Status = StatusRunning
+	} else if session.Status == StatusRunning && time.Since(session.LastActivity) > codexOrphanTaskTimeout {
+		// Re-evaluate the wall-clock-dependent orphan rule on cache hits.
+		session.Status = StatusIdle
+	}
+	return &session, nil
+}
+
+func (a *CodexAdapter) parseRolloutFileUncached(path string, info os.FileInfo) (*SessionInfo, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err

@@ -179,7 +179,7 @@ Priority tags:
 | D2 | Single-instance lock per config identity | MUST | On every supported OS |
 | D3 | **Windows + Linux** first-class hosts | MUST | Same product paths; OS-specific process kill correct on each. macOS LATER |
 | D4 | Adapter registry; missing CLI non-fatal | MUST | |
-| D5 | Periodic discover + ownership routing | MUST | Empty transcript ≠ ownership |
+| D5 | Completion-based 30s discover + ownership routing | MUST | Phone-visible list is the last 7 days by activity; running/waiting threads override age; empty transcript ≠ ownership |
 | D6 | History import with stable ids; exclude subagents/sidechains/primers | MUST | |
 | D7 | Headless resume/send via each agent’s supported path | MUST | Codex prefers app-server; others CLI resume |
 | D8 | Prompt journal fail-closed; at-most-once with `client_msg_id` | MUST | Exact sealed envelope retry; never re-encrypt as same command |
@@ -270,7 +270,7 @@ Attachment tiers for non-Codex: `native_image` \| `path_best_effort` \| `unsuppo
 
 | ID | Feature | Priority | Rules |
 |---|---|---|---|
-| L1 | Resume existing native threads | MUST | Core path for all five agents; native id preserved |
+| L1 | Resume existing native threads | MUST | Core path for all five agents; native id preserved. The phone catalog is a fixed 7-day recent view; hiding never deletes native data. Old-only projects disappear from the picker and reappear after host-side activity. An old deep link shows hidden/removed state and does not scan history. |
 | L2 | **Start thread from phone** | MUST | Start with an **agent-scoped phone-local draft**. Its first prompt invokes the selected installed/probed native starter so that agent's **native store gains the thread** |
 | L3 | Directory picker limited to the daemon's **current union of discovered** native project directories | MUST | No arbitrary filesystem walk; no operator path typing; reject vanished dirs, `..`, symlink escape |
 | L4 | Refuse start when the selected agent's native starter is missing/unprobed, `spawn=false`, or directory is not in the current discovered union | MUST | Clear error → `thread_failed` before spawn when possible |
@@ -467,7 +467,7 @@ Thread
 |---|---|
 | Prompt ack visibility | User sees terminal failure within seconds of daemon decision |
 | History first paint | Usable window (order of tens of messages) without blocking forever on full native import |
-| Discover cadence | Fast enough that new host threads appear on phone within ~30s under normal load (exact number tunable) |
+| Discover cadence | New host threads appear on phone within ~30s under normal load; periodic scans wait 30s after the prior scan completes, while reconnect/control/start events may force an immediate scan |
 | Mobile battery | No hot-loop polling; WS + push |
 | Binary size / deps | Server and daemon remain small Go deployments; PWA standard pnpm build |
 | Concurrency | One writer per WS; no lock across slow IO (existing engineering invariant) |

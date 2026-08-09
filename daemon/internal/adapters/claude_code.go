@@ -21,21 +21,25 @@ var errClaudeSubagentTranscript = errors.New("claude subagent transcript")
 
 // ClaudeCodeAdapter discovers and monitors Claude Code sessions.
 type ClaudeCodeAdapter struct {
-	projectsDir string
-	watcherMu   sync.Mutex
-	watchers    map[string]*fsnotify.Watcher
-	lastPaths   map[string]string // sessionID -> jsonl path
-	commander   *agentexec.ClaudeCommander
+	projectsDir    string
+	watcherMu      sync.Mutex
+	watchers       map[string]*fsnotify.Watcher
+	lastPaths      map[string]string // sessionID -> jsonl path
+	discoveryCache *fileDiscoveryCache[*SessionInfo]
+	attentionCache *fileDiscoveryCache[*SessionInfo]
+	commander      *agentexec.ClaudeCommander
 }
 
 // NewClaudeCodeAdapter creates a new Claude Code adapter.
 func NewClaudeCodeAdapter() *ClaudeCodeAdapter {
 	home, _ := os.UserHomeDir()
 	return &ClaudeCodeAdapter{
-		projectsDir: filepath.Join(home, ".claude", "projects"),
-		watchers:    make(map[string]*fsnotify.Watcher),
-		lastPaths:   make(map[string]string),
-		commander:   agentexec.NewClaudeCommander(),
+		projectsDir:    filepath.Join(home, ".claude", "projects"),
+		watchers:       make(map[string]*fsnotify.Watcher),
+		lastPaths:      make(map[string]string),
+		discoveryCache: newFileDiscoveryCache[*SessionInfo](),
+		attentionCache: newFileDiscoveryCache[*SessionInfo](),
+		commander:      agentexec.NewClaudeCommander(),
 	}
 }
 
@@ -85,6 +89,9 @@ func (a *ClaudeCodeAdapter) Close() error {
 // Discover finds all Claude Code sessions by scanning the projects directory.
 func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 	var sessions []*SessionInfo
+	now := time.Now()
+	cutoff := recentSessionCutoff(now)
+	keep := make(map[string]struct{})
 
 	// Claude Code stores sessions in:
 	// ~/.claude/projects/<encoded-path>/*.jsonl
@@ -105,8 +112,24 @@ func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 		if !strings.HasSuffix(info.Name(), ".jsonl") {
 			return nil
 		}
+		oldFile := info.ModTime().Before(cutoff)
+		var session *SessionInfo
+		var parseErr error
+		if oldFile {
+			cached, cachedErr, ok := a.discoveryCache.peek(path, info)
+			if ok {
+				if cachedErr != nil || cached == nil {
+					return nil
+				}
+				session, parseErr = a.parseSessionFile(path, info)
+			} else {
+				session, parseErr = a.probeOldSessionAttention(path, info)
+			}
+		} else {
+			keep[normalizedDiscoveryPath(path)] = struct{}{}
+			session, parseErr = a.parseSessionFile(path, info)
+		}
 
-		session, parseErr := a.parseSessionFile(path, info)
 		if parseErr != nil {
 			if errors.Is(parseErr, errClaudeSubagentTranscript) {
 				return nil
@@ -115,9 +138,11 @@ func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 			return nil
 		}
 
-		// Include recent + historical (7 days) so phone can resume older chats
-		if time.Since(session.LastActivity) > 7*24*time.Hour {
+		if !sessionIsVisible(session, now) {
 			return nil
+		}
+		if oldFile {
+			keep[normalizedDiscoveryPath(path)] = struct{}{}
 		}
 
 		a.watcherMu.Lock()
@@ -129,8 +154,114 @@ func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk error: %w", err)
 	}
+	a.discoveryCache.prune(keep)
+	a.attentionCache.pruneMissing()
 
 	return sessions, nil
+}
+
+func (a *ClaudeCodeAdapter) probeOldSessionAttention(path string, info os.FileInfo) (*SessionInfo, error) {
+	cached, err := a.attentionCache.load(path, info, func() (*SessionInfo, error) {
+		probe, probeErr := readJSONLAttentionProbe(path, info)
+		if probeErr != nil {
+			return nil, probeErr
+		}
+		return parseClaudeAttentionProbe(path, info, probe)
+	})
+	if err != nil || cached == nil {
+		return nil, err
+	}
+	session := *cached
+	if cached.PendingApproval != nil {
+		pending := *cached.PendingApproval
+		session.PendingApproval = &pending
+	}
+	applyClaudeDynamicStatus(&session, a.commander)
+	return &session, nil
+}
+
+func parseClaudeAttentionProbe(path string, info os.FileInfo, probe jsonlAttentionProbe) (*SessionInfo, error) {
+	projectDir := ""
+	for index, line := range probe.head {
+		var msg map[string]interface{}
+		if json.Unmarshal(line, &msg) != nil {
+			continue
+		}
+		if index == 0 && isClaudeSubagentRecord(msg) {
+			return nil, errClaudeSubagentTranscript
+		}
+		if cwd, _ := msg["cwd"].(string); cwd != "" {
+			projectDir = cwd
+			break
+		}
+	}
+	if projectDir == "" {
+		projectDir = decodeClaudeProjectDir(filepath.Base(filepath.Dir(path)))
+	}
+
+	status := StatusIdle
+	var pending *ApprovalInfo
+	lastAssistantMessage := ""
+	lastTime := info.ModTime()
+	lines := probe.tail
+	if probe.whole {
+		lines = probe.head
+	}
+	for index, line := range lines {
+		var msg map[string]interface{}
+		if json.Unmarshal(line, &msg) != nil {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		msgType, _ := msg["type"].(string)
+		contentSource := msg
+		if nested, ok := msg["message"].(map[string]interface{}); ok {
+			if nestedRole, _ := nested["role"].(string); nestedRole != "" {
+				role = nestedRole
+			}
+			if _, hasContent := nested["content"]; hasContent {
+				contentSource = nested
+			}
+		}
+		if role == "assistant" || msgType == "assistant" {
+			if content := extractContent(contentSource); content != "" {
+				lastAssistantMessage = truncate(content, 120)
+			}
+		}
+		if msgType == "tool_use" || hasToolUse(contentSource) || hasToolUse(msg) {
+			toolName := extractToolName(contentSource)
+			if toolName == "" {
+				toolName = extractToolName(msg)
+			}
+			if toolName != "" && !isReadOnlyTool(toolName) {
+				description := extractToolDescription(contentSource)
+				if description == "" || description == "Tool call" {
+					description = extractToolDescription(msg)
+				}
+				status = StatusWaitingApproval
+				pending = &ApprovalInfo{
+					ID:       fmt.Sprintf("approval_%s_probe_%d", filepath.Base(path), index),
+					ToolName: toolName, Description: description,
+				}
+			}
+		}
+		if msgType == "tool_result" || role == "tool" || hasToolResult(contentSource) || hasToolResult(msg) {
+			status = StatusIdle
+			pending = nil
+		}
+		if timestamp, ok := parseMessageTime(msg["timestamp"]); ok && timestamp.After(lastTime) {
+			lastTime = timestamp
+		} else if created, ok := parseMessageTime(msg["created"]); ok && created.After(lastTime) {
+			lastTime = created
+		}
+	}
+
+	return &SessionInfo{
+		ID:        strings.TrimSuffix(filepath.Base(path), ".jsonl"),
+		AgentType: AgentClaudeCode, Status: status, Summary: lastAssistantMessage,
+		LastActivity: lastTime, SessionPath: path, ProjectDir: projectDir,
+		PendingApproval: pending,
+	}, nil
 }
 
 // OwnsSession checks the Claude transcript store for an exact session ID.
@@ -255,6 +386,37 @@ func (a *ClaudeCodeAdapter) resolveSessionPath(sessionID string) string {
 }
 
 func (a *ClaudeCodeAdapter) parseSessionFile(path string, info os.FileInfo) (*SessionInfo, error) {
+	cached, err := a.discoveryCache.load(path, info, func() (*SessionInfo, error) {
+		return a.parseSessionFileUncached(path, info)
+	})
+	if err != nil || cached == nil {
+		return nil, err
+	}
+	session := *cached
+	if cached.PendingApproval != nil {
+		pending := *cached.PendingApproval
+		session.PendingApproval = &pending
+	}
+	applyClaudeDynamicStatus(&session, a.commander)
+	return &session, nil
+}
+
+func applyClaudeDynamicStatus(session *SessionInfo, commander *agentexec.ClaudeCommander) {
+	if session == nil {
+		return
+	}
+	if session.PendingApproval != nil {
+		session.Status = StatusWaitingApproval
+	} else if commander != nil && commander.IsSessionRunning(session.ID) {
+		session.Status = StatusRunning
+	} else if time.Since(session.LastActivity) < time.Minute {
+		session.Status = StatusRunning
+	} else {
+		session.Status = StatusIdle
+	}
+}
+
+func (a *ClaudeCodeAdapter) parseSessionFileUncached(path string, info os.FileInfo) (*SessionInfo, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err

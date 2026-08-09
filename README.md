@@ -47,7 +47,7 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 
 ## Features
 
-- **Native thread discovery** — browse `directory → agent → thread`; orphans land in **未分类** (Uncategorized).
+- **Recent native thread discovery** — browse the last 7 days of activity as `directory → agent → thread`; actionable running/waiting threads stay visible, orphans land in **未分类** (Uncategorized), and hidden old threads remain untouched in their native stores.
 - **Reliable resume** — independent accepted / committed / failed delivery states; transport success is not agent acceptance.
 - **History + streaming** — merge native history, server durability, and live output with stable message ids; CLI stderr stays diagnostic.
 - **Attachments** — phone upload → daemon per-run temp dir → agent-specific wiring (max 5 files, 4 MB each).

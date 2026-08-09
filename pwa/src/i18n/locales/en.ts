@@ -194,6 +194,11 @@ export default {
     interruptAria: 'Interrupt current task',
     messagesAria: 'Thread messages',
     importing: 'Syncing history from the PC…',
+    catalogLoadingTitle: 'Loading recent threads…',
+    catalogLoadingHint: 'Waiting for the host to confirm this device’s thread catalog.',
+    hiddenOrRemovedTitle: 'Thread hidden or unavailable',
+    hiddenOrRemovedHint:
+      'This thread is not in the last 7 days, or it was removed from the host’s native store. Use it again on the computer and it will reappear here.',
     emptyTitle: 'This thread is empty',
     emptyHint: 'We try to sync PC history on open. You can also send a message to continue.',
     draftTag: 'New',

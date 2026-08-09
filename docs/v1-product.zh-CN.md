@@ -177,7 +177,7 @@ v1.0.0 = **单人运维自托管窝**可日常在路上使用的功能完备版�
 | D2 | 每配置身份单实例锁 | MUST | 所有支持 OS |
 | D3 | **Windows + Linux** 一等公民主机 | MUST | 产品路径一致；各 OS 进程杀树正确。macOS 为 LATER |
 | D4 | 适配器注册表；缺 CLI 非致命 | MUST | |
-| D5 | 周期发现 + 所有权路由 | MUST | 空 transcript ≠ 所有权 |
+| D5 | 完成后等待 30 秒的周期发现 + 所有权路由 | MUST | 手机仅显示按活动时间计算的最近 7 天；运行/等待线程不受时间限制；空 transcript ≠ 所有权 |
 | D6 | 历史导入稳定 id；排除 subagent/sidechain/primer | MUST | |
 | D7 | 经各 agent 支持路径的 headless resume/send | MUST | Codex 优先 app-server；其余 CLI resume |
 | D8 | Prompt 日志 fail-closed；`client_msg_id` 至多一次 | MUST | 密封信封精确重试；不得把重加密当作同一命令 |
@@ -268,7 +268,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 
 | ID | 功能 | 优先级 | 规则 |
 |---|---|---|---|
-| L1 | 续接已有原生线程 | MUST | 五个 agent 的核心路径；保留原生 id |
+| L1 | 续接已有原生线程 | MUST | 五个 agent 的核心路径；保留原生 id。手机目录固定为最近 7 天视图；隐藏不删除原生数据。只有旧线程的项目从选择器隐藏，主机端再次活动后恢复。旧深链显示已隐藏/移除且不扫描历史。 |
 | L2 | **从手机开线程** | MUST | 先创建 **agent 范围的手机本地草稿**。发送首条提示词时才调用所选、已安装并探测通过的原生 starter，使该 agent 的**原生 store 出现线程** |
 | L3 | 目录选择限于 daemon 发现得到的**当前已发现原生项目目录并集** | MUST | 禁止任意扫盘；禁止运维手输路径；拒绝消失目录、`..`、符号链接逃逸 |
 | L4 | 所选 agent 的原生 starter 缺失/未探测通过、`spawn=false`、或目录不在当前已发现并集时拒绝 | MUST | 错误清晰；可能时在 spawn 前 → `thread_failed` |
@@ -465,7 +465,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 |---|---|
 | Prompt 结果可见性 | daemon 决策后数秒内用户可见终态失败 |
 | 历史首屏 | 数十条量级可用窗口，不为全量原生导入永久卡住 |
-| 发现节奏 | 正常负载下新主机线程约 30s 内出现在手机（可调） |
+| 发现节奏 | 正常负载下新主机线程约 30s 内出现在手机；每轮完成后再等待 30s，重连/控制/开线程事件可强制立即发现 |
 | 手机耗电 | 无热循环轮询；WS + 推送 |
 | 体积/依赖 | server/daemon 保持精简 Go 部署；PWA 标准 pnpm 构建 |
 | 并发 | 每 WS 单写者；慢 IO 不持锁（既有工程不变量） |

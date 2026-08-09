@@ -108,7 +108,7 @@ Add-MpPreference -ExclusionProcess "nekonest-daemon.exe"
 ## 5. 日常用法
 
 1. 在 PC 上正常使用 Claude Code / Codex / Kilo / Kimi CLI / Grok Build，产生线程。  
-2. Daemon 按短间隔 Discover 并上报会话列表。  
+2. Daemon 上报最近 7 天有活动的原生线程，运行/等待线程始终可见；常规 Discover 在上一轮完成约 30 秒后执行。
 3. 手机：按 **目录 → 智能体 → 线程** 打开，发送提示词或附件。  
 4. 无可识别项目目录的线程进入「**未分类**」。  
 5. 非交互 CLI 无法承载的审批须在 **PC 终端**完成。  

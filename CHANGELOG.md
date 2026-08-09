@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Limit all five native thread catalogs to a shared 7-day activity window while
+  preserving ownership and native data, keep actionable running/waiting threads
+  visible, and give old deep links an explicit hidden/removed state.
+- Cache compact file discovery metadata by path/size/mtime and schedule daemon
+  discovery 30 seconds after each completed scan, avoiding repeated transcript
+  parsing and ticker catch-up under large native histories.
 - Make thread creation fail closed with a durable operation journal and require
   positive native-store ownership before reporting a new thread as owned.
 - Keep sealed prompt commands opaque on the Server, persist and replay their

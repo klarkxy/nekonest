@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nekonest/daemon/internal/agentexec"
 )
 
 func TestCodexAppServerOutputSinkAccumulatesStableMessage(t *testing.T) {
@@ -327,5 +329,81 @@ func TestCodexDiscoverExcludesSubagents(t *testing.T) {
 	}
 	if _, ok := adapter.lastPaths[structuredSourceID]; ok {
 		t.Fatal("structured-source subagent leaked into lastPaths")
+	}
+}
+
+func TestCodexDiscoverColdStartKeepsOldAttentionSessions(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
+	approvalID := "019fa2b8-1111-7111-8111-111111111111"
+	runningID := "019fa2b8-2222-7222-8222-222222222222"
+	userInputID := "019fa2b8-3333-7333-8333-333333333333"
+
+	approvalPath := writeCodexRolloutAt(t, dir, approvalID, map[string]interface{}{
+		"thread_source": "user", "cwd": `D:\old-approval`,
+	}, old)
+	file, err := os.OpenFile(approvalPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(file).Encode(map[string]interface{}{
+		"timestamp": old.Format(time.RFC3339Nano),
+		"type":      "event_msg",
+		"payload": map[string]interface{}{
+			"type": "approval_request", "tool_name": "shell", "description": "old approval",
+		},
+	}); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(approvalPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	writeCodexRolloutAt(t, dir, runningID, map[string]interface{}{
+		"thread_source": "user", "cwd": `D:\old-running`,
+	}, old)
+	writeCodexRolloutAt(t, dir, userInputID, map[string]interface{}{
+		"thread_source": "user", "cwd": `D:\old-input`,
+	}, old)
+
+	adapter := NewCodexAdapter()
+	adapter.sessionsDir = dir
+	adapter.appServer.RegisterThreadIDs(runningID, runningID, runningID)
+	adapter.appServer.SetActiveTurn(runningID, "turn-running")
+	adapter.appServer.RegisterThreadIDs(userInputID, userInputID, userInputID)
+	if pending := adapter.appServer.TrackUserInput(agentexec.ServerRequest{
+		ID: "input-1", Method: "item/tool/requestUserInput",
+		Params: json.RawMessage(`{"threadId":"` + userInputID + `","turnId":"turn-input","itemId":"item-input","questions":[{"id":"choice","header":"Mode","question":"Pick one","options":[{"label":"Safe","description":"recommended"}]}]}`),
+	}); pending == nil {
+		t.Fatal("failed to register pending user input")
+	}
+
+	sessions, err := adapter.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := make(map[string]AgentStatus, len(sessions))
+	for _, session := range sessions {
+		statuses[session.ID] = session.Status
+	}
+	if statuses[approvalID] != StatusWaitingApproval ||
+		statuses[runningID] != StatusRunning ||
+		statuses[userInputID] != StatusWaitingUser {
+		t.Fatalf("cold-start attention statuses = %#v", statuses)
+	}
+	_, _, entries := adapter.attentionCache.stats()
+	if entries != 3 {
+		t.Fatalf("attention cache entries = %d, want 3", entries)
+	}
+	beforeHits, _, _ := adapter.attentionCache.stats()
+	if _, err := adapter.Discover(); err != nil {
+		t.Fatal(err)
+	}
+	afterHits, _, _ := adapter.attentionCache.stats()
+	if afterHits-beforeHits != 3 {
+		t.Fatalf("second discovery attention cache hits = %d, want 3", afterHits-beforeHits)
 	}
 }

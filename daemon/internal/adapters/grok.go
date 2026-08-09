@@ -23,13 +23,20 @@ type grokSessionRecord struct {
 	projectDir string
 }
 
+type grokDiscoveryResult struct {
+	session SessionInfo
+	record  grokSessionRecord
+}
+
 // GrokBuildAdapter discovers and resumes local Grok Build sessions.
 type GrokBuildAdapter struct {
-	sessionsDir string
-	mu          sync.RWMutex
-	records     map[string]grokSessionRecord
-	commander   *agentexec.GrokCommander
-	watches     pollWatchRegistry
+	sessionsDir  string
+	mu           sync.RWMutex
+	records      map[string]grokSessionRecord
+	summaryCache *fileDiscoveryCache[grokDiscoveryResult]
+	markerCache  *fileDiscoveryCache[[]string]
+	commander    *agentexec.GrokCommander
+	watches      pollWatchRegistry
 }
 
 // NewGrokBuildAdapter creates a Grok Build adapter using the local session store.
@@ -40,9 +47,11 @@ func NewGrokBuildAdapter() *GrokBuildAdapter {
 		grokHome = filepath.Join(home, ".grok")
 	}
 	return &GrokBuildAdapter{
-		sessionsDir: filepath.Join(grokHome, "sessions"),
-		records:     make(map[string]grokSessionRecord),
-		commander:   agentexec.NewGrokCommander(),
+		sessionsDir:  filepath.Join(grokHome, "sessions"),
+		records:      make(map[string]grokSessionRecord),
+		summaryCache: newFileDiscoveryCache[grokDiscoveryResult](),
+		markerCache:  newFileDiscoveryCache[[]string](),
+		commander:    agentexec.NewGrokCommander(),
 	}
 }
 
@@ -84,7 +93,9 @@ func (a *GrokBuildAdapter) Discover() ([]*SessionInfo, error) {
 		return nil, nil
 	}
 
-	subagentIDs := discoverGrokSubagentIDs(a.sessionsDir)
+	now := time.Now()
+	cutoff := recentSessionCutoff(now)
+	keep := make(map[string]struct{})
 	type candidate struct {
 		session *SessionInfo
 		record  grokSessionRecord
@@ -108,11 +119,15 @@ func (a *GrokBuildAdapter) Discover() ([]*SessionInfo, error) {
 		if err != nil {
 			return nil
 		}
+		if info.ModTime().Before(cutoff) {
+			return nil
+		}
+		keep[normalizedDiscoveryPath(path)] = struct{}{}
 		session, record, err := a.parseSummary(path, info.ModTime())
 		if err != nil || session == nil {
 			return nil
 		}
-		if _, hidden := subagentIDs[record.nativeID]; hidden {
+		if !sessionIsVisible(session, now) {
 			return nil
 		}
 		if previous, exists := candidates[record.nativeID]; exists &&
@@ -125,10 +140,19 @@ func (a *GrokBuildAdapter) Discover() ([]*SessionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk grok sessions: %w", err)
 	}
+	a.summaryCache.prune(keep)
+	requiredIDs := make(map[string]struct{}, len(candidates))
+	for nativeID := range candidates {
+		requiredIDs[nativeID] = struct{}{}
+	}
+	subagentIDs := a.discoverGrokSubagentIDs(a.sessionsDir, requiredIDs)
 
 	records := make(map[string]grokSessionRecord, len(candidates))
 	sessions := make([]*SessionInfo, 0, len(candidates))
 	for nativeID, item := range candidates {
+		if _, hidden := subagentIDs[nativeID]; hidden {
+			continue
+		}
 		records[nativeID] = item.record
 		sessions = append(sessions, item.session)
 	}
@@ -145,34 +169,64 @@ func (a *GrokBuildAdapter) Discover() ([]*SessionInfo, error) {
 // a parent's subagents directory. Current Grok stores the child transcript as
 // a normal top-level session, so skipping nested directories alone is not
 // enough to keep implementation-detail sessions out of the phone UI.
-func discoverGrokSubagentIDs(root string) map[string]struct{} {
+func (a *GrokBuildAdapter) discoverGrokSubagentIDs(
+	root string,
+	requiredIDs map[string]struct{},
+) map[string]struct{} {
 	ids := make(map[string]struct{})
+	keep := make(map[string]struct{})
+	if len(requiredIDs) == 0 {
+		a.markerCache.prune(keep)
+		return ids
+	}
 	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() ||
 			!strings.EqualFold(entry.Name(), "meta.json") ||
 			!pathContainsSegment(filepath.Dir(path), "subagents") {
 			return nil
 		}
-		raw, err := os.ReadFile(path)
+		info, err := entry.Info()
 		if err != nil {
 			return nil
 		}
-		var document map[string]interface{}
-		if json.Unmarshal(raw, &document) != nil {
+		found, err := a.markerCache.load(path, info, func() ([]string, error) {
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil, readErr
+			}
+			var document map[string]interface{}
+			if unmarshalErr := json.Unmarshal(raw, &document); unmarshalErr != nil {
+				return nil, unmarshalErr
+			}
+			var result []string
+			for _, key := range []string{
+				"child_session_id",
+				"childSessionId",
+				"subagent_id",
+				"subagentId",
+			} {
+				if id := firstString(document, key); id != "" {
+					result = append(result, id)
+				}
+			}
+			return result, nil
+		})
+		if err != nil {
 			return nil
 		}
-		for _, key := range []string{
-			"child_session_id",
-			"childSessionId",
-			"subagent_id",
-			"subagentId",
-		} {
-			if id := firstString(document, key); id != "" {
+		required := false
+		for _, id := range found {
+			if _, ok := requiredIDs[id]; ok {
 				ids[id] = struct{}{}
+				required = true
 			}
+		}
+		if required {
+			keep[normalizedDiscoveryPath(path)] = struct{}{}
 		}
 		return nil
 	})
+	a.markerCache.prune(keep)
 	return ids
 }
 
@@ -198,6 +252,30 @@ func (a *GrokBuildAdapter) OwnsSession(sessionID string) bool {
 }
 
 func (a *GrokBuildAdapter) parseSummary(path string, fallback time.Time) (*SessionInfo, grokSessionRecord, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, grokSessionRecord{}, err
+	}
+	result, err := a.summaryCache.load(path, info, func() (grokDiscoveryResult, error) {
+		session, record, parseErr := parseGrokSummary(path, fallback)
+		if parseErr != nil || session == nil {
+			return grokDiscoveryResult{}, parseErr
+		}
+		return grokDiscoveryResult{session: *session, record: record}, nil
+	})
+	if err != nil {
+		return nil, grokSessionRecord{}, err
+	}
+	session := result.session
+	if time.Since(session.LastActivity) < time.Minute {
+		session.Status = StatusRunning
+	} else {
+		session.Status = StatusIdle
+	}
+	return &session, result.record, nil
+}
+
+func parseGrokSummary(path string, fallback time.Time) (*SessionInfo, grokSessionRecord, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, grokSessionRecord{}, err
@@ -663,6 +741,12 @@ func (a *GrokBuildAdapter) SetOutputSink(sink OutputSink) {
 }
 
 func (a *GrokBuildAdapter) resolveRecord(nativeID string) (grokSessionRecord, error) {
+	if _, hidden := a.discoverGrokSubagentIDs(
+		a.sessionsDir,
+		map[string]struct{}{nativeID: {}},
+	)[nativeID]; hidden {
+		return grokSessionRecord{}, fmt.Errorf("grok session not found: %s", nativeID)
+	}
 	a.mu.RLock()
 	record, ok := a.records[nativeID]
 	a.mu.RUnlock()
@@ -676,7 +760,35 @@ func (a *GrokBuildAdapter) resolveRecord(nativeID string) (grokSessionRecord, er
 	record, ok = a.records[nativeID]
 	a.mu.RUnlock()
 	if !ok {
-		return grokSessionRecord{}, fmt.Errorf("grok session not found: %s", nativeID)
+		var exact grokSessionRecord
+		_ = filepath.WalkDir(a.sessionsDir, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if entry.IsDir() {
+				if strings.EqualFold(entry.Name(), "subagents") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.EqualFold(entry.Name(), "summary.json") {
+				return nil
+			}
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				return nil
+			}
+			session, candidate, parseErr := a.parseSummary(path, info.ModTime())
+			if parseErr == nil && session != nil && candidate.nativeID == nativeID {
+				exact = candidate
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if exact.nativeID == "" {
+			return grokSessionRecord{}, fmt.Errorf("grok session not found: %s", nativeID)
+		}
+		return exact, nil
 	}
 	return record, nil
 }

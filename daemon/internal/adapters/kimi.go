@@ -42,6 +42,8 @@ type KimiCLIAdapter struct {
 	legacyHomes []string
 	mu          sync.RWMutex
 	records     map[string]kimiSessionRecord
+	stateCache  *fileDiscoveryCache[map[string]interface{}]
+	indexCache  *fileDiscoveryCache[map[string]kimiIndexRecord]
 	commander   *agentexec.KimiCommander
 	watches     pollWatchRegistry
 }
@@ -61,6 +63,8 @@ func NewKimiCLIAdapter() *KimiCLIAdapter {
 		currentHome: currentHome,
 		legacyHomes: legacyHomes,
 		records:     make(map[string]kimiSessionRecord),
+		stateCache:  newFileDiscoveryCache[map[string]interface{}](),
+		indexCache:  newFileDiscoveryCache[map[string]kimiIndexRecord](),
 		commander:   agentexec.NewKimiCommander(),
 	}
 }
@@ -98,13 +102,14 @@ func (a *KimiCLIAdapter) Close() error {
 }
 
 func (a *KimiCLIAdapter) Discover() ([]*SessionInfo, error) {
+	now := time.Now()
 	type candidate struct {
 		session *SessionInfo
 		record  kimiSessionRecord
 	}
 	candidates := make(map[string]candidate)
 	add := func(session *SessionInfo, record kimiSessionRecord) {
-		if session == nil || record.nativeID == "" {
+		if session == nil || record.nativeID == "" || !sessionIsVisible(session, now) {
 			return
 		}
 		if previous, exists := candidates[record.nativeID]; exists &&
@@ -114,11 +119,11 @@ func (a *KimiCLIAdapter) Discover() ([]*SessionInfo, error) {
 		candidates[record.nativeID] = candidate{session: session, record: record}
 	}
 
-	if err := a.discoverCurrent(add); err != nil {
+	if err := a.discoverCurrent(add, false); err != nil {
 		return nil, err
 	}
 	for _, root := range a.legacyHomes {
-		if err := a.discoverLegacy(root, add); err != nil {
+		if err := a.discoverLegacy(root, add, false); err != nil {
 			return nil, err
 		}
 	}
@@ -135,6 +140,9 @@ func (a *KimiCLIAdapter) Discover() ([]*SessionInfo, error) {
 	a.mu.Lock()
 	a.records = records
 	a.mu.Unlock()
+	a.stateCache.pruneMissing()
+	a.stateCache.pruneBefore(recentSessionCutoff(now))
+	a.indexCache.pruneMissing()
 	return sessions, nil
 }
 
@@ -148,8 +156,8 @@ func (a *KimiCLIAdapter) OwnsSession(sessionID string) bool {
 	return err == nil
 }
 
-func (a *KimiCLIAdapter) discoverCurrent(add func(*SessionInfo, kimiSessionRecord)) error {
-	index, err := readKimiIndex(filepath.Join(a.currentHome, "session_index.jsonl"))
+func (a *KimiCLIAdapter) discoverCurrent(add func(*SessionInfo, kimiSessionRecord), includeOld bool) error {
+	index, err := a.readKimiIndex(filepath.Join(a.currentHome, "session_index.jsonl"))
 	if err != nil {
 		return err
 	}
@@ -178,9 +186,25 @@ func (a *KimiCLIAdapter) discoverCurrent(add func(*SessionInfo, kimiSessionRecor
 		})) != 3 {
 			return nil
 		}
-		state, _ := readJSONMap(path)
 		sessionDir := filepath.Dir(path)
-		nativeID := firstString(state, "id", "session_id", "sessionId")
+		nativeID := filepath.Base(sessionDir)
+		item := index[nativeID]
+		if !includeOld {
+			candidateTime := latestFileTime(
+				path,
+				filepath.Join(sessionDir, "agents", "main", "wire.jsonl"),
+				filepath.Join(sessionDir, "context.jsonl"),
+				filepath.Join(sessionDir, "wire.jsonl"),
+			)
+			if item.updated.After(candidateTime) {
+				candidateTime = item.updated
+			}
+			if candidateTime.Before(recentSessionCutoff(time.Now())) {
+				return nil
+			}
+		}
+		state, _ := a.readKimiState(path)
+		nativeID = firstString(state, "id", "session_id", "sessionId")
 		if nativeID == "" {
 			nativeID = filepath.Base(sessionDir)
 		}
@@ -188,7 +212,7 @@ func (a *KimiCLIAdapter) discoverCurrent(add func(*SessionInfo, kimiSessionRecor
 			return nil
 		}
 		seen[nativeID] = true
-		item := index[nativeID]
+		item = index[nativeID]
 		session, record := kimiSessionFromState(nativeID, sessionDir, state, item)
 		add(session, record)
 		return nil
@@ -209,13 +233,27 @@ func (a *KimiCLIAdapter) discoverCurrent(add func(*SessionInfo, kimiSessionRecor
 		if st, err := os.Stat(sessionDir); err != nil || !st.IsDir() {
 			continue
 		}
+		if !includeOld {
+			candidateTime := latestFileTime(
+				filepath.Join(sessionDir, "state.json"),
+				filepath.Join(sessionDir, "agents", "main", "wire.jsonl"),
+				filepath.Join(sessionDir, "context.jsonl"),
+				filepath.Join(sessionDir, "wire.jsonl"),
+			)
+			if item.updated.After(candidateTime) {
+				candidateTime = item.updated
+			}
+			if candidateTime.Before(recentSessionCutoff(time.Now())) {
+				continue
+			}
+		}
 		session, record := kimiSessionFromState(nativeID, sessionDir, nil, item)
 		add(session, record)
 	}
 	return nil
 }
 
-func (a *KimiCLIAdapter) discoverLegacy(root string, add func(*SessionInfo, kimiSessionRecord)) error {
+func (a *KimiCLIAdapter) discoverLegacy(root string, add func(*SessionInfo, kimiSessionRecord), includeOld bool) error {
 	if strings.TrimSpace(root) == "" {
 		return nil
 	}
@@ -252,18 +290,22 @@ func (a *KimiCLIAdapter) discoverLegacy(root string, add func(*SessionInfo, kimi
 			}
 			nativeID := entry.Name()
 			sessionDir := filepath.Join(base, nativeID)
-			state, _ := readJSONMap(filepath.Join(sessionDir, "state.json"))
+			statePath := filepath.Join(sessionDir, "state.json")
+			historyPath := firstExistingFile(
+				filepath.Join(sessionDir, "context.jsonl"),
+				filepath.Join(sessionDir, "wire.jsonl"),
+			)
+			if !includeOld && latestFileTime(statePath, historyPath).Before(recentSessionCutoff(time.Now())) {
+				continue
+			}
+			state, _ := a.readKimiState(statePath)
 			if boolField(state, "archived", "is_archived", "isArchived") {
 				continue
 			}
 			title := firstString(state, "custom_title", "customTitle", "title", "name")
 			updated := firstTime(state, "updated_at", "updatedAt", "wire_mtime", "wireMtime", "created_at", "createdAt")
-			historyPath := firstExistingFile(
-				filepath.Join(sessionDir, "context.jsonl"),
-				filepath.Join(sessionDir, "wire.jsonl"),
-			)
 			if fileTime := latestFileTime(
-				filepath.Join(sessionDir, "state.json"),
+				statePath,
 				historyPath,
 			); fileTime.After(updated) {
 				updated = fileTime
@@ -716,9 +758,50 @@ func (a *KimiCLIAdapter) resolveRecord(nativeID string) (kimiSessionRecord, erro
 	record, ok = a.records[nativeID]
 	a.mu.RUnlock()
 	if !ok {
-		return kimiSessionRecord{}, fmt.Errorf("kimi session not found: %s", nativeID)
+		var exact kimiSessionRecord
+		capture := func(_ *SessionInfo, candidate kimiSessionRecord) {
+			if candidate.nativeID == nativeID {
+				exact = candidate
+			}
+		}
+		_ = a.discoverCurrent(capture, true)
+		if exact.nativeID == "" {
+			for _, root := range a.legacyHomes {
+				_ = a.discoverLegacy(root, capture, true)
+				if exact.nativeID != "" {
+					break
+				}
+			}
+		}
+		if exact.nativeID == "" {
+			return kimiSessionRecord{}, fmt.Errorf("kimi session not found: %s", nativeID)
+		}
+		return exact, nil
 	}
 	return record, nil
+}
+
+func (a *KimiCLIAdapter) readKimiState(path string) (map[string]interface{}, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	return a.stateCache.load(path, info, func() (map[string]interface{}, error) {
+		return readJSONMap(path)
+	})
+}
+
+func (a *KimiCLIAdapter) readKimiIndex(path string) (map[string]kimiIndexRecord, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return make(map[string]kimiIndexRecord), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return a.indexCache.load(path, info, func() (map[string]kimiIndexRecord, error) {
+		return readKimiIndex(path)
+	})
 }
 
 func (a *KimiCLIAdapter) resolvePublicSession(sessionID string) (*SessionInfo, error) {

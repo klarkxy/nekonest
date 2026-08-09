@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { tGlobal } from '@/i18n'
 import type { NekoMessage } from '@/types/protocol'
 import { resetTransportModeForTests } from '@/api/transport'
+import { apiFetch } from '@/api/http'
 
 const harness = vi.hoisted(() => ({
   connected: false,
@@ -1187,6 +1188,88 @@ describe('session prompt outbox', () => {
     ])
     store.applySessionList({ sessions: [] }, 'device-a')
     expect(store.startCapabilities).toBeNull()
+    store.cleanup()
+  })
+
+  it('marks the per-device catalog ready only after an authenticated session list and resets on switch', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    expect(store.catalogDeviceId).toBe('device-a')
+    expect(store.catalogStatus).toBe('loading')
+
+    emit({
+      protocol_version: '1.1',
+      transport_mode: 'open',
+      type: 'session_list',
+      device_id: 'device-a',
+      timestamp: 1,
+      payload: { sessions: [] }
+    })
+    expect(store.catalogStatus).toBe('ready')
+
+    store.subscribeDevice('device-b')
+    expect(store.catalogDeviceId).toBe('device-b')
+    expect(store.catalogStatus).toBe('loading')
+    expect(store.sessions).toEqual([])
+    store.cleanup()
+  })
+
+  it('does not request history for a catalog-missing thread and can bind after it reappears', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    emit({
+      protocol_version: '1.1',
+      transport_mode: 'open',
+      type: 'session_list',
+      device_id: 'device-a',
+      timestamp: 1,
+      payload: { sessions: [] }
+    })
+
+    store.setCurrentSession(null)
+    expect(apiFetch).not.toHaveBeenCalled()
+    emit({
+      protocol_version: '1.1',
+      transport_mode: 'open',
+      type: 'session_list',
+      device_id: 'device-a',
+      timestamp: 2,
+      payload: {
+        sessions: [{
+          id: 'session-old', device_id: 'device-a', agent_type: 'codex',
+          status: 'idle', summary: 'active again', last_activity: 2
+        }]
+      }
+    })
+    const reappeared = store.sessions.find(session => session.id === 'session-old')
+    expect(reappeared?.summary).toBe('active again')
+    store.setCurrentSession(reappeared || null)
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    store.cleanup()
+  })
+
+  it('neutralizes stale session controls while loading and after an authoritative removal', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-stale', device_id: 'device-a', agent_type: 'codex',
+      status: 'running', summary: 'stale', last_activity: 1,
+      capabilities: { interrupt: true }
+    }
+    store.streaming = true
+    expect(store.currentSessionCatalogVisible).toBe(false)
+
+    emit({
+      protocol_version: '1.1', transport_mode: 'open', type: 'session_list',
+      device_id: 'device-a', timestamp: 1, payload: { sessions: [] }
+    })
+
+    expect(store.catalogStatus).toBe('ready')
+    expect(store.currentSession).toBeNull()
+    expect(store.currentSessionCatalogVisible).toBe(false)
+    expect(store.streaming).toBe(false)
+    expect(store.loading).toBe(false)
+    expect(store.messages).toEqual([])
     store.cleanup()
   })
 

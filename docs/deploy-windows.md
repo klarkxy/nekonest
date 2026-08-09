@@ -108,7 +108,7 @@ This widens local attack surface—use deliberately.
 ## 5. Day-to-day usage
 
 1. On the PC, use Claude Code / Codex / Kilo / Kimi CLI / Grok Build normally so threads exist.  
-2. Daemon discovers on a short interval and reports session lists.  
+2. Daemon reports the last 7 days of native activity, with running/waiting threads always visible; normal periodic discovery runs about 30 seconds after the prior scan completes.
 3. Phone: **directory → agent → thread**, then send prompts or attachments.  
 4. Threads without a project directory appear under **未分类**.  
 5. Approvals the non-interactive CLI cannot host must be finished on the **PC terminal**.

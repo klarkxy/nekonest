@@ -162,3 +162,52 @@ func TestClaudeDiscoverExcludesSubagents(t *testing.T) {
 		t.Fatal("metadata-marked subagent leaked into lastPaths")
 	}
 }
+
+func TestClaudeDiscoverColdStartKeepsOldPendingApproval(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "D--old-project")
+	sessionID := "old-pending-approval"
+	path := filepath.Join(project, sessionID+".jsonl")
+	old := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Second)
+	writeClaudeTranscript(t, path,
+		map[string]interface{}{
+			"type": "assistant", "cwd": `D:\old-project`, "timestamp": old.Format(time.RFC3339Nano),
+			"message": map[string]interface{}{"role": "assistant", "content": "waiting"},
+		},
+		map[string]interface{}{
+			"type": "assistant", "timestamp": old.Format(time.RFC3339Nano),
+			"message": map[string]interface{}{
+				"role": "assistant",
+				"content": []interface{}{map[string]interface{}{
+					"type": "tool_use", "name": "Bash",
+					"input": map[string]interface{}{"command": "echo waiting"},
+				}},
+			},
+		},
+	)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := NewClaudeCodeAdapter()
+	adapter.projectsDir = root
+	sessions, err := adapter.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != sessionID ||
+		sessions[0].Status != StatusWaitingApproval || sessions[0].PendingApproval == nil {
+		t.Fatalf("cold-start Claude attention session = %#v", sessions)
+	}
+	beforeHits, _, entries := adapter.attentionCache.stats()
+	if entries != 1 {
+		t.Fatalf("attention cache entries = %d, want 1", entries)
+	}
+	if _, err := adapter.Discover(); err != nil {
+		t.Fatal(err)
+	}
+	afterHits, _, _ := adapter.attentionCache.stats()
+	if afterHits-beforeHits != 1 {
+		t.Fatalf("second discovery attention cache hits = %d, want 1", afterHits-beforeHits)
+	}
+}

@@ -193,6 +193,11 @@ export default {
     interruptAria: '中断当前任务',
     messagesAria: '线团消息',
     importing: '正在同步家里的记录…',
+    catalogLoadingTitle: '正在加载近期线团…',
+    catalogLoadingHint: '正在等待主机确认这台设备的线团目录。',
+    hiddenOrRemovedTitle: '线团已隐藏或不存在',
+    hiddenOrRemovedHint:
+      '该线团不在最近 7 天列表中，或已从主机原生存储移除；在电脑端重新使用后会再次出现。',
     emptyTitle: '线团还是空的',
     emptyHint: '打开时会试着同步家里的记录。也可以直接说一句继续。',
     draftTag: '新线团',

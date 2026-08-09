@@ -128,13 +128,22 @@ func (a *KiloAdapter) Discover() ([]*SessionInfo, error) {
 	}
 	defer db.Close()
 
-	// time_updated is unix milliseconds. 7-day window + higher limit for phone history.
-	cutoff := time.Now().Add(-7 * 24 * time.Hour).UnixMilli()
+	// time_updated is unix milliseconds. Keep the shared seven-day window, but
+	// never hide a root session with a positively running native tool.
+	cutoff := recentSessionCutoff(time.Now()).UnixMilli()
 	query := `
 		SELECT id, title, directory, time_updated, agent
 		FROM session
 		WHERE time_archived IS NULL
-		  AND time_updated >= ?`
+		  AND (
+		    time_updated >= ?
+		    OR EXISTS (
+		      SELECT 1 FROM part
+		      WHERE part.session_id = session.id
+		        AND json_extract(part.data, '$.type') = 'tool'
+		        AND json_extract(part.data, '$.state.status') = 'running'
+		    )
+		  )`
 	if kiloSessionHasParentID(db) {
 		query += `
 		  AND parent_id IS NULL`

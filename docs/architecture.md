@@ -50,11 +50,12 @@ Per-harness **live** capability matrix (control flags, attachments, start probes
 
 ## Discovery and ownership
 
-1. Daemon periodically **Discovers** sessions from each registered adapter.
+1. Daemon **Discovers** sessions from each registered adapter at startup/force events and 30 seconds after each completed periodic scan; slow scans never accumulate ticker debt.
 2. An adapter claims a session only with **positive ownership** against its native store (empty transcript ≠ ownership).
 3. Subagents, sidechains, primers, and synthetic/system-only records are **excluded** from the phone-visible main thread list.
 4. A missing CLI is a **non-fatal** unavailable adapter; other agents keep working.
-5. Discovered lists are pushed toward the server/phone as session list/update traffic.
+5. The phone-visible catalog contains threads active in the last 7 days, plus any positively running/waiting thread. Old native records are not deleted; projects backed only by old threads leave the current directory union until host-side activity makes a thread recent again.
+6. Discovered lists are pushed toward the server/phone as session list/update traffic. File-backed adapters reuse compact path/size/mtime metadata and reparse only changed files; transcript bodies are never cached by discovery.
 
 Native stores remain authoritative; the VPS cache is for relay and durability of nest-side messages, not a replacement agent DB.
 

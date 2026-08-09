@@ -54,7 +54,8 @@ Phone list should flip online within a short reconnect window after daemon start
 | PC threads exist | Create/use sessions in the native agent **on the PC** first |
 | CLI installed | Agent on PATH; adapter not silently unavailable |
 | Native store paths | Default locations under user profile (see agents table in README) |
-| Discover interval | Wait several seconds after daemon start |
+| Discover interval | Initial scan starts after a few seconds; normal periodic updates may take about 30 seconds |
+| Recent window | Threads inactive for more than 7 days, and projects backed only by those threads, are hidden without deleting native data; use the thread again on the PC to restore it |
 | Ownership filters | Subagents/sidechains hidden by design |
 | Directory grouping | Orphans appear under **未分类** |
 

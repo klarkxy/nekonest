@@ -198,7 +198,66 @@ func TestGrokFiltersTopLevelSubagentAndGeneratedPrimer(t *testing.T) {
 	}
 }
 
-func TestGrokKeepsOldSessionWithEmptyHistory(t *testing.T) {
+func TestGrokMarkerCachePrunesOutsideRecentCandidateSet(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "d%3A%5Crepo")
+	now := time.Now().UTC().Truncate(time.Second)
+	old := now.Add(-30 * 24 * time.Hour)
+	for _, fixture := range []struct {
+		id      string
+		updated time.Time
+	}{
+		{id: "parent", updated: now},
+		{id: "recent-child", updated: now},
+		{id: "old-child", updated: old},
+	} {
+		dir := filepath.Join(projectDir, fixture.id)
+		mustMkdirAll(t, dir)
+		path := filepath.Join(dir, "summary.json")
+		mustWriteJSON(t, path, map[string]interface{}{
+			"info":       map[string]interface{}{"id": fixture.id, "cwd": `D:\repo`},
+			"updated_at": fixture.updated.Format(time.RFC3339),
+		})
+		if err := os.Chtimes(path, fixture.updated, fixture.updated); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, childID := range []string{"recent-child", "old-child"} {
+		markerDir := filepath.Join(projectDir, "parent", "subagents", childID)
+		mustMkdirAll(t, markerDir)
+		mustWriteJSON(t, filepath.Join(markerDir, "meta.json"), map[string]interface{}{
+			"parent_session_id": "parent", "child_session_id": childID,
+		})
+	}
+
+	adapter := NewGrokBuildAdapter()
+	adapter.sessionsDir = root
+	sessions, err := adapter.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != "grok_build:parent" {
+		t.Fatalf("visible sessions = %#v", sessions)
+	}
+	_, _, entries := adapter.markerCache.stats()
+	if entries != 1 {
+		t.Fatalf("marker cache entries = %d, want only the recent child marker", entries)
+	}
+
+	recentSummary := filepath.Join(projectDir, "recent-child", "summary.json")
+	if err := os.Chtimes(recentSummary, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Discover(); err != nil {
+		t.Fatal(err)
+	}
+	_, _, entries = adapter.markerCache.stats()
+	if entries != 0 {
+		t.Fatalf("marker cache retained %d entries outside the recent candidate set", entries)
+	}
+}
+
+func TestGrokHidesOldSessionButKeepsNativeOwnership(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "d%3A%5Cold-repo", "grok-old")
 	mustMkdirAll(t, sessionDir)
@@ -214,8 +273,8 @@ func TestGrokKeepsOldSessionWithEmptyHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].ID != "grok_build:grok-old" {
-		t.Fatalf("old session not discovered: %#v", sessions)
+	if len(sessions) != 0 {
+		t.Fatalf("old session remained visible: %#v", sessions)
 	}
 	if !adapter.OwnsSession("grok_build:grok-old") {
 		t.Fatal("old Grok session was not positively owned")

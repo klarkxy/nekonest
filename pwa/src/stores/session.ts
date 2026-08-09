@@ -31,6 +31,8 @@ export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref<AgentSession[]>([])
   /** Null means an older daemon did not publish a device-level start catalog. */
   const startCapabilities = ref<AgentStartCapability[] | null>(null)
+  const catalogStatus = ref<'loading' | 'ready'>('loading')
+  const catalogDeviceId = ref<string | null>(null)
   const currentSession = ref<AgentSession | null>(null)
   const messages = ref<SessionMessage[]>([])
   const loading = ref(false)
@@ -45,6 +47,15 @@ export const useSessionStore = defineStore('sessions', () => {
   let streamPollTimer: number | null = null
   let streamIdleTimer: number | null = null
   let activeDeviceId: string | null = null
+
+  const currentSessionCatalogVisible = computed(() => {
+    const session = currentSession.value
+    if (!session) return false
+    if (session.id.startsWith('local_draft_')) return true
+    const deviceId = session.device_id || activeDeviceId
+    return catalogStatus.value === 'ready' && catalogDeviceId.value === deviceId &&
+      sessions.value.some(candidate => candidate.id === session.id)
+  })
   /** Buffered live messages: key = deviceId::sessionId */
   const inbox = new Map<string, SessionMessage[]>()
   /** Unacked send_prompt outbox keyed by client_msg_id (stable across reconnect). */
@@ -614,13 +625,12 @@ export const useSessionStore = defineStore('sessions', () => {
     if (activeDeviceId !== deviceId) {
       // Clear cross-device leakage immediately.
       sessions.value = []
-      if (currentSession.value && currentSession.value.device_id !== deviceId) {
-        currentSession.value = null
-        messages.value = []
-        importing.value = false
-        streaming.value = false
-        stopStreamPoll()
-      }
+      startCapabilities.value = null
+      catalogStatus.value = 'loading'
+      catalogDeviceId.value = deviceId
+      // A catalog from the previous device cannot authorize controls or history
+      // on the next device, including legacy sessions without device_id.
+      setCurrentSession(null)
       activeDeviceId = deviceId
     }
     ws.subscribe(deviceId)
@@ -721,6 +731,8 @@ export const useSessionStore = defineStore('sessions', () => {
       } else if (msg.type === 'session_list' && msg.device_id === deviceId) {
         withAuthenticatedMessagePayload(msg, payload => {
           applySessionList(payload as SessionListPayload, deviceId)
+          catalogDeviceId.value = deviceId
+          catalogStatus.value = 'ready'
           if (currentSession.value) {
             if (currentSession.value.device_id && currentSession.value.device_id !== deviceId) {
               currentSession.value = null
@@ -734,6 +746,10 @@ export const useSessionStore = defineStore('sessions', () => {
                   streaming.value = false
                   stopStreamPoll()
                 }
+              } else if (!currentSession.value.id.startsWith('local_draft_')) {
+                // session_list is authoritative for native thread visibility. Clear
+                // stale busy/capability state before rendering the hidden deep link.
+                setCurrentSession(null)
               }
             }
           }
@@ -1101,6 +1117,7 @@ export const useSessionStore = defineStore('sessions', () => {
     currentSession.value = session
     lastError.value = null
     messages.value = []
+    loading.value = false
     importing.value = false
     if (session) {
       syncOutboxFromStorage()
@@ -1672,7 +1689,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   return {
-    sessions, startCapabilities, currentSession, messages, loading, importing, streaming, lastError, lastUserInputResult, wsStatus,
+    sessions, startCapabilities, catalogStatus, catalogDeviceId, currentSession, currentSessionCatalogVisible, messages, loading, importing, streaming, lastError, lastUserInputResult, wsStatus,
     promptQueues, currentPromptQueue,
     startOps,
     subscribeDevice, applySessionList, setCurrentSession, clearMessages, requestNativeHistory,

@@ -59,6 +59,17 @@
       </div>
     </header>
 
+    <section v-if="catalogLoading" class="catalog-state" role="status">
+      <strong>{{ t('session.catalogLoadingTitle') }}</strong>
+      <p>{{ t('session.catalogLoadingHint') }}</p>
+    </section>
+
+    <section v-else-if="hiddenOrRemoved" class="catalog-state" role="status">
+      <strong>{{ t('session.hiddenOrRemovedTitle') }}</strong>
+      <p>{{ t('session.hiddenOrRemovedHint') }}</p>
+    </section>
+
+    <template v-else>
     <section
       v-if="showActivityBanner"
       class="thread-activity"
@@ -360,6 +371,7 @@
         <template #icon>↑</template>
       </n-button>
     </div>
+    </template>
   </div>
 </template>
 
@@ -397,6 +409,14 @@ const deviceId = computed(() => String(route.params.deviceId || ''))
 // Vue Router already decodes params — do not decodeURIComponent again (breaks literal %).
 const sessionId = computed(() => String(route.params.sessionId || ''))
 const isLocalDraft = computed(() => isLocalDraftSessionId(sessionId.value))
+const catalogReady = computed(() =>
+  sessionStore.catalogStatus === 'ready' && sessionStore.catalogDeviceId === deviceId.value
+)
+const catalogLoading = computed(() => !isLocalDraft.value && !catalogReady.value)
+const hiddenOrRemoved = computed(() =>
+  !isLocalDraft.value && catalogReady.value &&
+  !sessionStore.sessions.some(session => session.id === sessionId.value)
+)
 const pendingStartOpId = ref('')
 /** Terminal start_thread outcome while still on the phone draft route. */
 const startTerminalStatus = ref<'indeterminate' | 'failed' | ''>('')
@@ -602,7 +622,9 @@ const showActivityBanner = computed(() => {
   return sessionStore.streaming || status === 'running'
 })
 
-const canInterrupt = computed(() => sessionBusy.value && !isLocalDraft.value)
+const canInterrupt = computed(() =>
+  sessionBusy.value && !isLocalDraft.value && sessionStore.currentSessionCatalogVisible
+)
 
 const wsLabel = computed(() => {
   switch (sessionStore.wsStatus) {
@@ -739,14 +761,7 @@ function bindSession() {
       project: local.project
     })
   } else {
-    sessionStore.setCurrentSession({
-      id: sid,
-      device_id: did,
-      agent_type: 'unknown',
-      status: 'idle',
-      summary: '',
-      last_activity: 0
-    })
+    sessionStore.setCurrentSession(null)
   }
   if (local?.startOperationId) {
     // The exact request may already have crossed the native boundary before a
@@ -814,6 +829,19 @@ watch(
 watch(
   () => sessionStore.currentSession?.pending_approval?.id,
   id => approvalDecision.sync(id)
+)
+
+watch(
+  () => [
+    sessionStore.catalogStatus,
+    sessionStore.catalogDeviceId,
+    sessionStore.sessions.map(session => session.id).join('\n')
+  ],
+  () => {
+    if (isLocalDraft.value || sessionStore.currentSession?.id === sessionId.value) return
+    const session = sessionStore.sessions.find(candidate => candidate.id === sessionId.value)
+    if (session) sessionStore.setCurrentSession(session)
+  }
 )
 
 watch(
@@ -1627,6 +1655,27 @@ async function handleUserInputSubmit() {
 }
 .neko-mascot {
   filter: drop-shadow(0 4px 12px rgba(114, 91, 157, 0.2));
+}
+
+.catalog-state {
+  display: grid;
+  gap: 8px;
+  place-content: center;
+  min-height: 240px;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.catalog-state strong {
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+
+.catalog-state p {
+  max-width: 34rem;
+  margin: 0;
+  line-height: 1.6;
 }
 
 .prompt-queue {

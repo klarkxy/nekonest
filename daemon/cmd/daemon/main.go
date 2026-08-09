@@ -40,7 +40,10 @@ var (
 	forceDiscoverCh = make(chan struct{}, 1)
 )
 
-const maxPromptAttachments = 5
+const (
+	maxPromptAttachments     = 5
+	sessionDiscoveryInterval = 30 * time.Second
+)
 
 func requestForceDiscover() {
 	select {
@@ -972,9 +975,6 @@ func main() {
 			return
 		}
 
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
 		discoverAndReport := func(force bool) {
 			var allSessions []*adapters.SessionInfo
 			for _, adapter := range adapterList {
@@ -1082,21 +1082,8 @@ func main() {
 			}
 		}
 
-		// First discovery
-		discoverAndReport(true)
-
-		// Periodic discovery + reconnect-driven force report
-		for {
-			select {
-			case <-ticker.C:
-				discoverAndReport(false)
-			case <-forceReport:
-				discoverAndReport(true)
-			case <-ctx.Done():
-				log.Printf("[daemon] discovery loop stopped")
-				return
-			}
-		}
+		runSessionDiscoveryLoop(ctx, sessionDiscoveryInterval, forceReport, discoverAndReport)
+		log.Printf("[daemon] discovery loop stopped")
 	}()
 
 	// Start config hot-reload watcher. Snapshots are immutable after Store.
@@ -1158,6 +1145,41 @@ func main() {
 	// 4. Wait a bit for goroutines to finish
 	time.Sleep(500 * time.Millisecond)
 	log.Println("[daemon] goodbye 🐱")
+}
+
+// runSessionDiscoveryLoop waits the full interval after each completed scan.
+// A slow native-store scan therefore cannot build ticker debt and catch up in
+// a tight loop. Force requests remain buffered and run immediately afterward.
+func runSessionDiscoveryLoop(
+	ctx context.Context,
+	interval time.Duration,
+	force <-chan struct{},
+	discover func(bool),
+) {
+	discover(true)
+	for {
+		timer := time.NewTimer(interval)
+		select {
+		case <-timer.C:
+			discover(false)
+		case <-force:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			discover(true)
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		}
+	}
 }
 
 // projectLabel shortens a full path to the leaf folder name for UI.

@@ -169,7 +169,7 @@ func TestKimiDiscoversCurrentAndLegacyFixtures(t *testing.T) {
 	}
 }
 
-func TestKimiKeepsOldCurrentSession(t *testing.T) {
+func TestKimiHidesOldCurrentSessionButKeepsNativeOwnership(t *testing.T) {
 	root := t.TempDir()
 	currentHome := filepath.Join(root, ".kimi-code")
 	sessionDir := filepath.Join(currentHome, "sessions", "work-key", "old-session")
@@ -192,8 +192,8 @@ func TestKimiKeepsOldCurrentSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].ID != "kimi_cli:old-session" {
-		t.Fatalf("old Kimi session not discovered: %#v", sessions)
+	if len(sessions) != 0 {
+		t.Fatalf("old Kimi session remained visible: %#v", sessions)
 	}
 	if !adapter.OwnsSession("kimi_cli:old-session") {
 		t.Fatal("old Kimi session was not positively owned")

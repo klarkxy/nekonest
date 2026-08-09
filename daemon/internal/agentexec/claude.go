@@ -41,6 +41,15 @@ func (c *ClaudeCommander) IsAvailable() bool {
 	return err == nil
 }
 
+// IsSessionRunning reports whether this daemon currently owns a live Claude
+// resume process for the native session.
+func (c *ClaudeCommander) IsSessionRunning(sessionID string) bool {
+	c.mu.Lock()
+	executor := c.executors[sessionID]
+	c.mu.Unlock()
+	return executor != nil && executor.IsRunning()
+}
+
 func claudeResumeArgs(
 	sessionID string,
 	prompt string,
