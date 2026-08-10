@@ -124,7 +124,15 @@ test.describe('390px primary visual matrix', () => {
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'false')
     await expect(codexStart).toBeHidden()
     await startMenu.locator('summary').click()
-    await expect(startMenu.getByRole('button', { name: 'Kimi CLI' })).toBeVisible()
+    const kimiOption = startMenu.getByRole('button', { name: 'Kimi CLI' })
+    await expect(kimiOption).toBeVisible()
+    // A clipped popup can still have a non-empty visible sliver. Confirm that
+    // the option's center is actually hit-testable below the collapsed card.
+    expect(await kimiOption.evaluate(element => {
+      const rect = element.getBoundingClientRect()
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      return hit === element || element.contains(hit)
+    })).toBe(true)
     await projectHeader.click()
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'true')
     await expect(codexStart).toBeVisible()
