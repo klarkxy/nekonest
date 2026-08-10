@@ -228,7 +228,11 @@ export class NekoWebSocket {
               ? { secret: cred }
               : {}),
         subscription_id: subscriptionId,
-        pwa_version: APP_VERSION
+        pwa_version: APP_VERSION,
+        // The server returns its cached catalog immediately, then forwards a
+        // routing-only rescan request to an online daemon for fresh native
+        // store results. Older servers simply ignore this optional marker.
+        refresh_sessions: true
       }
     })
   }

@@ -38,3 +38,9 @@ func TestDaemonInboundApplicationTypesIncludeQueueSkip(t *testing.T) {
 		t.Fatal("skip_prompt_queue_item is not decoded as an application command")
 	}
 }
+
+func TestRefreshSessionsRemainsRoutingOnly(t *testing.T) {
+	if daemonInboundApplicationType("refresh_sessions") {
+		t.Fatal("refresh_sessions must remain a routing-only frame in sealed mode")
+	}
+}

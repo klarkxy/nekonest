@@ -100,24 +100,23 @@ test.describe('390px primary visual matrix', () => {
     await capture(page, 'device-full-tree.png')
   })
 
-  test('only available harness controls survive collapse and start the matching local draft', async ({ page, request }) => {
+  test('only populated harness groups render while the project menu starts a missing harness', async ({ page, request }) => {
     await openScenario(page, request, 'device-full', devicePath)
     const project = page.locator('.project-group').filter({ hasText: 'nekonest' }).first()
     const projectHeader = project.locator('.project-header')
     const codexStart = project.getByRole('button', { name: '使用 Codex 在“nekonest”里新建线团' })
-    const claudeStart = project.getByRole('button', { name: '使用 Claude Code 在“nekonest”里新建线团' })
-    const kimiStart = project.getByRole('button', { name: '使用 Kimi CLI 在“nekonest”里新建线团' })
+    const startMenu = project.locator('.project-start-menu')
 
     await expect(codexStart).toBeVisible()
-    await expect(claudeStart).toBeVisible()
-    await expect(kimiStart).toBeVisible()
-    await expect(
-      project.locator('.agent-group').filter({ hasText: 'Kimi CLI' }).getByText('0 条线团')
-    ).toBeVisible()
+    await expect(project.locator('.agent-group').filter({ hasText: 'Claude Code' }).locator('.agent-header')).toBeVisible()
+    await expect(project.locator('.agent-group').filter({ hasText: 'Kimi CLI' })).toHaveCount(0)
+    await expect(startMenu).toBeVisible()
+    await startMenu.locator('summary').click()
+    await expect(startMenu.getByRole('button', { name: 'Kimi CLI' })).toBeVisible()
 
     await page.getByLabel('猫娘', { exact: true }).selectOption('kimi_cli')
-    await expect(page.locator('.project-group')).toHaveCount(2)
-    await expect(page.locator('.project-group').filter({ hasText: 'nekonest' })).toContainText('0 条线团')
+    await expect(page.locator('.project-group')).toHaveCount(1)
+    await expect(page.locator('.project-group').filter({ hasText: 'nekonest' })).toHaveCount(0)
     await expect(page.locator('.project-group').filter({ hasText: 'mobile-demo' })).toContainText('Kimi CLI')
     await page.getByLabel('猫娘', { exact: true }).selectOption('')
 

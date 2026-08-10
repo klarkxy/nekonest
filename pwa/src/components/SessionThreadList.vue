@@ -100,6 +100,26 @@
           </svg>
           <span class="sr-only">{{ isProjectArchived(project) ? t('threadList.unarchive') : t('threadList.archive') }}</span>
         </button>
+        <details
+          v-if="missingStartOptions(project).length"
+          class="project-start-menu"
+        >
+          <summary class="agent-add-btn project-start-menu__toggle">
+            <span aria-hidden="true">＋</span>
+            {{ t('threadList.newThreadAction') }}
+          </summary>
+          <div class="project-start-menu__options">
+            <button
+              v-for="option in missingStartOptions(project)"
+              :key="option.agentType"
+              type="button"
+              :disabled="!deviceOnline"
+              :title="projectStartTitle(project, option)"
+              :aria-label="projectStartTitle(project, option)"
+              @click="onNewThread(project, option.agentType)"
+            >{{ option.label }}</button>
+          </div>
+        </details>
       </div>
 
       <div
@@ -238,9 +258,7 @@ import { useI18n } from 'vue-i18n'
 import { RouterLink, useRouter } from 'vue-router'
 import {
   KNOWN_AGENT_TYPES,
-  UNKNOWN_AGENT_META,
-  agentOrder,
-  getAgentMeta
+  UNKNOWN_AGENT_META
 } from '@/config/agents'
 import { sessionDetailLocation } from '@/router/navigation'
 import { useSessionPrefsStore } from '@/stores/sessionPrefs'
@@ -320,57 +338,10 @@ const visibleProjects = computed(() => {
   })
   // Product rule: always recent activity first (no manual reorder).
   const projects = buildSessionTree(filtered, list => sortSessionsByMode(list, 'recent'))
-  if (!agent) return addStartHarnesses(projects)
-
-  // Keep a searched/filter-matching discovered directory available when the
-  // selected harness has no thread there yet but is advertised as startable.
-  const existing = new Set(projects.map(project => project.key))
-  const baseProjects = buildSessionTree(visibleSessions)
-  const baseOrder = new Map(baseProjects.map((project, index) => [project.key, index]))
-  for (const project of baseProjects) {
-    if (existing.has(project.key)) continue
-    if (q && ![project.label, project.path, project.key].some(value => value.toLowerCase().includes(q))) {
-      continue
-    }
-    projects.push({ ...project, sessionCount: 0, agents: [] })
-  }
-  return addStartHarnesses(projects)
-    .filter(project => project.agents.length > 0)
-    .sort((a, b) => (baseOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER)
-      - (baseOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER))
+  return projects
 })
 
 type ProjectStartOption = { agentType: AgentType; label: string; enabled: boolean; reason?: string }
-
-function addStartHarnesses(projects: SessionTreeProject[]): SessionTreeProject[] {
-  return projects.map(project => {
-    const existing = new Set(project.agents.map(agent => agent.type))
-    const additions = projectStartOptions(project)
-      .filter(option => option.enabled && !existing.has(option.agentType))
-      .filter(option => !agentFilter.value || option.agentType === agentFilter.value)
-      .map<SessionTreeAgent>(option => {
-        const meta = getAgentMeta(option.agentType)
-        return {
-          key: `${project.key}::${option.agentType}`,
-          type: option.agentType,
-          label: meta.label,
-          avatar: meta.avatar,
-          color: meta.color,
-          softColor: meta.softColor,
-          lastActivity: project.lastActivity,
-          sessions: []
-        }
-      })
-    if (additions.length === 0) return project
-    return {
-      ...project,
-      agents: [...project.agents, ...additions].sort((a, b) => {
-        const order = agentOrder(a.type) - agentOrder(b.type)
-        return order || a.label.localeCompare(b.label)
-      })
-    }
-  })
-}
 
 function projectStartOptions(project: SessionTreeProject): ProjectStartOption[] {
   // A new native thread may only target a path already discovered by the daemon.
@@ -382,6 +353,20 @@ function projectStartOptions(project: SessionTreeProject): ProjectStartOption[] 
 
   return startOptionsForProject(project, props.startCapabilities)
     .map(option => ({ ...option, label: agentLabel(option.agentType) }))
+}
+
+function missingStartOptions(project: SessionTreeProject): ProjectStartOption[] {
+  const existing = new Set(project.agents.map(agent => agent.type))
+  return projectStartOptions(project).filter(option => option.enabled && !existing.has(option.agentType))
+}
+
+function projectStartTitle(project: SessionTreeProject, option: ProjectStartOption): string {
+  return deviceOnline.value
+    ? t('threadList.newThreadTitle', { agent: option.label, project: project.label })
+    : t('threadList.newThreadUnavailable', {
+        agent: option.label,
+        reason: t('threadList.startOffline')
+      })
 }
 
 function agentStartOption(
@@ -598,7 +583,7 @@ function onAvatarError(event: Event) {
 
 .project-header-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 6px;
   padding-right: 8px;
@@ -624,6 +609,62 @@ function onAvatarError(event: Event) {
 
 .project-archive-btn {
   flex: 0 0 auto;
+}
+
+.project-start-menu {
+  position: relative;
+}
+
+.project-start-menu__toggle {
+  list-style: none;
+  cursor: pointer;
+}
+
+.project-start-menu__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.project-start-menu__options {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 128px;
+  overflow: hidden;
+  border: 1px solid var(--neko-line);
+  border-radius: 10px;
+  background: var(--neko-surface-solid);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--neko-ink) 18%, transparent);
+}
+
+.project-start-menu__options button {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--neko-line);
+  color: var(--neko-ink);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-start-menu__options button:last-child {
+  border-bottom: 0;
+}
+
+.project-start-menu__options button:disabled {
+  color: var(--neko-muted);
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.project-start-menu__options button:hover,
+.project-start-menu__options button:focus-visible {
+  background: var(--neko-primary-soft);
 }
 
 .project-header:focus-visible,

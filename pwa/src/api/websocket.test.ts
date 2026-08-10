@@ -56,7 +56,8 @@ function latestSubscription(socket: FakeWebSocket) {
     deviceId: frame.device_id as string,
     subscriptionId: frame.payload.subscription_id as string,
     pwaVersion: frame.payload.pwa_version as string
-    , transportMode: frame.transport_mode as string
+    , transportMode: frame.transport_mode as string,
+    refreshSessions: frame.payload.refresh_sessions as boolean
   }
 }
 
@@ -93,6 +94,7 @@ describe('NekoWebSocket lifecycle', () => {
     const subscription = latestSubscription(first)
     expect(subscription.pwaVersion).toBe(APP_VERSION)
     expect(subscription.transportMode).toBe('open')
+    expect(subscription.refreshSessions).toBe(true)
     first.message({ type: 'session_list', device_id: 'device-a', timestamp: 1, payload: {} })
     expect(client.isConnected()).toBe(false)
     acknowledge(first, subscription.deviceId, subscription.subscriptionId)

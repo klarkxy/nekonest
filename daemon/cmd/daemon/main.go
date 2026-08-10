@@ -426,6 +426,12 @@ func main() {
 		sessionMu.Unlock()
 
 		switch msgType {
+		case "refresh_sessions":
+			// An authenticated phone subscription asked for a fresh native-store
+			// catalog. Coalescing keeps repeated browser reloads from causing a
+			// discovery storm while still bypassing the normal polling interval.
+			requestForceDiscover()
+
 		case "pair_ready":
 			// Phone completed pairing; wrap catalog key for that phone.
 			go publishCatalogKeyForPhone(currentConfig(), payload)

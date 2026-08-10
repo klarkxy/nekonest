@@ -38,7 +38,7 @@ GitHub Release。
 2. 配对：主机 `nekonest-daemon -pair gen`；粘贴 **QR JSON**（推荐）或 6 位码；与 PC 屏幕核对 **指纹**。  
 3. 设备列表显示主机 **在线**；页面顶部的网页 / Server 版本一致，每张设备卡片显示该机器自己的 Daemon 版本。故意使用旧 PWA 时显示“立即刷新”，只有旧 Daemon 所在机器提示更新。
 4. 主机侧打开/使用 agent，确保有近期线程。  
-5. 手机：**目录 → agent → 线程** 可见；有能力宣告时可见 capabilities。  
+5. 刷新手机 PWA：先显示缓存目录，在线 daemon 随即重扫并回推最新的 **目录 → agent → 线程**。只有有线团的 agent 显示为分组；可新建但当前没有线团的 agent 收在目录的“新建”菜单中。有能力宣告时可见 capabilities。
 6. 打开线程；历史加载；发短 prompt；出现流式输出。  
 7. 投递 UX：发件箱走向 **committed**（不只是 WS 写出成功）。  
 8. 附件（可选）：小 PNG + 文本；agent 读到或明确报错。  

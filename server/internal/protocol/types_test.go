@@ -199,6 +199,16 @@ func TestSkipPromptQueueItemIsApplicationData(t *testing.T) {
 	}
 }
 
+func TestRefreshSessionsIsSealedSafeRoutingData(t *testing.T) {
+	if got := BodyPolicy(MsgRefreshSessions); got != MessageBodyRouting {
+		t.Fatalf("refresh_sessions policy = %v", got)
+	}
+	msg := NewMessage(MsgRefreshSessions, "device-a").WithTransport(TransportSealed)
+	if err := ValidateFrameForTransport(msg, TransportSealed); err != nil {
+		t.Fatalf("sealed refresh_sessions routing frame: %v", err)
+	}
+}
+
 func TestValidateFrameForTransportAllowsBareFailClosedThreadIndeterminate(t *testing.T) {
 	msg := NewMessage(MsgThreadIndeterminate, "device-a").WithTransport(TransportSealed)
 	msg.ClientMsgID = "operation-a"

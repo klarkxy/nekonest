@@ -677,6 +677,9 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		hs.NegotiatedVersion,
 	)
 	s.pushPhoneSnapshot(conn, deviceID)
+	if subscribeRequestsFreshSessionCatalog(subscribeMsg.Payload) {
+		s.requestFreshSessionCatalog(deviceID)
+	}
 
 	// Set read deadline + pong handler for phone connection
 	conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -727,6 +730,18 @@ func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
 	statusMsg := s.stampEnvelope(protocol.NewMessage(protocol.MsgDeviceList, ""))
 	statusMsg.Payload = map[string]any{"devices": devices}
 	s.connMgr.SafeWritePhone(conn, statusMsg)
+
+}
+
+// requestFreshSessionCatalog asks an online daemon to replace the initial
+// cached snapshot with a newly discovered catalog. The opt-in marker on the
+// subscription protects older PWA/daemon combinations that do not recognize
+// this extra routing frame.
+func (s *Server) requestFreshSessionCatalog(deviceID string) {
+	refresh := s.stampEnvelope(protocol.NewMessage(protocol.MsgRefreshSessions, deviceID))
+	if err := s.connMgr.SendToDaemon(deviceID, refresh); err != nil && !errors.Is(err, ErrDeviceOffline) {
+		log.Printf("[ws] request fresh session catalog for %s: %v", deviceID, err)
+	}
 }
 
 func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID, protocolVersion string) string {
@@ -877,6 +892,11 @@ func subscribeRequestID(payload map[string]any) (string, bool) {
 		return "", false
 	}
 	return value, true
+}
+
+func subscribeRequestsFreshSessionCatalog(payload map[string]any) bool {
+	requested, _ := payload["refresh_sessions"].(bool)
+	return requested
 }
 
 func (s *Server) writeSubscribeAck(

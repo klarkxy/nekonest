@@ -22,10 +22,14 @@ const CurrentProtocolMinor = 2
 type MessageType string
 
 const (
-	MsgDeviceOnline        MessageType = "device_online"
-	MsgDeviceOffline       MessageType = "device_offline"
-	MsgDeviceList          MessageType = "device_list"
-	MsgSessionList         MessageType = "session_list"
+	MsgDeviceOnline  MessageType = "device_online"
+	MsgDeviceOffline MessageType = "device_offline"
+	MsgDeviceList    MessageType = "device_list"
+	MsgSessionList   MessageType = "session_list"
+	// MsgRefreshSessions asks the online daemon to rescan its authoritative
+	// native stores. It carries no application body and is safe to relay in
+	// sealed mode after an authenticated phone subscription.
+	MsgRefreshSessions     MessageType = "refresh_sessions"
 	MsgSessionUpdate       MessageType = "session_update"
 	MsgSessionMessage      MessageType = "session_message"
 	MsgSendPrompt          MessageType = "send_prompt"
@@ -453,7 +457,7 @@ const (
 // BodyPolicy returns the v1 confidentiality policy for a wire message type.
 func BodyPolicy(msgType MessageType) MessageBodyPolicy {
 	switch msgType {
-	case MsgDeviceOnline, MsgDeviceOffline, MsgDeviceList,
+	case MsgDeviceOnline, MsgDeviceOffline, MsgDeviceList, MsgRefreshSessions,
 		MsgPromptStatusQuery, MsgPromptNotSeen, MsgPromptCommitted,
 		MsgHeartbeat, MsgError, MsgRegisterDevice, MsgAuthResponse,
 		MsgPairRequest, MsgPairConfirm, MsgPairReady, MsgPairFailed,

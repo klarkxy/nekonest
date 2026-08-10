@@ -57,6 +57,7 @@ The home PC needs neither a public IP nor inbound ports. The daemon opens an out
 - **Capability-gated agent control** — Codex remains the only full-control agent. Every reliable installed send path may use NekoNest's durable FIFO (not an agent-native queue); approval, user input, start, interrupt, and attachments remain independently probed and default closed.
 - **Persistent transport mode** — one immutable `open` or `sealed` mode per nest. New databases default to sealed; legacy databases without mode metadata are persisted as open; mismatches fail closed.
 - **Phone-side downgrade guard** — the PWA pins mode per origin; a sealed origin cannot silently become open, and first use of an intentional open relay requires explicit confirmation.
+- **Fresh phone catalog** — the PWA first renders the cached catalog, then asks an online daemon to rescan its native stores. Only agents with threads render as groups; enabled missing agents remain available from the project's **New** menu.
 - **Mobile UX** — installable PWA, drafts, per-thread or whole-project phone-local archive, sanitized Markdown, reconnect outbox, optional Web Push.
 - **Version diagnostics** — compare the loaded PWA with the live server at page level; each machine reports its own daemon release and update state on its device card.
 - **Safe defaults** — admin bootstrap, revocable phone identities, daemon registration token, origin checks, attachment validation, size limits, controlled proxy trust.

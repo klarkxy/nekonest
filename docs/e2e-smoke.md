@@ -40,7 +40,7 @@ One nest = one persisted mode. An environment/build override is only an assertio
 2. Pair: run `nekonest-daemon -pair gen` on the host; paste **QR JSON** (preferred) or 6-digit code; compare **fingerprint** with the PC screen.  
 3. Device list shows the host **online**. The page-level PWA / Server releases align; each device card shows that machine's Daemon release. A deliberately stale PWA shows **Refresh now**; only the stale machine is marked for a Daemon update.
 4. On the host, open/use a supported agent so a recent thread exists.  
-5. Phone: **directory → agent → thread** visible; session capabilities appear when advertised.  
+5. Refresh the phone PWA: it first shows its cached catalog, then the online daemon promptly rescans and pushes the current **directory → agent → thread** list. Only agents with threads render as agent groups; startable missing agents stay in the project's **New** menu. Session capabilities appear when advertised.
 6. Open a thread; history loads; send a short prompt; stream appears.  
 7. Delivery UX: outbox moves toward **committed** (not cleared only on bare WS write).  
 8. Attachments (optional): one small PNG and one text file; agent reads or clear error.  

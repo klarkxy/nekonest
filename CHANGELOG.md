@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Normalize both slash styles before attachment filename sanitization so Linux
   and Windows Servers derive the same safe basename from uploaded paths.
+- Refresh a phone's cached session catalog from an online daemon's native stores,
+  and avoid rendering empty agent groups by placing enabled missing agents in
+  the project's New menu.
 
 ## [0.2.4] - 2026-08-09
 

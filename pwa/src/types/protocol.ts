@@ -11,6 +11,7 @@ export type MessageType =
   | 'device_offline'
   | 'device_list'
   | 'session_list'
+  | 'refresh_sessions'
   | 'session_update'
   | 'session_message'
   | 'send_prompt'
