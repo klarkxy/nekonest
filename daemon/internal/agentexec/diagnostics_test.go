@@ -2,33 +2,29 @@ package agentexec
 
 import (
 	"bytes"
-	"log"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 func TestStderrDiagnosticsSuppressesNonStdoutAndLogsOnce(t *testing.T) {
 	var output bytes.Buffer
-	previousWriter := log.Writer()
-	previousFlags := log.Flags()
-	previousPrefix := log.Prefix()
-	log.SetOutput(&output)
-	log.SetFlags(0)
-	log.SetPrefix("")
+	previousLogger := slog.Default()
+	slog.SetDefault(opslog.New(&output, opslog.Config{Format: "text", Level: slog.LevelDebug}))
 	t.Cleanup(func() {
-		log.SetOutput(previousWriter)
-		log.SetFlags(previousFlags)
-		log.SetPrefix(previousPrefix)
+		slog.SetDefault(previousLogger)
 	})
 
 	var diagnostics stderrDiagnostics
-	if diagnostics.suppress("codex", "session-a", "stdout") {
+	if diagnostics.suppress("codex", "session-a", "stdout", "stdout-sentinel") {
 		t.Fatal("stdout must not be suppressed")
 	}
-	if !diagnostics.suppress("codex", "session-a", "stderr") {
+	if !diagnostics.suppress("codex", "session-a", "stderr", `prompt-sentinel C:\Users\user-sentinel\secret-attachment.txt`) {
 		t.Fatal("stderr must be suppressed")
 	}
-	if !diagnostics.suppress("codex", "session-a", "diagnostic") {
+	if !diagnostics.suppress("codex", "session-a", "diagnostic", "authorization-sentinel") {
 		t.Fatal("unknown non-stdout sources must fail closed")
 	}
 	if got := diagnostics.exitFailure("Codex", 0, false); got != "" {
@@ -42,8 +38,13 @@ func TestStderrDiagnosticsSuppressesNonStdoutAndLogsOnce(t *testing.T) {
 	}
 
 	got := output.String()
-	if count := strings.Count(got, "content omitted"); count != 1 {
+	if count := strings.Count(got, "stderr_suppressed"); count != 1 {
 		t.Fatalf("diagnostic notice count = %d, want 1; log=%q", count, got)
+	}
+	for _, secret := range []string{"prompt-sentinel", "user-sentinel", "secret-attachment.txt", "authorization-sentinel"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("CLI diagnostic leaked %q: %q", secret, got)
+		}
 	}
 }
 

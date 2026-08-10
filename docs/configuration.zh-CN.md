@@ -17,6 +17,11 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 | `-pwa` | `./pwa-dist` | 已构建 PWA 静态目录 |
 | `-version` | — | 输出 Server 应用发行版本并退出 |
 
+在 POSIX 主机上，Server 会设置私有的 `0077` 进程 umask，把数据根目录保持为
+`0700`，把 SQLite DB/WAL/SHM 文件保持为 `0600`；若无法落实这些权限，会在
+打开监听端口前退出。Windows 继续依赖运行 Server 的账户 ACL；POSIX 权限位
+不能替代私有的 Windows 服务账户 ACL。
+
 ### 监听地址
 
 | 管理员密钥（`NEKONEST_ADMIN_SECRET` 或兼容别名） | 绑定地址 |
@@ -40,6 +45,8 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 | `NEKONEST_VAPID_PUBLIC_KEY` | 可选 | Web Push VAPID 公钥（base64url）。 |
 | `NEKONEST_VAPID_PRIVATE_KEY` | 可选 | Web Push VAPID 私钥。 |
 | `NEKONEST_VAPID_SUBJECT` | 可选 | Web Push 联系地址，如 `mailto:you@example.com`。 |
+| `NEKONEST_LOG_FORMAT` | 否 | 运维日志格式：`text`（默认）或每行一个对象的 `json`；非法值会阻止启动。 |
+| `NEKONEST_LOG_LEVEL` | 否 | 最低日志级别：`debug`、`info`（默认）、`warn`、`error`；非法值会阻止启动。 |
 
 #### Bootstrap 行为
 
@@ -105,8 +112,14 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 | `NEKONEST_SERVER` | `-register` | VPS 地址，如 `https://nekonest.example.com`（http(s) 会规范为 ws(s)） |
 | `NEKONEST_BOOTSTRAP_TOKEN` | 公网 `-register` | 与 Server 相同；以 `X-Neko-Bootstrap` 发送 |
 | `NEKONEST_TRANSPORT_MODE` | 注册 / 可选断言 | 注册时读取并持久化 Server 模式；若显式提供则必须一致。缺少字段的旧 Daemon 配置认定为 open。 |
+| `NEKONEST_LOG_FORMAT` | 每次运行 | `text`（默认）或每行一个对象的 `json`。 |
+| `NEKONEST_LOG_LEVEL` | 每次运行 | `debug`、`info`（默认）、`warn`、`error`。 |
 
 常驻运行从配置文件读凭据，不依赖上述环境变量。
+
+Server/Daemon 只向 stdout/stderr 输出运维日志；Docker 或 journald 负责持久化与
+轮转，Windows 启动器应重定向这两个流。JSON 固定包含 `time`、`level`、
+`msg`、`component`、`event`。
 
 ### 配置文件
 

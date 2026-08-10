@@ -17,8 +17,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-publication-${{ github.repository }}
   cancel-in-progress: false
+  queue: max
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -29,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      major_minor: ${{ steps.version.outputs.major_minor }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@v7
@@ -43,10 +47,24 @@ jobs:
         working-directory: source
         run: |
           $tag = $env:RELEASE_TAG
-          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
-            throw "Release tag must match vX.Y.Z: $tag"
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Release tag must match vX.Y.Z or vX.Y.Z-prerelease: $tag"
           }
           $version = $Matches.version
+          $baseVersion = $version.Split('-')[0]
+          $versionParts = $baseVersion.Split('.')
+          $majorMinor = "$($versionParts[0]).$($versionParts[1])"
+          $prerelease = $version.Contains('-').ToString().ToLowerInvariant()
+          $sourceSha = (git rev-parse HEAD).Trim()
+          $tagRef = "refs/tags/$tag"
+          git show-ref --verify --quiet $tagRef
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release input must name an existing tag: $tag"
+          }
+          $tagSha = (git rev-parse "${tagRef}^{commit}").Trim()
+          if ($tagSha -ne $sourceSha) {
+            throw "Checked-out source does not match $tagRef."
+          }
           $serverVersion = (Select-String -Path server/internal/buildinfo/version.go -Pattern 'var Version = "([^"]+)"').Matches[0].Groups[1].Value
           $daemonVersion = (Select-String -Path daemon/internal/buildinfo/version.go -Pattern 'var Version = "([^"]+)"').Matches[0].Groups[1].Value
           $pwaVersion = (Get-Content -Raw pwa/package.json | ConvertFrom-Json).version
@@ -60,6 +78,9 @@ jobs:
             }
           }
           "version=$version" >> $env:GITHUB_OUTPUT
+          "major_minor=$majorMinor" >> $env:GITHUB_OUTPUT
+          "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
+          "source_sha=$sourceSha" >> $env:GITHUB_OUTPUT
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -156,12 +177,23 @@ jobs:
             goarch: amd64
             runner: windows-latest
     steps:
-      - name: Check out tagged source
+      - name: Check out verified source
         uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.verify.outputs.source_sha }}
           path: source
           fetch-depth: 0
+
+      - name: Verify pinned source commit
+        shell: pwsh
+        working-directory: source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SOURCE_SHA) {
+            throw "Source checkout moved: expected $env:EXPECTED_SOURCE_SHA, got $actual"
+          }
 
       - name: Check out release automation
         uses: actions/checkout@v7
@@ -206,11 +238,194 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  container:
+    name: Publish Server container
+    needs:
+      - verify
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/klarkxy/nekonest-server
+    steps:
+      - name: Check out verified source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+          path: source
+          fetch-depth: 0
+
+      - name: Verify pinned source commit
+        shell: pwsh
+        working-directory: source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SOURCE_SHA) {
+            throw "Source checkout moved: expected $env:EXPECTED_SOURCE_SHA, got $actual"
+          }
+
+      - name: Check out release automation
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: automation
+
+      - name: Test release container tag policy
+        shell: pwsh
+        run: ./automation/tools/ghcr-release-tags.tests.ps1
+
+      - name: Prepare trusted container automation
+        shell: pwsh
+        run: Copy-Item -LiteralPath automation/.dockerignore -Destination source/.dockerignore -Force
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse exact-tag rewrites
+        id: preflight
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          ./automation/tools/ghcr-release-tags.ps1 `
+            -Mode preflight `
+            -Image $env:IMAGE `
+            -ReleaseTag $env:RELEASE_TAG `
+            -Version $env:VERSION `
+            -SourceSha $env:SOURCE_SHA
+
+      - name: Repair missing immutable exact tag
+        if: steps.preflight.outputs.skip == 'true' && steps.preflight.outputs.missing_exact != ''
+        shell: bash
+        env:
+          SOURCE_REF: ${{ steps.preflight.outputs.source_ref }}
+          MISSING_EXACT: ${{ steps.preflight.outputs.missing_exact }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$IMAGE:$MISSING_EXACT" "$SOURCE_REF"
+
+      - name: Generate image metadata
+        if: steps.preflight.outputs.skip != 'true'
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ env.RELEASE_TAG }}
+            type=raw,value=${{ needs.verify.outputs.version }}
+          flavor: |
+            latest=false
+          labels: |
+            org.opencontainers.image.title=NekoNest Server
+            org.opencontainers.image.description=NekoNest VPS Server with the matching phone PWA
+            org.opencontainers.image.source=https://github.com/klarkxy/nekonest
+            org.opencontainers.image.revision=${{ needs.verify.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.verify.outputs.version }}
+            org.opencontainers.image.licenses=SATA-2.0
+
+      - name: Build and publish multi-architecture image
+        if: steps.preflight.outputs.skip != 'true'
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: source
+          file: automation/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: |
+            index:org.opencontainers.image.revision=${{ needs.verify.outputs.source_sha }}
+            index:org.opencontainers.image.version=${{ needs.verify.outputs.version }}
+          build-args: VERSION=${{ needs.verify.outputs.version }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=server-container-release
+          cache-to: type=gha,mode=max,scope=server-container-release
+
+      - name: Verify immutable exact tags
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          ./automation/tools/ghcr-release-tags.ps1 `
+            -Mode verify-exact `
+            -Image $env:IMAGE `
+            -ReleaseTag $env:RELEASE_TAG `
+            -Version $env:VERSION `
+            -SourceSha $env:SOURCE_SHA
+
+      - name: Advance stable aliases without rollback
+        if: needs.verify.outputs.prerelease == 'false'
+        id: aliases
+        shell: pwsh
+        env:
+          MAJOR_MINOR: ${{ needs.verify.outputs.major_minor }}
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          ./automation/tools/ghcr-release-tags.ps1 `
+            -Mode promote `
+            -Image $env:IMAGE `
+            -ReleaseTag $env:RELEASE_TAG `
+            -Version $env:VERSION `
+            -MajorMinor $env:MAJOR_MINOR `
+            -SourceSha $env:SOURCE_SHA
+
+      - name: Log out of GHCR
+        shell: pwsh
+        run: docker logout ghcr.io
+
+      - name: Verify anonymous immutable exact tags
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          ./automation/tools/ghcr-release-tags.ps1 `
+            -Mode verify-exact `
+            -Image $env:IMAGE `
+            -ReleaseTag $env:RELEASE_TAG `
+            -Version $env:VERSION `
+            -SourceSha $env:SOURCE_SHA
+
+      - name: Verify anonymous stable aliases
+        if: needs.verify.outputs.prerelease == 'false'
+        shell: pwsh
+        env:
+          EXPECTED_LATEST_DIGEST: ${{ steps.aliases.outputs.latest_digest }}
+          EXPECTED_MAJOR_MINOR_DIGEST: ${{ steps.aliases.outputs.major_minor_digest }}
+          MAJOR_MINOR: ${{ needs.verify.outputs.major_minor }}
+        run: |
+          ./automation/tools/ghcr-release-tags.ps1 `
+            -Mode verify-aliases `
+            -Image $env:IMAGE `
+            -MajorMinor $env:MAJOR_MINOR `
+            -ExpectedMajorMinorDigest $env:EXPECTED_MAJOR_MINOR_DIGEST `
+            -ExpectedLatestDigest $env:EXPECTED_LATEST_DIGEST
+
   publish:
     name: Publish GitHub Release assets
     needs:
       - verify
       - build
+      - container
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -239,15 +454,21 @@ jobs:
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_flags=()
+            if [[ "$PRERELEASE" == "true" ]]; then
+              release_flags+=(--prerelease)
+            fi
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "$RELEASE_TAG" \
-              --generate-notes
+              --generate-notes \
+              "${release_flags[@]}"
           fi
           gh release upload "$RELEASE_TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \

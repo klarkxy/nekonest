@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add an official non-root Server + PWA container, private `0700`/`0600` data
+  handling, hardened Docker Compose deployment, real container smoke test, and
+  tag-driven multi-architecture GHCR publication with digest-pinned immutable
+  exact tags, rollback-safe stable aliases, SBOM, and provenance.
+- Add privacy-safe Server/Daemon operator logging with validated text/JSON
+  formats, configurable levels, stable component/event fields, and runtime-owned
+  persistence/rotation.
 - Add GitHub Actions checks for Server, Daemon, PWA, and all supported release
   packages, plus tag-driven publication of five prebuilt archives and SHA-256
   checksums.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nekonest/daemon/internal/attach"
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 const (
@@ -191,7 +191,7 @@ func (c *GrokCommander) startPromptInDir(
 		if onOutput != nil {
 			onOutput(source, line)
 		}
-		if diagnostics.suppress("grok", sessionID, source) {
+		if diagnostics.suppress("grok_build", sessionID, source, line) {
 			return
 		}
 		c.handleProcessLine(sessionID, source, line)
@@ -199,7 +199,7 @@ func (c *GrokCommander) startPromptInDir(
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
 		c.flushStream(sessionID)
-		log.Printf("[grok] session %s process exited with code %d", sessionID, exitCode)
+		opslog.Info("daemon.agentexec", "process_exited", "agent process exited", "agent_type", "grok_build", "session_id", sessionID, "status", exitCode)
 		if message := diagnostics.exitFailure(
 			"Grok Build",
 			exitCode,

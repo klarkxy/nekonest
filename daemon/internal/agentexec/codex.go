@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nekonest/daemon/internal/attach"
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 // CodexCommander handles Codex CLI interactions.
@@ -217,7 +217,7 @@ func (c *CodexCommander) SendPrompt(
 	// Codex writes startup/plugin diagnostics to stderr. Keep those in the
 	// diagnostic channel instead of turning them into chat messages.
 	executor.OnOutputSource = func(source, line string) {
-		if diagnostics.suppress("codex", sessionID, source) {
+		if diagnostics.suppress("codex", sessionID, source, line) {
 			return
 		}
 		c.handleProcessLine(sessionID, source, line)
@@ -235,12 +235,9 @@ func (c *CodexCommander) SendPrompt(
 					if !executor.IsRunning() {
 						return
 					}
-					log.Printf(
-						"[codex] session %s remained alive after terminal event; stopping process tree",
-						sessionID,
-					)
+					opslog.Warn("daemon.agentexec", "process_alive_after_terminal", "agent process remained alive after terminal event; stopping process tree", "agent_type", "codex", "session_id", sessionID)
 					if err := executor.Stop(); err != nil {
-						log.Printf("[codex] stop completed session %s: %v", sessionID, err)
+						opslog.Error("daemon.agentexec", "process_stop_failed", "agent process stop after terminal event failed", err, "agent_type", "codex", "session_id", sessionID)
 					}
 				})
 			})
@@ -249,7 +246,7 @@ func (c *CodexCommander) SendPrompt(
 
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
-		log.Printf("[codex] session %s process exited with code %d", sessionID, exitCode)
+		opslog.Info("daemon.agentexec", "process_exited", "agent process exited", "agent_type", "codex", "session_id", sessionID, "status", exitCode)
 		if message := diagnostics.exitFailure(
 			"Codex",
 			exitCode,
@@ -272,7 +269,7 @@ func (c *CodexCommander) SendPrompt(
 	_ = executor.CloseStdin()
 
 	c.executors[sessionID] = executor
-	log.Printf("[codex] started process for session %s", sessionID)
+	opslog.Info("daemon.agentexec", "process_started", "agent process started", "agent_type", "codex", "session_id", sessionID)
 	return nil
 }
 

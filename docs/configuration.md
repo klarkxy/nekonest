@@ -17,6 +17,12 @@ Binary: `nekonest-server` (`server/cmd/server`).
 | `-pwa` | `./pwa-dist` | Built PWA static files directory |
 | `-version` | — | Print the server application release and exit |
 
+On POSIX hosts, the Server sets a private `0077` process umask, keeps the data
+root at `0700`, and keeps SQLite DB/WAL/SHM files at `0600`. It exits before
+opening the listener if those permissions cannot be enforced. Windows keeps
+using the ACL of the account that runs the Server; POSIX mode bits are not a
+substitute for a private Windows service-account ACL.
+
 ### Listen address
 
 | Admin secret (`NEKONEST_ADMIN_SECRET` or compatibility alias) | Bind address |
@@ -40,6 +46,8 @@ Do not put an unauthenticated server behind a LAN-facing proxy.
 | `NEKONEST_VAPID_PUBLIC_KEY` | Optional | Web Push VAPID public key (base64url). |
 | `NEKONEST_VAPID_PRIVATE_KEY` | Optional | Web Push VAPID private key. |
 | `NEKONEST_VAPID_SUBJECT` | Optional | Web Push contact, e.g. `mailto:you@example.com`. |
+| `NEKONEST_LOG_FORMAT` | No | Operator log format: `text` (default) or one JSON object per line (`json`). Invalid values stop startup. |
+| `NEKONEST_LOG_LEVEL` | No | Minimum operator level: `debug`, `info` (default), `warn`, or `error`. Invalid values stop startup. |
 
 #### Bootstrap token behavior
 
@@ -105,8 +113,14 @@ Binary: `nekonest-daemon.exe` (`daemon/cmd/daemon`).
 | `NEKONEST_SERVER` | `-register` | VPS base URL, e.g. `https://nekonest.example.com` (http(s) is normalized to ws(s) for the dial) |
 | `NEKONEST_BOOTSTRAP_TOKEN` | `-register` on public VPS | Same value as server `NEKONEST_BOOTSTRAP_TOKEN`; sent as `X-Neko-Bootstrap` |
 | `NEKONEST_TRANSPORT_MODE` | Registration / optional assertion | Registration reads the Server mode and persists it. If supplied, the value must match. Existing daemon configs without the field are legacy open. |
+| `NEKONEST_LOG_FORMAT` | Every run | `text` (default) or one JSON object per line (`json`). |
+| `NEKONEST_LOG_LEVEL` | Every run | `debug`, `info` (default), `warn`, or `error`. |
 
 Steady-state runs load credentials from the config file, not from these env vars.
+
+Server and Daemon write operator logs only to stdout/stderr. Docker or journald
+owns persistence and rotation; Windows launchers should redirect those streams.
+JSON records always carry `time`, `level`, `msg`, `component`, and `event`.
 
 ### Config file
 

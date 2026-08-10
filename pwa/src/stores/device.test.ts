@@ -92,7 +92,7 @@ describe('device store loading states', () => {
 
     expect(store.loaded).toBe(false)
     expect(store.loadError.length).toBeGreaterThan(0)
-    expect(store.loadError).toMatch(/nest server|猫窝服务器/i)
+    expect(store.loadError).toMatch(/nest server|猫娘乐园服务器/i)
     expect(store.loading).toBe(false)
   })
 

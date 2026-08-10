@@ -1,10 +1,14 @@
 package push
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/nekonest/server/internal/opslog"
 )
 
 func TestValidateEndpoint(t *testing.T) {
@@ -79,6 +83,27 @@ func TestSendNoopEmptyAndInvalid(t *testing.T) {
 	Send(nil, "t", "b", "/", "device", "session", nil)
 	Send([]Subscription{{Endpoint: "http://evil", P256DH: "x", Auth: "y"}}, "t", "b", "/", "device", "session", nil)
 	Send([]Subscription{{Endpoint: "https://fcm.googleapis.com/fcm/send/x", P256DH: "x", Auth: "y"}}, "t", "b", "/", "device", "session", nil)
+}
+
+func TestPushRejectionLogRedactsPayloadAndEndpoint(t *testing.T) {
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(opslog.New(&output, opslog.Config{Format: "json", Level: slog.LevelDebug}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	Send([]Subscription{{Endpoint: "https://127.0.0.1/push-endpoint-sentinel", P256DH: "key", Auth: "auth"}}, "push-title-sentinel", "push-body-sentinel", "/?query-sentinel", "device-sentinel", "session-sentinel", nil)
+	got := output.String()
+	for _, secret := range []string{"push-title-sentinel", "push-body-sentinel", "endpoint-sentinel", "query-sentinel", "device-sentinel", "session-sentinel"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("push log leaked %q: %q", secret, got)
+		}
+	}
+	var record map[string]any
+	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record["component"] != "server.push" || record["event"] != "subscription_endpoint_rejected" {
+		t.Fatalf("unexpected push record: %#v", record)
+	}
 }
 
 func TestBoundedNotificationQueue(t *testing.T) {

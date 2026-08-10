@@ -126,12 +126,16 @@ Daemon 启动后，手机列表应在短重连窗口内变为 online。
 
 ## 仍然卡住
 
-1. 收集 server systemd 与 daemon 控制台的**非机密**日志。  
+1. 从 `journalctl -u nekonest`、`docker compose logs server` 或 Daemon
+   控制台收集**非机密**日志。机器分析可设 `NEKONEST_LOG_FORMAT=json`；
+   `NEKONEST_LOG_LEVEL=debug` 只用于有界诊断窗口。
 2. 验证 `/health` 与设备 online 状态。  
 3. 按 [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) 做到第一个失败点。  
 4. 贡献者按 PWA → server → daemon → 适配器端到端追踪（[architecture.zh-CN.md](./architecture.zh-CN.md)）。  
 
 切勿把设备令牌、手机密钥或 bootstrap 粘贴到公开 issue。
+JSON 日志有意省略上游原始错误和用户正文；请用 `component`、`event` 及可用的
+设备/会话/消息标识的稳定匿名值关联。日志不输出原始标识，既可跨事件关联，也避免攻击者控制的 wire 字段直接变成日志内容。
 
 ## 协议 1.2 控制与 blocker
 

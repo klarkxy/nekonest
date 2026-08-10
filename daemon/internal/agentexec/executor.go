@@ -5,10 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 // AgentExecutor manages a running agent process.
@@ -305,6 +306,6 @@ func (e *AgentExecutor) readLineOutput(r io.ReadCloser, source string) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		log.Printf("[%s] %s read error: %v", e.agentType, source, err)
+		opslog.Error("daemon.agentexec", "output_read_failed", "agent output reader failed", err, "agent_type", e.agentType, "session_id", e.sessionID, "source", source)
 	}
 }

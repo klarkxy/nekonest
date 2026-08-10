@@ -14,6 +14,31 @@
 - 带 TLS 的反代（推荐 Caddy 或 Nginx）
 - 两段长随机密钥：管理员密钥与 bootstrap 令牌（**必须不同**）
 
+## Docker Compose（推荐）
+
+公开镜像为 `ghcr.io/klarkxy/nekonest-server`，内含匹配 PWA，以 uid/gid
+`10001` 运行，根文件系统只读，只有 `/data` 写入 SQLite 与附件持久数据。
+
+```bash
+git clone https://github.com/klarkxy/nekonest.git
+cd nekonest
+cp docker.env.example .env
+# 替换 .env 中全部占位符。
+chmod 600 .env
+sudo install -d -m 700 -o 10001 -g 10001 data
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs -f server
+```
+
+Compose 只发布 `127.0.0.1:8080`，启用容器健康检查，并限制 Docker
+`json-file` 日志轮转。若要复用已有绝对数据目录，启动前设置
+`NEKONEST_DATA_DIR`。该目录须整体备份，禁止二进制与容器同时读取。
+Compose 不会自动创建缺失的宿主机路径。Linux 上 Server 会强制数据根目录为
+`0700`、SQLite DB/WAL/SHM 文件为 `0600`；若挂载路径无法收紧，会在监听
+端口前停止启动。
+
 ## 1. 编译
 
 ```bash
@@ -44,8 +69,11 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/serve
 ```bash
 export NEKONEST_ADMIN_SECRET='换成足够长的随机串'
 export NEKONEST_BOOTSTRAP_TOKEN='另一段足够长的随机串'
-export NEKONEST_TRANSPORT_MODE='open' # v0.2 运维默认
+# 新数据默认 sealed；仅在有意选择/断言模式时设置。
+# export NEKONEST_TRANSPORT_MODE='sealed'
 export NEKONEST_ALLOWED_ORIGINS='https://nekonest.example.com'
+export NEKONEST_LOG_FORMAT='json'
+export NEKONEST_LOG_LEVEL='info'
 # 本机前有覆盖转发头的反代时：
 export NEKONEST_TRUST_PROXY=1
 # 反代不在 loopback 时：
@@ -102,6 +130,7 @@ WantedBy=multi-user.target
 ```bash
 sudo useradd --system --home /opt/nekonest --shell /usr/sbin/nologin nekonest
 sudo chown -R nekonest:nekonest /opt/nekonest
+sudo install -d -m 700 -o nekonest -g nekonest /opt/nekonest/data
 sudo chmod 600 /opt/nekonest/.env   # 若使用
 sudo systemctl daemon-reload
 sudo systemctl enable --now nekonest
@@ -157,6 +186,10 @@ server {
 - [ ] 完整路径：[e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md)
 
 ## 6. 升级
+
+Docker 升级应拉取目标不可变 `vX.Y.Z` 标签并记录 manifest digest，备份绑定的
+数据目录，再重建服务并执行下方验收。回滚时恢复旧镜像 digest；只有显式迁移要求时
+才回滚数据。
 
 1. 合并/推送已批准改动，并从这个确切提交构建 `nekonest-server` 与 `pwa/dist`；
    记录本地 SHA-256。

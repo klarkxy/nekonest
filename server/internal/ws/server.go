@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
+	"github.com/nekonest/server/internal/opslog"
 	"github.com/nekonest/server/internal/protocol"
 	"github.com/nekonest/server/internal/push"
 )
@@ -410,7 +410,7 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[push] subscription registered for device %s", req.DeviceID)
+	opslog.Info("server.registration", "push_subscription_registered", "push subscription registered")
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]string{"status": "subscribed"})
@@ -493,7 +493,7 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		_ = s.db.SetDevicePublicKeys(req.DeviceID, req.Ed25519Public, req.X25519Public, req.IdentityFingerprint)
 	}
 
-	log.Printf("[register] device %s (%s) os=%s", req.DeviceID, req.Name, req.OS)
+	opslog.Info("server.registration", "device_registered", "device registered", "os", safeDeviceOSForLog(req.OS))
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]string{
@@ -502,6 +502,17 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		"name":           req.Name,
 		"transport_mode": string(s.TransportMode()),
 	})
+}
+
+func safeDeviceOSForLog(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "windows":
+		return "windows"
+	case "linux":
+		return "linux"
+	default:
+		return "unknown"
+	}
 }
 
 func (s *Server) handleGeneratePairCode(w http.ResponseWriter, r *http.Request) {
@@ -546,7 +557,7 @@ func (s *Server) handleGeneratePairCode(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Do not log the pair code itself (X7).
-	log.Printf("[pair] code generated for device %s", req.DeviceID)
+	opslog.Info("server.registration", "pair_code_generated", "pair code generated")
 
 	keys, _ := s.db.GetDevicePublicKeys(req.DeviceID)
 	resp := map[string]any{

@@ -101,6 +101,26 @@ Active wire ids: `claude_code`, `codex`, `kimi_cli`, `grok_build`. Protocol 1.x 
 
 ### 1. Install and run the server (VPS)
 
+[GHCR](https://github.com/klarkxy/nekonest/pkgs/container/nekonest-server)
+publishes a non-root `linux/amd64` + `linux/arm64` image containing both the
+Server and matching PWA. The daemon is intentionally **not** containerized.
+
+```bash
+git clone https://github.com/klarkxy/nekonest.git
+cd nekonest
+cp docker.env.example .env
+# Edit .env, then keep it private.
+chmod 600 .env
+sudo install -d -m 700 -o 10001 -g 10001 data
+docker compose pull
+docker compose up -d
+docker compose logs -f server
+```
+
+Compose refuses to create a missing host data path. On Linux, the Server keeps
+the data root at mode `0700` and SQLite DB/WAL/SHM files at `0600`; startup
+fails before listening if those private permissions cannot be enforced.
+
 [GitHub Releases](https://github.com/klarkxy/nekonest/releases/latest) provide
 Linux amd64 and arm64 Server archives. Each archive includes the matching
 `pwa-dist`, English/Chinese READMEs, licenses, and the version marker; no
@@ -222,6 +242,8 @@ Acceptance checklist: [docs/e2e-smoke.md](docs/e2e-smoke.md).
 | `NEKONEST_TRUSTED_PROXY_CIDRS` | Trusted proxy CIDRs when proxy is not loopback |
 | `NEKONEST_VAPID_*` | Optional Web Push |
 | `NEKONEST_SERVER` | Daemon register: VPS URL |
+| `NEKONEST_LOG_FORMAT` | `text` (default) or one-JSON-object-per-line `json` |
+| `NEKONEST_LOG_LEVEL` | `debug`, `info` (default), `warn`, or `error` |
 
 > [!WARNING]
 > Without an admin secret the server binds **loopback only** for local development. Do not expose unauthenticated mode publicly.

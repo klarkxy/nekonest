@@ -5,7 +5,6 @@ package agentexec
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 // resolveLaunch never routes user-controlled args through cmd.exe.
@@ -158,12 +159,12 @@ func interruptProcess(p *os.Process) error {
 func startManagedProcess(cmd *exec.Cmd) (uintptr, error) {
 	job, err := createJobObject()
 	if err != nil || job == 0 {
-		log.Printf("[agentexec] WARNING: create Job Object failed; using taskkill tree fallback: %v", err)
+		opslog.Warn("daemon.agentexec", "job_object_create_failed", "Windows Job Object creation failed; taskkill tree fallback enabled", "status", "fallback")
 		return 0, cmd.Start()
 	}
 	if err := setJobKillOnClose(job); err != nil {
 		closeJobHandle(job)
-		log.Printf("[agentexec] WARNING: configure Job Object failed; using taskkill tree fallback: %v", err)
+		opslog.Warn("daemon.agentexec", "job_object_configure_failed", "Windows Job Object configuration failed; taskkill tree fallback enabled", "status", "fallback")
 		return 0, cmd.Start()
 	}
 
@@ -191,7 +192,7 @@ func startManagedProcess(cmd *exec.Cmd) (uintptr, error) {
 			_ = cmd.Wait()
 			return 0, fmt.Errorf("assign Job Object: %v; resume fallback: %w", err, resumeErr)
 		}
-		log.Printf("[agentexec] WARNING: assign process %d to Job Object failed; using taskkill tree fallback: %v", cmd.Process.Pid, err)
+		opslog.Warn("daemon.agentexec", "job_object_assign_failed", "Windows Job Object assignment failed; taskkill tree fallback enabled", "status", "fallback")
 		return 0, nil
 	}
 	if err := resumeProcess(processHandle); err != nil {

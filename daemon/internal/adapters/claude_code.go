@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/nekonest/daemon/internal/agentexec"
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 var errClaudeSubagentTranscript = errors.New("claude subagent transcript")
@@ -83,13 +83,14 @@ func (a *ClaudeCodeAdapter) Close() error {
 	a.watcherMu.Lock()
 	defer a.watcherMu.Unlock()
 
+	watcherCount := len(a.watchers)
 	for id, w := range a.watchers {
 		if err := w.Close(); err != nil {
-			log.Printf("[claude] error closing watcher for %s: %v", id, err)
+			opslog.Error("daemon.adapters", "watcher_close_failed", "native session watcher close failed", err, "agent_type", "claude_code", "session_id", id)
 		}
 		delete(a.watchers, id)
 	}
-	log.Printf("[claude] closed all watchers")
+	opslog.Info("daemon.adapters", "watchers_closed", "native session watchers closed", "agent_type", "claude_code", "count", watcherCount)
 	return nil
 }
 
@@ -141,7 +142,7 @@ func (a *ClaudeCodeAdapter) Discover() ([]*SessionInfo, error) {
 			if errors.Is(parseErr, errClaudeSubagentTranscript) {
 				return nil
 			}
-			log.Printf("[claude] skip %s: %v", path, parseErr)
+			opslog.Error("daemon.adapters", "session_parse_failed", "native session transcript skipped after parse failure", parseErr, "agent_type", "claude_code")
 			return nil
 		}
 

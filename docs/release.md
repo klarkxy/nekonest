@@ -65,6 +65,24 @@ three version surfaces, then creates or updates the GitHub Release with:
 - Server + matching PWA: Linux amd64 and arm64
 - Daemon: Windows amd64, Linux amd64, and Linux arm64
 - `checksums.txt` covering all five archives
+- `ghcr.io/klarkxy/nekonest-server` multi-architecture image with SBOM and provenance
+
+Stable releases publish `vX.Y.Z`, `X.Y.Z`, `X.Y`, and `latest`. Prereleases
+publish only their exact `vX.Y.Z-suffix` and `X.Y.Z-suffix` tags. Exact tags
+are immutable: a rerun skips the same source revision and fails on any mismatch.
+Container publication is globally serialized without canceling queued releases.
+It builds or repairs the two exact tags first, pins all copies to their verified
+digest, and only then advances stable aliases. A newer alias is a successful
+no-op; same-version conflicts or invalid metadata fail closed. Registry reads
+are retried and only an explicit missing manifest is treated as absent. The
+workflow logs out and anonymously verifies both exact tags and the final stable
+alias digests, so the GHCR package must be public.
+
+The first publication of a personal GHCR package may leave it private. In that
+case the workflow intentionally stops at anonymous verification after publishing
+the exact image. Change the package visibility to **Public** in GitHub, then
+rerun the same immutable tag; the rerun verifies the existing digest and safely
+completes aliases and Release assets without rebuilding or rewriting it.
 
 Release asset names stay version-independent so README installation links may
 use `releases/latest/download`; the immutable tag and each archive's `VERSION`
@@ -73,7 +91,8 @@ should link the README quick start and deploy docs (EN + ZH).
 
 To repair missing assets on an existing immutable tag, run **Release binaries**
 manually with the exact tag. The workflow checks out that tag's source but uses
-the automation from the selected workflow revision; it never moves the tag.
+the automation and Dockerfile from the selected workflow revision; all build
+inputs still come from the exact tagged source, and the tag itself never moves.
 Repair runs still validate version surfaces, build the tagged PWA and all five
 packages, execute same-architecture binary smoke checks, and publish checksums.
 They do not re-run an old tag's unit suites, whose runner assumptions may have

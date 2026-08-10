@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
+	"github.com/nekonest/server/internal/opslog"
 	"github.com/nekonest/server/internal/ws"
 )
 
@@ -30,18 +30,26 @@ func main() {
 		fmt.Println(buildinfo.Version)
 		return
 	}
+	setPrivateUmask()
+	if _, err := opslog.Configure(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	opslog.RedirectStandard("server.legacy")
+
+	if err := preparePrivateDirectory(*dataDir); err != nil {
+		opslog.Error("server.main", "data_directory_prepare_failed", "failed to prepare private data directory", err)
+		os.Exit(1)
+	}
 
 	if *migrateV1 {
 		if err := runMigrateV1(*dataDir, *backupDir); err != nil {
-			log.Fatalf("migrate-v1 failed: %v", err)
+			opslog.Error("server.main", "migration_failed", "v1 migration failed", err)
+			os.Exit(1)
 		}
 		return
 	}
 
-	// Ensure data directory exists
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		log.Fatalf("failed to create data directory: %v", err)
-	}
 	dbPath := filepath.Join(*dataDir, "nekonest.db")
 	// Transport mode is immutable once persisted by the nest. The environment
 	// may select only the first-run mode (or assert the already stored value).
@@ -49,7 +57,8 @@ func main() {
 
 	database, err := db.NewWithTransportMode(dbPath, transportMode)
 	if err != nil {
-		log.Fatalf("failed to open database: %v", err)
+		opslog.Error("server.main", "database_open_failed", "failed to open database", err)
+		os.Exit(1)
 	}
 	defer database.Close()
 
@@ -58,40 +67,42 @@ func main() {
 	if phoneSecret == "" {
 		phoneSecret = strings.TrimSpace(os.Getenv("NEKONEST_PHONE_SECRET"))
 		if phoneSecret != "" {
-			log.Printf("⚠️  NEKONEST_PHONE_SECRET is deprecated; use NEKONEST_ADMIN_SECRET")
+			opslog.Warn("server.main", "deprecated_phone_secret", "deprecated phone secret environment variable is in use")
 		}
 	}
 	if phoneSecret == "" {
-		log.Printf("⚠️  NEKONEST_ADMIN_SECRET not set — local-only development mode")
+		opslog.Warn("server.main", "local_only_mode", "admin authentication is not configured")
 		if strings.TrimSpace(os.Getenv("NEKONEST_ALLOWED_ORIGINS")) == "" {
 			_ = os.Setenv("NEKONEST_ALLOWED_ORIGINS", defaultLocalOrigins(*port))
 		}
 	} else {
-		log.Printf("🔒 admin secret auth enabled (phone tokens via /api/phones/bootstrap)")
+		opslog.Info("server.main", "phone_auth_enabled", "phone authentication enabled")
 	}
 	if strings.TrimSpace(os.Getenv("NEKONEST_BOOTSTRAP_TOKEN")) == "" {
 		if phoneSecret != "" {
-			log.Printf("⚠️  NEKONEST_BOOTSTRAP_TOKEN not set while ADMIN_SECRET is set — device registration is disabled")
+			opslog.Warn("server.main", "registration_disabled", "device registration bootstrap is not configured")
 		} else {
-			log.Printf("⚠️  NEKONEST_BOOTSTRAP_TOKEN not set — /api/devices/register is open (dev only)")
+			opslog.Warn("server.main", "registration_open", "device registration is open in local development")
 		}
 	} else {
-		log.Printf("🔒 device registration bootstrap token enabled")
+		opslog.Info("server.main", "registration_token_enabled", "device registration bootstrap enabled")
 	}
 	if v := strings.TrimSpace(os.Getenv("NEKONEST_TRUST_PROXY")); v == "1" || strings.EqualFold(v, "true") {
-		log.Printf("🔒 TRUST_PROXY on — X-Forwarded-For used for rate limits (only behind a trusted reverse proxy)")
+		opslog.Info("server.main", "trusted_proxy_enabled", "trusted proxy rate-limit mode enabled")
 	}
 
 	server := ws.NewWithSecret(database, phoneSecret)
 	server.SetDataDir(*dataDir)
 	persistedMode, err := database.TransportMode()
 	if err != nil {
-		log.Fatalf("failed to read persistent transport mode: %v", err)
+		opslog.Error("server.main", "transport_mode_read_failed", "failed to read persistent transport mode", err)
+		os.Exit(1)
 	}
 	if err := server.SetTransportMode(persistedMode); err != nil {
-		log.Fatalf("invalid persistent transport mode: %v", err)
+		opslog.Error("server.main", "transport_mode_invalid", "invalid persistent transport mode", err)
+		os.Exit(1)
 	}
-	log.Printf("🔐 transport mode: %s", server.TransportMode())
+	opslog.Info("server.main", "transport_mode_loaded", "persistent transport mode loaded", "transport_mode", server.TransportMode())
 
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
@@ -132,11 +143,10 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("🐱 NekoNest Server %s starting on %s", buildinfo.Version, addr)
-		log.Printf("   Data: %s", dbPath)
-		log.Printf("   PWA:  %s", *pwaDir)
+		opslog.Info("server.main", "starting", "server starting", "version", buildinfo.Version, "bind_scope", map[bool]string{true: "loopback", false: "public"}[strings.HasPrefix(addr, "127.0.0.1:")])
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
+			opslog.Error("server.main", "listen_failed", "server stopped unexpectedly", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -145,17 +155,17 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("[server] shutting down...")
+	opslog.Info("server.main", "shutdown_started", "server shutdown started")
 
 	// Graceful shutdown with 10s timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Printf("[server] forced shutdown: %v", err)
+		opslog.Error("server.main", "shutdown_forced", "graceful shutdown timed out", err)
 	}
 
-	log.Println("[server] goodbye 🐱")
+	opslog.Info("server.main", "shutdown_complete", "server shutdown complete")
 }
 
 // listenAddress prevents an accidentally unauthenticated process from being

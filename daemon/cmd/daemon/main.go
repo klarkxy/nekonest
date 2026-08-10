@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,6 +27,7 @@ import (
 	"github.com/nekonest/daemon/internal/config"
 	"github.com/nekonest/daemon/internal/connection"
 	"github.com/nekonest/daemon/internal/identity"
+	"github.com/nekonest/daemon/internal/opslog"
 	"github.com/nekonest/daemon/internal/sealed"
 	"github.com/nekonest/daemon/internal/sealedkeys"
 	"github.com/nekonest/daemon/internal/startjournal"
@@ -64,16 +64,25 @@ func main() {
 		fmt.Println(buildinfo.Version)
 		return
 	}
+	if _, err := opslog.Configure(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	opslog.RedirectStandard("daemon.legacy")
 
 	// Handle registration flow
 	if *register {
-		handleRegistration(*deviceName)
+		if code := handleRegistration(*deviceName); code != 0 {
+			os.Exit(code)
+		}
 		return
 	}
 
 	// Handle pair-code generation
 	if *pairFlag != "" {
-		handlePairing(*pairFlag)
+		if code := handlePairing(*pairFlag); code != 0 {
+			os.Exit(code)
+		}
 		return
 	}
 
@@ -84,7 +93,6 @@ func main() {
 		}
 		os.Exit(runDoctor(cfgPath))
 	}
-
 	// Load config
 	var cfg *config.Config
 	var err error
@@ -102,9 +110,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Printf("🐱 NekoNest Daemon %s starting", buildinfo.Version)
-	log.Printf("   Device: %s", cfg.DeviceID)
-	log.Printf("   Server: %s", cfg.ServerURL)
+	opslog.Info("daemon.main", "starting", "daemon starting", "version", buildinfo.Version)
 	// The mode belongs to the registered nest, not to an ad-hoc process
 	// environment. NEKONEST_TRANSPORT_MODE can only assert the value already
 	// persisted in config; accepting a different value would silently downgrade
@@ -113,18 +119,20 @@ func main() {
 	if requested := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE")); requested != "" {
 		mode, modeErr := config.NormalizeTransportMode(requested)
 		if modeErr != nil {
-			log.Fatalf("[daemon] %v", modeErr)
+			opslog.Error("daemon.main", "transport_mode_invalid", "invalid configured transport mode", modeErr)
+			os.Exit(1)
 		}
 		if mode != daemonTransport {
-			log.Fatalf("[daemon] transport_mode mismatch: config is %s, NEKONEST_TRANSPORT_MODE is %s", daemonTransport, mode)
+			opslog.Error("daemon.main", "transport_mode_mismatch", "configured transport mode does not match environment assertion", nil)
+			os.Exit(1)
 		}
 	}
-	log.Printf("   Transport: %s", daemonTransport)
+	opslog.Info("daemon.main", "transport_mode_loaded", "persistent transport mode loaded", "transport_mode", daemonTransport)
 	if sk, err := sealedkeys.LoadOrCreate(sealedkeys.DefaultPath()); err != nil {
-		log.Printf("   Sealed keys: unavailable (%v)", err)
+		opslog.Error("daemon.main", "sealed_keys_unavailable", "sealed keys unavailable", err)
 	} else {
 		daemonSealedKeys = sk
-		log.Printf("   Sealed keys: %s", sealedkeys.DefaultPath())
+		opslog.Info("daemon.main", "sealed_keys_loaded", "sealed keys loaded")
 	}
 
 	// Runtime config is published as immutable snapshots. Device credentials are
@@ -144,20 +152,23 @@ func main() {
 	}
 	activeConfigPath, err = filepath.Abs(activeConfigPath)
 	if err != nil {
-		log.Fatalf("[daemon] resolve config path: %v", err)
+		opslog.Error("daemon.main", "config_path_resolve_failed", "config path resolution failed", err)
+		os.Exit(1)
 	}
 	activeConfigPath, err = filepath.EvalSymlinks(activeConfigPath)
 	if err != nil {
-		log.Fatalf("[daemon] canonicalize config path for instance lock: %v", err)
+		opslog.Error("daemon.main", "config_path_canonicalize_failed", "config path canonicalization failed", err)
+		os.Exit(1)
 	}
 	journalPath := promptJournalPath(activeConfigPath, deviceID)
 	instanceLock, lockErr := acquireDaemonInstanceLock(activeConfigPath + ".daemon.lock")
 	if lockErr != nil {
-		log.Fatalf("[daemon] refusing to start a second instance: %v", lockErr)
+		opslog.Error("daemon.main", "instance_lock_failed", "daemon instance lock acquisition failed", lockErr)
+		os.Exit(1)
 	}
 	defer func() {
 		if err := instanceLock.Close(); err != nil {
-			log.Printf("[daemon] release instance lock: %v", err)
+			opslog.Error("daemon.main", "instance_lock_release_failed", "daemon instance lock release failed", err)
 		}
 	}()
 	commandJournal, journalErr := loadPromptJournal(
@@ -167,37 +178,40 @@ func main() {
 	)
 	if journalErr != nil {
 		// Failing open could replay a prompt that already reached an agent.
-		log.Fatalf("[daemon] cannot safely load prompt journal: %v", journalErr)
+		opslog.Error("daemon.main", "prompt_journal_load_failed", "prompt journal load failed", journalErr)
+		os.Exit(1)
 	}
-	log.Printf("   Prompt journal: %s", commandJournal.path)
+	opslog.Info("daemon.main", "prompt_journal_loaded", "prompt journal loaded")
 	queuePath := promptQueuePath(activeConfigPath, deviceID)
 	durableQueue, queueErr := loadPromptQueue(queuePath)
 	queueAvailable := queueErr == nil
 	if queueErr != nil {
 		// Queueing is an optional capability. Unlike the command journal, a
 		// damaged queue must not permit a fail-open replay, so keep it disabled.
-		log.Printf("   Prompt queue: unavailable (%v)", queueErr)
+		opslog.Error("daemon.main", "prompt_queue_unavailable", "prompt queue unavailable", queueErr)
 	} else {
-		log.Printf("   Prompt queue: %s", queuePath)
+		opslog.Info("daemon.main", "prompt_queue_loaded", "prompt queue loaded")
 	}
 	threadJournalPath := startjournal.Path(activeConfigPath, deviceID)
 	threadJournal, threadJournalErr := startjournal.Load(threadJournalPath, deviceID)
 	if threadJournalErr != nil {
 		// A missing/ambiguous start record can cause a second native thread.
-		log.Fatalf("[daemon] cannot safely load thread start journal: %v", threadJournalErr)
+		opslog.Error("daemon.main", "thread_start_journal_load_failed", "thread start journal load failed", threadJournalErr)
+		os.Exit(1)
 	}
-	log.Printf("   Thread start journal: %s", threadJournalPath)
+	opslog.Info("daemon.main", "thread_start_journal_loaded", "thread start journal loaded")
 
 	// Initialize the built-in adapter registry.
 	adapterRegistry, err := adapters.NewDefaultRegistry()
 	if err != nil {
-		log.Fatalf("[daemon] initialize adapters: %v", err)
+		opslog.Error("daemon.main", "adapter_initialize_failed", "adapter initialization failed", err)
+		os.Exit(1)
 	}
 	adapterList := adapterRegistry.All()
 
 	// Log available agents
 	for _, a := range adapterList {
-		log.Printf("   Adapter: %s (available: %v)", a.Name(), a.IsAvailable())
+		opslog.Info("daemon.main", "adapter_initialized", "adapter initialized", "agent_type", a.Name(), "available", a.IsAvailable())
 	}
 
 	// Create root context for graceful shutdown
@@ -243,7 +257,7 @@ func main() {
 		if terminal {
 			binding, ready, matched := activeTurns.terminalForEvent(event)
 			if !matched {
-				log.Printf("[daemon] ignoring stale terminal control event session=%s generation=%d client_msg_id=%s native_request_id=%s", event.SessionID, event.Generation, event.ClientMsgID, event.NativeRequestID)
+				opslog.Warn("daemon.main", "terminal_control_stale", "stale terminal control event ignored", "session_id", event.SessionID, "client_msg_id", event.ClientMsgID, "generation", event.Generation)
 				return
 			}
 			if !ready {
@@ -266,19 +280,19 @@ func main() {
 				switch lifecycle {
 				case adapters.TurnTerminalSuccess:
 					if err := durableQueue.complete(event.SessionID, running.ClientMsgID); err != nil {
-						log.Printf("[daemon] complete queued prompt: %v", err)
+						opslog.Error("daemon.main", "queued_prompt_complete_failed", "queued prompt completion failed", err, "session_id", event.SessionID, "client_msg_id", running.ClientMsgID)
 					}
 				case adapters.TurnTerminalFailure:
 					if err := durableQueue.block(event.SessionID, running.ClientMsgID, promptQueueBlockedFailed); err != nil {
-						log.Printf("[daemon] block failed prompt: %v", err)
+						opslog.Error("daemon.main", "queued_prompt_block_failed", "failed queued prompt could not be blocked", err, "session_id", event.SessionID, "client_msg_id", running.ClientMsgID, "status", promptQueueBlockedFailed)
 					}
 				case adapters.TurnInterrupted:
 					if err := durableQueue.block(event.SessionID, running.ClientMsgID, promptQueueBlockedInterrupted); err != nil {
-						log.Printf("[daemon] block interrupted prompt: %v", err)
+						opslog.Error("daemon.main", "queued_prompt_block_failed", "interrupted queued prompt could not be blocked", err, "session_id", event.SessionID, "client_msg_id", running.ClientMsgID, "status", promptQueueBlockedInterrupted)
 					}
 				case adapters.TurnIndeterminate:
 					if err := durableQueue.block(event.SessionID, running.ClientMsgID, promptQueueBlockedIndeterminate); err != nil {
-						log.Printf("[daemon] block indeterminate prompt: %v", err)
+						opslog.Error("daemon.main", "queued_prompt_block_failed", "indeterminate queued prompt could not be blocked", err, "session_id", event.SessionID, "client_msg_id", running.ClientMsgID, "status", promptQueueBlockedIndeterminate)
 					}
 				}
 				sendQueueUpdate(client, deviceID, event.SessionID, durableQueue)
@@ -311,7 +325,7 @@ func main() {
 		item, ok, claimErr := durableQueue.claimNext(sessionID)
 		if claimErr != nil || !ok {
 			if claimErr != nil {
-				log.Printf("[daemon] claim queued prompt: %v", claimErr)
+				opslog.Error("daemon.main", "queued_prompt_claim_failed", "queued prompt claim failed", claimErr, "session_id", sessionID)
 			}
 			return
 		}
@@ -344,10 +358,10 @@ func main() {
 		if attDir != "" && !crossedNativeBoundary {
 			_ = os.RemoveAll(attDir)
 		}
-		log.Printf("[daemon] dispatch queued prompt session=%s client_msg_id=%s: %v", sessionID, item.ClientMsgID, dispatchErr)
+		opslog.Error("daemon.main", "queued_prompt_dispatch_failed", "queued prompt dispatch failed", dispatchErr, "session_id", sessionID, "client_msg_id", item.ClientMsgID, "agent_type", item.AgentType)
 		if errors.Is(dispatchErr, agentexec.ErrSessionBusy) {
 			if err := durableQueue.releaseClaim(sessionID, item.ClientMsgID); err != nil {
-				log.Printf("[daemon] release pre-boundary busy queue claim: %v", err)
+				opslog.Error("daemon.main", "queued_prompt_claim_release_failed", "busy queued prompt claim release failed", err, "session_id", sessionID, "client_msg_id", item.ClientMsgID)
 			}
 			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 			return
@@ -380,13 +394,13 @@ func main() {
 		// Panic recovery for message handling
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[daemon] PANIC in message handler: %v", r)
+				opslog.Error("daemon.main", "message_handler_panic", "message handler panicked", nil)
 			}
 		}()
 
 		var msg map[string]interface{}
 		if err := json.Unmarshal(data, &msg); err != nil {
-			log.Printf("[daemon] unmarshal error: %v", err)
+			opslog.Error("daemon.main", "message_decode_failed", "incoming message decoding failed", err)
 			return
 		}
 
@@ -403,17 +417,17 @@ func main() {
 		if daemonInboundApplicationType(msgType) {
 			decoded, err := decodeInboundApplicationCommand(deviceID, sessionID, msg, msgType)
 			if err != nil {
-				log.Printf("[daemon] rejecting %s transport envelope: %v", msgType, err)
+				opslog.Warn("daemon.main", "transport_envelope_rejected", "incoming transport envelope rejected", "message_type", safeInboundMessageTypeForLog(msgType))
 				sendInboundDecodeFailure(client, deviceID, sessionID, msgType, msg, err)
 				return
 			}
 			payload = decoded
 		} else if err := validateInboundRoutingFrame(msg); err != nil {
-			log.Printf("[daemon] rejecting routing frame %s: %v", msgType, err)
+			opslog.Warn("daemon.main", "routing_frame_rejected", "incoming routing frame rejected", "message_type", safeInboundMessageTypeForLog(msgType))
 			return
 		}
 
-		log.Printf("[daemon] received: type=%s session=%s", msgType, sessionID)
+		opslog.Debug("daemon.main", "message_received", "incoming message received", "message_type", safeInboundMessageTypeForLog(msgType))
 
 		// Find the right adapter for this session
 		var targetAdapter adapters.Adapter
@@ -460,16 +474,16 @@ func main() {
 					if cached, ok := acceptedPrompts.get(sessionID, clientMsgID); ok {
 						accepted = cached
 					}
-					log.Printf("[daemon] re-acknowledging durable accepted prompt session=%s client_msg_id=%s", sessionID, clientMsgID)
+					opslog.Info("daemon.main", "prompt_acceptance_reacknowledged", "durable prompt acceptance reacknowledged", "session_id", sessionID, "client_msg_id", clientMsgID, "status", recorded.Status)
 					sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
 				default:
-					log.Printf("[daemon] refusing replay of unresolved prompt session=%s client_msg_id=%s state=%s", sessionID, clientMsgID, recorded.Status)
+					opslog.Warn("daemon.main", "prompt_replay_refused", "unresolved prompt replay refused", "session_id", sessionID, "client_msg_id", clientMsgID, "status", recorded.Status)
 					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate)
 				}
 				return
 			}
 			if accepted, duplicate := acceptedPrompts.get(sessionID, clientMsgID); duplicate {
-				log.Printf("[daemon] re-acknowledging accepted prompt session=%s client_msg_id=%s", sessionID, clientMsgID)
+				opslog.Info("daemon.main", "prompt_acceptance_reacknowledged", "cached prompt acceptance reacknowledged", "session_id", sessionID, "client_msg_id", clientMsgID, "status", promptJournalAccepted)
 				sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
 				return
 			}
@@ -494,12 +508,12 @@ func main() {
 				return
 			}
 			if prompt == "" && len(refs) == 0 {
-				log.Printf("[daemon] empty prompt")
+				logEmptyPromptRejected(sessionID, clientMsgID)
 				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "empty prompt")
 				return
 			}
 			if targetAdapter == nil {
-				log.Printf("[daemon] no cached adapter for session %s, probing local agent stores", sessionID)
+				opslog.Debug("daemon.main", "adapter_cache_miss", "session adapter cache missed; probing native stores", "session_id", sessionID)
 				// Prefer single best guess — never blast all agents (that multi-sends).
 				targetAdapter = pickAdapterForSession(sessionID, adapterList)
 			}
@@ -554,7 +568,7 @@ func main() {
 					refs,
 				)
 				if aerr != nil {
-					log.Printf("[daemon] attach materialize: %v", aerr)
+					opslog.Error("daemon.main", "attachment_materialize_failed", "prompt attachments could not be materialized", aerr, "session_id", sessionID, "client_msg_id", clientMsgID, "count", len(refs))
 					sendPromptFailed(client, deviceID, sessionID, clientMsgID, "attachment download failed: "+aerr.Error())
 					return
 				}
@@ -563,7 +577,7 @@ func main() {
 				releaseFiles = func() {
 					cleanupOnce.Do(func() {
 						if err := os.RemoveAll(attDir); err != nil {
-							log.Printf("[daemon] remove attachment directory %s: %v", attDir, err)
+							opslog.Error("daemon.main", "attachment_cleanup_failed", "prompt attachment cleanup failed", err, "session_id", sessionID, "client_msg_id", clientMsgID)
 						}
 					})
 				}
@@ -571,25 +585,21 @@ func main() {
 					prompt = "(user sent attachments)"
 				}
 				prompt = prompt + suffix
-				log.Printf(
-					"[daemon] materialized %d attachment(s) for %s",
-					len(localAttachments),
-					sessionID,
-				)
+				opslog.Info("daemon.main", "attachments_materialized", "prompt attachments materialized", "session_id", sessionID, "client_msg_id", clientMsgID, "count", len(localAttachments))
 			}
 
 			// Persist before crossing the Agent boundary. If the daemon dies
 			// after this write, startup converts dispatching to indeterminate
 			// and will never automatically execute the command again.
 			if err := commandJournal.markDispatching(sessionID, clientMsgID, originalPrompt); err != nil {
-				log.Printf("[daemon] prompt journal refused dispatch session=%s client_msg_id=%s: %v", sessionID, clientMsgID, err)
+				opslog.Error("daemon.main", "prompt_dispatch_journal_failed", "prompt dispatch journal write failed", err, "session_id", sessionID, "client_msg_id", clientMsgID)
 				sendPromptFailed(client, deviceID, sessionID, clientMsgID, "prompt was not executed because its durable dispatch record could not be written: "+err.Error())
 				return
 			}
 			generation := turnGenerations.Add(1)
 			if !activeTurns.bind(sessionID, generation, clientMsgID) {
 				if journalErr := commandJournal.rollbackDispatching(sessionID, clientMsgID); journalErr != nil {
-					log.Printf("[daemon] rollback active-turn conflict failed: %v", journalErr)
+					opslog.Error("daemon.main", "prompt_dispatch_rollback_failed", "active-turn conflict rollback failed", journalErr, "session_id", sessionID, "client_msg_id", clientMsgID, "generation", generation)
 					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate+"; active turn conflict")
 				} else {
 					sendPromptFailed(client, deviceID, sessionID, clientMsgID, "this session already has a controllable turn")
@@ -620,7 +630,7 @@ func main() {
 				},
 			}
 			if err := targetAdapter.SendPrompt(sessionID, request); err != nil {
-				log.Printf("[daemon] send_prompt error via %s: %v", targetAdapter.Name(), err)
+				opslog.Error("daemon.main", "prompt_dispatch_failed", "prompt dispatch through adapter failed", err, "session_id", sessionID, "client_msg_id", clientMsgID, "agent_type", targetAdapter.Name(), "generation", generation)
 				activeTurns.clearMatching(sessionID, generation, clientMsgID, "")
 				if errors.Is(err, adapters.ErrPromptBoundaryIndeterminate) {
 					// A timed-out or malformed native RPC may still be using the
@@ -642,14 +652,14 @@ func main() {
 						)
 						return
 					} else {
-						log.Printf("[daemon] rollback busy prompt failed: %v", journalErr)
+						opslog.Error("daemon.main", "prompt_dispatch_rollback_failed", "busy prompt dispatch rollback failed", journalErr, "session_id", sessionID, "client_msg_id", clientMsgID, "generation", generation)
 					}
 				}
 				// The adapter API cannot prove whether a failing Start/Send
 				// crossed into the agent. Preserve the ambiguity instead of
 				// enabling an unsafe automatic retry.
 				if journalErr := commandJournal.markIndeterminate(sessionID, clientMsgID); journalErr != nil {
-					log.Printf("[daemon] mark prompt indeterminate failed: %v", journalErr)
+					opslog.Error("daemon.main", "prompt_indeterminate_persist_failed", "indeterminate prompt state could not be persisted", journalErr, "session_id", sessionID, "client_msg_id", clientMsgID, "generation", generation)
 				}
 				sendPromptIndeterminate(
 					client,
@@ -669,7 +679,7 @@ func main() {
 					})
 				}
 				if err := commandJournal.markAccepted(sessionID, clientMsgID); err != nil {
-					log.Printf("[daemon] persist prompt acceptance failed session=%s client_msg_id=%s: %v", sessionID, clientMsgID, err)
+					opslog.Error("daemon.main", "prompt_acceptance_persist_failed", "prompt acceptance could not be persisted", err, "session_id", sessionID, "client_msg_id", clientMsgID, "agent_type", targetAdapter.Name(), "generation", generation)
 					if activeTurns.abandonAcceptance(sessionID, generation, clientMsgID) {
 						sendControlEvent(client, deviceID, adapters.ControlEvent{
 							SessionID: sessionID, AgentType: adapters.AgentType(targetAdapter.Name()), ClearActiveTurn: true,
@@ -690,7 +700,7 @@ func main() {
 				accepted := acceptedPrompt{prompt: boundedPromptEcho(originalPrompt)}
 				acceptedPrompts.add(sessionID, clientMsgID, accepted)
 				sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
-				log.Printf("[daemon] prompt sent via %s", targetAdapter.Name())
+				opslog.Info("daemon.main", "prompt_accepted", "prompt accepted by native agent", "session_id", sessionID, "client_msg_id", clientMsgID, "agent_type", targetAdapter.Name(), "generation", generation)
 			}
 
 		case "prompt_status_query":
@@ -721,15 +731,15 @@ func main() {
 					if cached, ok := acceptedPrompts.get(sessionID, clientMsgID); ok {
 						accepted = cached
 					}
-					log.Printf("[daemon] durable prompt status accepted session=%s client_msg_id=%s", sessionID, clientMsgID)
+					opslog.Info("daemon.main", "prompt_status_accepted", "durable prompt status is accepted", "session_id", sessionID, "client_msg_id", clientMsgID, "status", recorded.Status)
 					sendPromptAccepted(client, deviceID, sessionID, clientMsgID, accepted)
 				} else {
-					log.Printf("[daemon] durable prompt status unresolved session=%s client_msg_id=%s state=%s", sessionID, clientMsgID, recorded.Status)
+					opslog.Warn("daemon.main", "prompt_status_unresolved", "durable prompt status is unresolved", "session_id", sessionID, "client_msg_id", clientMsgID, "status", recorded.Status)
 					sendPromptIndeterminate(client, deviceID, sessionID, clientMsgID, promptOutcomeIndeterminate)
 				}
 				return
 			}
-			log.Printf("[daemon] prompt status absent from durable journal session=%s client_msg_id=%s", sessionID, clientMsgID)
+			opslog.Info("daemon.main", "prompt_status_not_seen", "prompt status absent from durable journal", "session_id", sessionID, "client_msg_id", clientMsgID, "status", "not_seen")
 			sendPromptNotSeen(client, deviceID, sessionID, clientMsgID)
 
 		case "prompt_committed":
@@ -740,28 +750,28 @@ func main() {
 				clientMsgID, _ = msg["client_msg_id"].(string)
 			}
 			if clientMsgID == "" {
-				log.Printf("[daemon] prompt_committed without client_msg_id session=%s", sessionID)
+				opslog.Warn("daemon.main", "prompt_commit_rejected", "prompt commit without client message id rejected", "session_id", sessionID)
 				return
 			}
 			recorded, seen := commandJournal.state(sessionID, clientMsgID)
 			if !seen {
 				// A duplicate commit may arrive after an old committed record
 				// was evicted; there is nothing left to transition.
-				log.Printf("[daemon] prompt_committed for absent/evicted record session=%s client_msg_id=%s", sessionID, clientMsgID)
+				opslog.Warn("daemon.main", "prompt_commit_record_absent", "prompt commit record is absent or evicted", "session_id", sessionID, "client_msg_id", clientMsgID)
 				return
 			}
 			if recorded.Status == promptJournalCommitted {
 				return
 			}
 			if recorded.Status != promptJournalAccepted {
-				log.Printf("[daemon] refusing prompt_committed for state=%s session=%s client_msg_id=%s", recorded.Status, sessionID, clientMsgID)
+				opslog.Warn("daemon.main", "prompt_commit_refused", "prompt commit refused for current state", "session_id", sessionID, "client_msg_id", clientMsgID, "status", recorded.Status)
 				return
 			}
 			if err := commandJournal.markCommitted(sessionID, clientMsgID); err != nil {
-				log.Printf("[daemon] persist prompt_committed failed session=%s client_msg_id=%s: %v", sessionID, clientMsgID, err)
+				opslog.Error("daemon.main", "prompt_commit_persist_failed", "prompt commit could not be persisted", err, "session_id", sessionID, "client_msg_id", clientMsgID)
 				return
 			}
-			log.Printf("[daemon] prompt committed by server session=%s client_msg_id=%s", sessionID, clientMsgID)
+			opslog.Info("daemon.main", "prompt_committed", "prompt committed by server", "session_id", sessionID, "client_msg_id", clientMsgID, "status", promptJournalCommitted)
 
 		case "cancel_prompt":
 			unlock := sessionSends.lock(sessionID)
@@ -827,10 +837,10 @@ func main() {
 				return
 			}
 			if err := targetAdapter.Approve(sessionID, approvalID); err != nil {
-				log.Printf("[daemon] approve error: %v", err)
+				opslog.Error("daemon.main", "approval_failed", "approval response failed", err, "session_id", sessionID)
 				sendDaemonError(client, deviceID, sessionID, "approve failed: "+err.Error())
 			} else {
-				log.Printf("[daemon] approved: %s", approvalID)
+				opslog.Info("daemon.main", "approval_completed", "approval response completed", "session_id", sessionID, "status", "approved")
 			}
 
 		case "deny":
@@ -840,10 +850,10 @@ func main() {
 				return
 			}
 			if err := targetAdapter.Deny(sessionID, approvalID); err != nil {
-				log.Printf("[daemon] deny error: %v", err)
+				opslog.Error("daemon.main", "denial_failed", "denial response failed", err, "session_id", sessionID)
 				sendDaemonError(client, deviceID, sessionID, "deny failed: "+err.Error())
 			} else {
-				log.Printf("[daemon] denied: %s", approvalID)
+				opslog.Info("daemon.main", "denial_completed", "denial response completed", "session_id", sessionID, "status", "denied")
 			}
 
 		case "respond_user_input":
@@ -880,14 +890,14 @@ func main() {
 				return
 			}
 			if err := targetAdapter.Interrupt(sessionID); err != nil {
-				log.Printf("[daemon] interrupt error: %v", err)
+				opslog.Error("daemon.main", "interrupt_failed", "session interrupt failed", err, "session_id", sessionID, "client_msg_id", clientMsgID, "generation", generation)
 				sendDaemonError(client, deviceID, sessionID, "interrupt failed: "+err.Error())
 			} else {
-				log.Printf("[daemon] interrupted session %s", sessionID)
+				opslog.Info("daemon.main", "interrupt_completed", "session interrupt completed", "session_id", sessionID, "client_msg_id", clientMsgID, "generation", generation)
 				if queueAvailable {
 					if running, ok := durableQueue.running(sessionID); ok {
 						if err := durableQueue.block(sessionID, running.ClientMsgID, promptQueueBlockedInterrupted); err != nil {
-							log.Printf("[daemon] block queue after interrupt: %v", err)
+							opslog.Error("daemon.main", "queued_prompt_block_failed", "running queue item could not be blocked after interrupt", err, "session_id", sessionID, "client_msg_id", running.ClientMsgID, "status", promptQueueBlockedInterrupted)
 						}
 					}
 					sendQueueUpdate(client, deviceID, sessionID, durableQueue)
@@ -915,7 +925,7 @@ func main() {
 				return
 			}
 			if err := codex.Steer(sessionID, text); err != nil {
-				log.Printf("[daemon] steer error: %v", err)
+				opslog.Error("daemon.main", "steer_failed", "session steer failed", err, "session_id", sessionID, "agent_type", "codex")
 				sendDaemonError(client, deviceID, sessionID, "steer failed: "+err.Error())
 			}
 
@@ -991,7 +1001,7 @@ func main() {
 			go func() {
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						log.Printf("[daemon] PANIC in thread start coordinator: %v", recovered)
+						opslog.Error("daemon.main", "thread_start_panic", "thread start coordinator panicked", nil, "operation_id", command.OperationID, "agent_type", command.AgentType)
 						message := "thread start coordinator panicked; automatic retry is disabled"
 						if record, ok := threadStarts.journal.FailClosed(command.OperationID, message); ok {
 							sendThreadResult(client, deviceID, record.AgentType, record.OperationID, string(record.Status), record.SessionID, record.PromptAccepted, record.Message)
@@ -1034,11 +1044,11 @@ func main() {
 				adapterList,
 			)
 			if hist == nil {
-				msg := "no history found for session"
 				if err != nil {
-					msg = err.Error()
+					opslog.Error("daemon.main", "history_fetch_failed", "native history fetch failed", err, "session_id", sessionID, "agent_type", source)
+				} else {
+					opslog.Warn("daemon.main", "history_unavailable", "native history unavailable", "session_id", sessionID, "agent_type", source)
 				}
-				log.Printf("[daemon] fetch_history: %s", msg)
 				// Still reply empty so phone stops waiting
 				hist = []*adapters.HistoryMessage{}
 				if source == "" {
@@ -1065,13 +1075,13 @@ func main() {
 			sendDaemonApplication(client, deviceID, sessionID, "", "session_history", map[string]interface{}{
 				"source": source, "truncated": len(msgs) >= limit, "limit": limit, "messages": msgs,
 			}, false)
-			log.Printf("[daemon] session_history %s source=%s n=%d", sessionID, source, len(msgs))
+			opslog.Debug("daemon.main", "history_sent", "native history sent", "session_id", sessionID, "agent_type", source, "count", len(msgs))
 
 		case "heartbeat":
 			// Server heartbeat, keep-alive handled by connection layer
 
 		default:
-			log.Printf("[daemon] unknown message type: %s", msgType)
+			opslog.Warn("daemon.main", "message_type_unknown", "unknown incoming message type ignored", "message_type", safeInboundMessageTypeForLog(msgType))
 		}
 	})
 
@@ -1082,7 +1092,7 @@ func main() {
 		requestForceReport()
 		pending := commandJournal.uncommittedAccepted()
 		if len(pending) > 0 {
-			log.Printf("[daemon] re-acknowledging %d accepted prompt(s) awaiting server commit", len(pending))
+			opslog.Info("daemon.main", "prompt_acceptances_replayed", "accepted prompts awaiting server commit reacknowledged", "device_id", deviceID, "count", len(pending))
 		}
 		for _, record := range pending {
 			accepted := acceptedPrompt{prompt: record.PromptEcho}
@@ -1103,7 +1113,8 @@ func main() {
 
 	// Connect to server
 	if err := client.Connect(); err != nil {
-		log.Fatalf("failed to connect: %v", err)
+		opslog.Error("daemon.main", "connect_failed", "initial server connection failed", err, "device_id", deviceID)
+		os.Exit(1)
 	}
 
 	// Start heartbeat in context
@@ -1123,7 +1134,7 @@ func main() {
 			for _, adapter := range adapterList {
 				sessions, err := adapter.Discover()
 				if err != nil {
-					log.Printf("[daemon] %s discover error: %v", adapter.Name(), err)
+					opslog.Error("daemon.main", "adapter_discovery_failed", "native session discovery failed", err, "agent_type", adapter.Name())
 					continue
 				}
 				allSessions = append(allSessions, sessions...)
@@ -1230,11 +1241,11 @@ func main() {
 					"start_capabilities": startCapabilities,
 				}, true)
 				if buildErr != nil {
-					log.Printf("[daemon] build session_list: %v", buildErr)
+					opslog.Error("daemon.main", "session_list_build_failed", "session list message build failed", buildErr, "device_id", deviceID, "count", len(allSessions))
 					return
 				}
 				if err := client.Send(report); err != nil {
-					log.Printf("[daemon] report error: %v", err)
+					opslog.Error("daemon.main", "session_list_send_failed", "session list report failed", err, "device_id", deviceID, "count", len(allSessions))
 					// Retry after short backoff (reconnect race / transient drop)
 					if force {
 						go func() {
@@ -1246,13 +1257,13 @@ func main() {
 						}()
 					}
 				} else {
-					log.Printf("[daemon] reported %d sessions (force=%v)", len(allSessions), force)
+					opslog.Info("daemon.main", "session_list_sent", "session list reported", "device_id", deviceID, "count", len(allSessions), "forced", force)
 				}
 			}
 		}
 
 		runSessionDiscoveryLoop(ctx, sessionDiscoveryInterval, forceReport, discoverAndReport)
-		log.Printf("[daemon] discovery loop stopped")
+		opslog.Info("daemon.main", "discovery_stopped", "session discovery loop stopped", "device_id", deviceID)
 	}()
 
 	// Start config hot-reload watcher. Snapshots are immutable after Store.
@@ -1261,18 +1272,18 @@ func main() {
 		oldCfg := currentConfig()
 		nextCfg := *newCfg
 		if nextCfg.TransportMode != daemonTransport {
-			log.Printf("[daemon] config transport_mode changed from %s to %s; refusing hot reload (restart and re-pair required)", daemonTransport, nextCfg.TransportMode)
+			opslog.Warn("daemon.main", "config_reload_transport_refused", "transport mode hot reload refused", "device_id", deviceID, "transport_mode", nextCfg.TransportMode)
 			return
 		}
 		credChanged := nextCfg.DeviceID != deviceID || nextCfg.Token != token
 		if credChanged {
-			log.Printf("[daemon] config credentials changed but were NOT applied; restart daemon to use the new device_id/token")
+			opslog.Warn("daemon.main", "config_reload_credentials_refused", "credential hot reload refused", "device_id", deviceID)
 			nextCfg.DeviceID = deviceID
 			nextCfg.Token = token
 		}
 		urlChanged := nextCfg.ServerURL != oldCfg.ServerURL
 		if urlChanged {
-			log.Printf("[daemon] server URL changed, reconnecting...")
+			opslog.Info("daemon.main", "config_reload_endpoint_changed", "server endpoint changed; reconnect requested", "device_id", deviceID)
 		}
 		// Endpoint change and snapshot publication share the same dispatch
 		// linearization point. Existing callbacks finish against oldCfg; no
@@ -1280,7 +1291,7 @@ func main() {
 		client.SetServerURLAndPublish(nextCfg.ServerURL, func() {
 			runtimeCfg.Store(&nextCfg)
 		})
-		log.Printf("[daemon] config snapshot applied, server=%s work_dir=%s", nextCfg.ServerURL, nextCfg.WorkDir)
+		opslog.Info("daemon.main", "config_reload_applied", "runtime config snapshot applied", "device_id", deviceID, "endpoint_changed", urlChanged, "credentials_changed", credChanged)
 	})
 
 	// Start read loop (blocking, handles reconnection)
@@ -1292,13 +1303,13 @@ func main() {
 
 	select {
 	case sig := <-sigCh:
-		log.Printf("[daemon] received signal: %v", sig)
+		opslog.Info("daemon.main", "shutdown_signal_received", "shutdown signal received", "signal", sig.String())
 	case <-ctx.Done():
-		log.Printf("[daemon] context cancelled")
+		opslog.Info("daemon.main", "shutdown_context_cancelled", "daemon context cancelled")
 	}
 
 	// Graceful shutdown
-	log.Println("[daemon] shutting down...")
+	opslog.Info("daemon.main", "shutdown_started", "daemon shutdown started", "device_id", deviceID)
 
 	// 1. Cancel context to stop all goroutines
 	cancel()
@@ -1308,12 +1319,12 @@ func main() {
 
 	// 3. Cleanup all adapter resources (watchers, running processes)
 	if err := adapterRegistry.Close(); err != nil {
-		log.Printf("[daemon] error closing adapters: %v", err)
+		opslog.Error("daemon.main", "adapter_shutdown_failed", "adapter shutdown failed", err)
 	}
 
 	// 4. Wait a bit for goroutines to finish
 	time.Sleep(500 * time.Millisecond)
-	log.Println("[daemon] goodbye 🐱")
+	opslog.Info("daemon.main", "shutdown_completed", "daemon shutdown completed", "device_id", deviceID)
 }
 
 // runSessionDiscoveryLoop waits the full interval after each completed scan.
@@ -1575,7 +1586,7 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 	if daemonTransport == "sealed" && daemonSealedKeys != nil {
 		plain, err := json.Marshal(inner)
 		if err != nil {
-			log.Printf("[daemon] seal marshal: %v", err)
+			opslog.Error("daemon.main", "session_message_marshal_failed", "session message payload marshal failed", err, "session_id", sessionID, "agent_type", agentType)
 			return
 		}
 		aad := sealed.AADFields{
@@ -1588,7 +1599,7 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 		}
 		wire, err := daemonSealedKeys.SealSession(sessionID, deviceID, "phones", aad, plain)
 		if err != nil {
-			log.Printf("[daemon] seal session_message: %v", err)
+			opslog.Error("daemon.main", "session_message_seal_failed", "session message sealing failed", err, "session_id", sessionID, "agent_type", agentType)
 			return
 		}
 		msg["sealed_payload"] = wire
@@ -1597,7 +1608,7 @@ func sendSessionMessage(client *connection.Client, deviceID, sessionID, agentTyp
 	}
 
 	if err := client.Send(msg); err != nil {
-		log.Printf("[daemon] send session_message error: %v", err)
+		opslog.Error("daemon.main", "session_message_send_failed", "session message send failed", err, "session_id", sessionID, "agent_type", agentType)
 	}
 }
 
@@ -1683,7 +1694,7 @@ func sendControlEvent(client *connection.Client, deviceID string, event adapters
 		}
 		if daemonTransport == "sealed" {
 			if daemonSealedKeys == nil {
-				log.Printf("[daemon] refusing plaintext session_update in sealed mode")
+				opslog.Error("daemon.main", "session_update_sealed_keys_unavailable", "session update refused because sealed keys are unavailable", nil, "session_id", event.SessionID, "agent_type", agentType)
 				return
 			}
 			plain, err := json.Marshal(inner)
@@ -1696,7 +1707,7 @@ func sendControlEvent(client *connection.Client, deviceID string, event adapters
 			}
 			sealedPayload, err := daemonSealedKeys.SealSession(event.SessionID, deviceID, "phones", aad, plain)
 			if err != nil {
-				log.Printf("[daemon] seal session_update: %v", err)
+				opslog.Error("daemon.main", "session_update_seal_failed", "session update sealing failed", err, "session_id", event.SessionID, "agent_type", agentType)
 				return
 			}
 			msg["sealed_payload"] = sealedPayload
@@ -1704,7 +1715,7 @@ func sendControlEvent(client *connection.Client, deviceID string, event adapters
 			msg["payload"] = inner
 		}
 		if err := client.Send(msg); err != nil {
-			log.Printf("[daemon] send session_update: %v", err)
+			opslog.Error("daemon.main", "session_update_send_failed", "session update send failed", err, "session_id", event.SessionID, "agent_type", agentType)
 		}
 	}
 	if !sendAttention {
@@ -1719,7 +1730,7 @@ func sendControlEvent(client *connection.Client, deviceID string, event adapters
 		},
 	}
 	if err := client.Send(attention); err != nil {
-		log.Printf("[daemon] send attention_event: %v", err)
+		opslog.Error("daemon.main", "attention_event_send_failed", "attention event send failed", err, "session_id", event.SessionID, "agent_type", agentType)
 	}
 }
 
@@ -1790,16 +1801,21 @@ func sendDaemonApplication(
 ) {
 	msg, err := buildDaemonApplicationMessage(client.ProtocolVersion(), deviceID, sessionID, clientMsgID, msgType, payload, useCatalog)
 	if err != nil {
-		log.Printf("[daemon] build %s: %v", msgType, err)
+		opslog.Error("daemon.main", "application_message_build_failed", "application message build failed", err, "device_id", deviceID, "session_id", sessionID, "client_msg_id", clientMsgID, "message_type", msgType)
 		return
 	}
 	if err := client.Send(msg); err != nil {
-		log.Printf("[daemon] send %s: %v", msgType, err)
+		opslog.Error("daemon.main", "application_message_send_failed", "application message send failed", err, "device_id", deviceID, "session_id", sessionID, "client_msg_id", clientMsgID, "message_type", msgType)
 	}
 }
 
+func commandFailure(event, message string, err error, attrs ...any) int {
+	opslog.Error("daemon.main", event, message, err, attrs...)
+	return 1
+}
+
 // handleRegistration registers this device with the server via REST and saves config.
-func handleRegistration(deviceName string) {
+func handleRegistration(deviceName string) int {
 	fmt.Println("🐱 NekoNest Device Registration")
 	fmt.Println("================================")
 
@@ -1811,7 +1827,7 @@ func handleRegistration(deviceName string) {
 	// Already registered?
 	if existing, err := config.Load(); err == nil && existing.Token != "" && existing.DeviceID != "" {
 		if _, modeErr := registrationTransportMode(existing.TransportMode, os.Getenv("NEKONEST_TRANSPORT_MODE")); modeErr != nil {
-			log.Fatalf("registered config transport_mode: %v", modeErr)
+			return commandFailure("registration_transport_mode_invalid", "registered transport mode is invalid", modeErr, "device_id", existing.DeviceID)
 		}
 		fmt.Printf("Already registered.\n")
 		fmt.Printf("  Device: %s\n", existing.DeviceID)
@@ -1827,7 +1843,7 @@ func handleRegistration(deviceName string) {
 			}
 			fmt.Println("Enter this code in the PWA 「配对电脑」 page.")
 		}
-		return
+		return 0
 	}
 
 	serverURL := os.Getenv("NEKONEST_SERVER")
@@ -1835,7 +1851,7 @@ func handleRegistration(deviceName string) {
 		fmt.Println("Set NEKONEST_SERVER first, e.g.:")
 		fmt.Println(`  set NEKONEST_SERVER=https://nekonest.example.com`)
 		fmt.Println(`  $env:NEKONEST_SERVER="https://nekonest.example.com"  # PowerShell`)
-		os.Exit(1)
+		return commandFailure("registration_server_missing", "registration server environment is missing", nil)
 	}
 
 	httpBase := config.HTTPBaseURL(serverURL)
@@ -1843,7 +1859,7 @@ func handleRegistration(deviceName string) {
 
 	_, st, err := identity.LoadOrCreate(identity.Path())
 	if err != nil {
-		log.Fatalf("identity: %v", err)
+		return commandFailure("registration_identity_failed", "registration identity load failed", err)
 	}
 
 	body, _ := json.Marshal(map[string]string{
@@ -1856,7 +1872,7 @@ func handleRegistration(deviceName string) {
 	})
 	req, err := http.NewRequest(http.MethodPost, httpBase+"/api/devices/register", bytes.NewReader(body))
 	if err != nil {
-		log.Fatalf("register request build failed: %v", err)
+		return commandFailure("registration_request_build_failed", "registration request build failed", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if bootstrap := os.Getenv("NEKONEST_BOOTSTRAP_TOKEN"); bootstrap != "" {
@@ -1864,12 +1880,12 @@ func handleRegistration(deviceName string) {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Fatalf("register request failed: %v", err)
+		return commandFailure("registration_request_failed", "registration request failed", err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("register failed (%d): %s", resp.StatusCode, string(respBody))
+		return commandFailure("registration_rejected", "registration was rejected by server", nil, "status", resp.StatusCode)
 	}
 
 	var result struct {
@@ -1879,14 +1895,14 @@ func handleRegistration(deviceName string) {
 		TransportMode string `json:"transport_mode"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		log.Fatalf("parse register response: %v", err)
+		return commandFailure("registration_response_invalid", "registration response could not be parsed", err, "status", resp.StatusCode)
 	}
 	mode, modeErr := registrationTransportMode(result.TransportMode, os.Getenv("NEKONEST_TRANSPORT_MODE"))
 	if modeErr != nil {
-		log.Fatalf("register response transport_mode: %v; response=%s", modeErr, string(respBody))
+		return commandFailure("registration_response_transport_invalid", "registration response transport mode is invalid", modeErr, "status", resp.StatusCode)
 	}
 	if result.DeviceID == "" || result.Token == "" {
-		log.Fatalf("register response missing device_id/token: %s", string(respBody))
+		return commandFailure("registration_response_credentials_missing", "registration response is missing credentials", nil, "status", resp.StatusCode)
 	}
 
 	cfg := &config.Config{
@@ -1896,7 +1912,7 @@ func handleRegistration(deviceName string) {
 		TransportMode: mode,
 	}
 	if err := cfg.Save(); err != nil {
-		log.Fatalf("Failed to save config: %v", err)
+		return commandFailure("registration_config_save_failed", "registered configuration could not be saved", err, "device_id", result.DeviceID)
 	}
 
 	fmt.Printf("✅ Registered as %s (%s)\n", result.Name, result.DeviceID)
@@ -1905,7 +1921,8 @@ func handleRegistration(deviceName string) {
 	fmt.Printf("   Fingerprint: %s\n", st.Fingerprint)
 
 	if code, exp, err := requestPairCode(cfg, st); err != nil {
-		fmt.Printf("\n⚠️  Could not generate pair code: %v\n", err)
+		opslog.Error("daemon.main", "registration_pair_code_failed", "registration succeeded but pair code generation failed", err, "device_id", result.DeviceID)
+		fmt.Println("\n⚠️  Could not generate pair code; check the daemon operational log.")
 		fmt.Println("You can still list the device on phone if you use the phone secret.")
 	} else {
 		fmt.Printf("\n📱 Phone pair code: %s (expires ~%s)\n", code, exp.Local().Format("15:04:05"))
@@ -1915,6 +1932,7 @@ func handleRegistration(deviceName string) {
 		fmt.Println("1. Open PWA → 配对电脑 → enter code / paste QR payload")
 		fmt.Println("2. Start daemon: nekonest-daemon.exe")
 	}
+	return 0
 }
 
 // registrationTransportMode rejects incomplete registration responses before
@@ -1943,25 +1961,25 @@ func registrationTransportMode(serverMode, requested string) (string, error) {
 
 // handlePairing generates a short-lived pair code for an already-registered device.
 // Usage: nekonest-daemon -pair gen   (or any non-empty value; code is minted server-side)
-func handlePairing(code string) {
+func handlePairing(code string) int {
 	fmt.Println("🐱 NekoNest Pair Code")
 	fmt.Println("=====================")
 
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Println("Device not registered yet. Run with -register first.")
-		os.Exit(1)
+		return commandFailure("pairing_config_load_failed", "pairing configuration could not be loaded", err)
 	}
 
 	// Historical flag took a code string; we now always mint a server code for the phone.
 	_ = code
 	_, st, err := identity.LoadOrCreate(identity.Path())
 	if err != nil {
-		log.Fatalf("identity: %v", err)
+		return commandFailure("pairing_identity_failed", "pairing identity load failed", err, "device_id", cfg.DeviceID)
 	}
 	pairCode, exp, err := requestPairCode(cfg, st)
 	if err != nil {
-		log.Fatalf("generate pair code: %v", err)
+		return commandFailure("pairing_code_failed", "pair code generation failed", err, "device_id", cfg.DeviceID)
 	}
 	httpBase := config.HTTPBaseURL(cfg.ServerURL)
 	qr := identity.BuildPairQR(httpBase, cfg.DeviceID, "", pairCode, exp.Unix(), st, cfg.TransportMode)
@@ -1975,6 +1993,7 @@ func handlePairing(code string) {
 	fmt.Println(string(qrJSON))
 	fmt.Println()
 	fmt.Println("Enter the 6-char code in the PWA, and verify the fingerprint matches the PC screen.")
+	return 0
 }
 
 // requestPairCode calls POST /api/pair/generate for the registered device.
@@ -1997,7 +2016,7 @@ func requestPairCode(cfg *config.Config, st *identity.Stored) (string, time.Time
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+		return "", time.Time{}, fmt.Errorf("pair code request returned status %d", resp.StatusCode)
 	}
 	var result struct {
 		Code      string `json:"code"`
@@ -2162,7 +2181,7 @@ func dispatchQueuedPrompt(
 	cleanup := func() {
 		if attachmentDir != "" {
 			if err := os.RemoveAll(attachmentDir); err != nil {
-				log.Printf("[daemon] remove queued attachment directory %s: %v", attachmentDir, err)
+				opslog.Error("daemon.main", "queued_attachment_cleanup_failed", "queued prompt attachment cleanup failed", err, "session_id", item.SessionID, "client_msg_id", item.ClientMsgID)
 			}
 		}
 	}
@@ -2212,7 +2231,7 @@ func dispatchQueuedPrompt(
 			return false, sendErr
 		}
 		if journalErr := journal.markIndeterminate(item.SessionID, item.ClientMsgID); journalErr != nil {
-			log.Printf("[daemon] mark queued prompt indeterminate: %v", journalErr)
+			opslog.Error("daemon.main", "queued_prompt_indeterminate_persist_failed", "queued prompt indeterminate state could not be persisted", journalErr, "session_id", item.SessionID, "client_msg_id", item.ClientMsgID, "agent_type", item.AgentType, "generation", generation)
 		}
 		// A non-busy controller error cannot prove that the native boundary was
 		// not crossed. Retain attachments and fail closed.
@@ -2305,7 +2324,7 @@ func sendPromptAccepted(
 	if err := client.Send(msg); err != nil {
 		// The accepted ID remains cached. A server retransmission will only
 		// re-send this acknowledgement and will not execute the prompt again.
-		log.Printf("[daemon] send prompt_accepted failed client_msg_id=%s: %v", clientMsgID, err)
+		opslog.Error("daemon.main", "prompt_acceptance_send_failed", "prompt acceptance acknowledgement send failed", err, "device_id", deviceID, "session_id", sessionID, "client_msg_id", clientMsgID)
 		return err
 	}
 	return nil
@@ -2333,7 +2352,7 @@ func sendPromptNotSeen(client *connection.Client, deviceID, sessionID, clientMsg
 		},
 	}
 	if err := client.Send(msg); err != nil {
-		log.Printf("[daemon] send prompt_not_seen failed client_msg_id=%s: %v", clientMsgID, err)
+		opslog.Error("daemon.main", "prompt_not_seen_send_failed", "prompt not-seen acknowledgement send failed", err, "device_id", deviceID, "session_id", sessionID, "client_msg_id", clientMsgID)
 	}
 }
 
@@ -2350,7 +2369,7 @@ func sendPromptFailure(
 		"retry_allowed": retryAllowed,
 	}, false)
 	if err != nil {
-		log.Printf("[daemon] build prompt_failed client_msg_id=%s: %v", clientMsgID, err)
+		opslog.Error("daemon.main", "prompt_failure_build_failed", "prompt failure acknowledgement build failed", err, "device_id", deviceID, "session_id", sessionID, "client_msg_id", clientMsgID, "status", outcome)
 		return
 	}
 	// Delivery state is relay-visible event metadata; application error text
@@ -2358,14 +2377,14 @@ func sendPromptFailure(
 	msg["outcome"] = outcome
 	msg["retry_allowed"] = retryAllowed
 	if err := client.Send(msg); err != nil {
-		log.Printf("[daemon] send prompt_failed failed client_msg_id=%s: %v", clientMsgID, err)
+		opslog.Error("daemon.main", "prompt_failure_send_failed", "prompt failure acknowledgement send failed", err, "device_id", deviceID, "session_id", sessionID, "client_msg_id", clientMsgID, "status", outcome)
 	}
 }
 
 func sendThreadResult(client *connection.Client, deviceID, agentType, opID, msgType, threadID string, promptAccepted bool, errMsg string) {
 	msg := buildThreadResultMessage(client.ProtocolVersion(), deviceID, agentType, opID, msgType, threadID, promptAccepted, errMsg)
 	if err := client.Send(msg); err != nil {
-		log.Printf("[daemon] send %s failed: %v", msgType, err)
+		opslog.Error("daemon.main", "thread_result_send_failed", "thread start result send failed", err, "device_id", deviceID, "session_id", threadID, "operation_id", opID, "agent_type", agentType, "status", msgType)
 	}
 }
 
@@ -2397,12 +2416,12 @@ func buildThreadResultMessage(protocolVersion, deviceID, agentType, opID, msgTyp
 	}
 	if daemonTransport == "sealed" {
 		if daemonSealedKeys == nil {
-			log.Printf("[daemon] cannot seal %s: sealed keys unavailable", msgType)
+			opslog.Error("daemon.main", "thread_result_sealed_keys_unavailable", "thread start result could not be sealed", nil, "device_id", deviceID, "session_id", threadID, "operation_id", opID, "agent_type", agentType, "status", msgType)
 			degradeSealedThreadResult(msg)
 		} else {
 			plain, err := json.Marshal(payload)
 			if err != nil {
-				log.Printf("[daemon] marshal sealed %s: %v", msgType, err)
+				opslog.Error("daemon.main", "thread_result_marshal_failed", "thread start result payload marshal failed", err, "device_id", deviceID, "session_id", threadID, "operation_id", opID, "agent_type", agentType, "status", msgType)
 				degradeSealedThreadResult(msg)
 			} else {
 				aad := sealed.AADFields{
@@ -2416,7 +2435,7 @@ func buildThreadResultMessage(protocolVersion, deviceID, agentType, opID, msgTyp
 				}
 				wire, err := daemonSealedKeys.SealCatalog(deviceID, "phones", aad, plain)
 				if err != nil {
-					log.Printf("[daemon] seal %s: %v", msgType, err)
+					opslog.Error("daemon.main", "thread_result_seal_failed", "thread start result sealing failed", err, "device_id", deviceID, "session_id", threadID, "operation_id", opID, "agent_type", agentType, "status", msgType)
 					degradeSealedThreadResult(msg)
 				} else {
 					msg["sealed_payload"] = wire
@@ -2447,6 +2466,23 @@ func daemonInboundApplicationType(msgType string) bool {
 	default:
 		return false
 	}
+}
+
+func safeInboundMessageTypeForLog(msgType string) string {
+	if daemonInboundApplicationType(msgType) {
+		return msgType
+	}
+	switch msgType {
+	case "refresh_sessions", "pair_ready", "prompt_status_query", "prompt_committed", "heartbeat",
+		"key_package", "phone_revoked", "attention_event", "error":
+		return msgType
+	default:
+		return "unknown"
+	}
+}
+
+func logEmptyPromptRejected(sessionID, clientMsgID string) {
+	opslog.Warn("daemon.main", "prompt_rejected_empty", "empty prompt rejected", "session_id", sessionID, "client_msg_id", clientMsgID)
 }
 
 func validateInboundRoutingFrame(msg map[string]interface{}) error {
@@ -2616,22 +2652,22 @@ func publishCatalogKeyForPhone(cfg *config.Config, payload map[string]interface{
 	}
 	_, st, err := identity.LoadOrCreate(identity.Path())
 	if err != nil || st == nil {
-		log.Printf("[daemon] pair_ready identity: %v", err)
+		opslog.Error("daemon.main", "pair_catalog_identity_failed", "paired phone catalog identity load failed", err, "device_id", cfg.DeviceID)
 		return
 	}
 	id, err := identityLoadSealed(st)
 	if err != nil {
-		log.Printf("[daemon] pair_ready load sealed id: %v", err)
+		opslog.Error("daemon.main", "pair_catalog_sealed_identity_failed", "paired phone sealed identity load failed", err, "device_id", cfg.DeviceID)
 		return
 	}
 	phonePub, err := sealed.ParseX25519Public(phoneX)
 	if err != nil {
-		log.Printf("[daemon] pair_ready phone x25519: %v", err)
+		opslog.Warn("daemon.main", "pair_catalog_phone_key_rejected", "paired phone public key rejected", "device_id", cfg.DeviceID)
 		return
 	}
 	shared, err := sealed.SharedSecret(id.X25519Private, phonePub)
 	if err != nil {
-		log.Printf("[daemon] pair_ready shared: %v", err)
+		opslog.Error("daemon.main", "pair_catalog_shared_secret_failed", "paired phone shared secret derivation failed", err, "device_id", cfg.DeviceID)
 		return
 	}
 	transcript := []byte(strings.Join([]string{
@@ -2645,19 +2681,19 @@ func publishCatalogKeyForPhone(cfg *config.Config, payload map[string]interface{
 	}, "|"))
 	wrap, err := sealed.DerivePairWrappingKey(shared, transcript)
 	if err != nil {
-		log.Printf("[daemon] pair_ready derive: %v", err)
+		opslog.Error("daemon.main", "pair_catalog_wrap_key_failed", "paired phone wrapping key derivation failed", err, "device_id", cfg.DeviceID)
 		return
 	}
 	epoch, nonce, ct, err := daemonSealedKeys.WrapCatalogForPhone(wrap)
 	if err != nil {
-		log.Printf("[daemon] pair_ready wrap: %v", err)
+		opslog.Error("daemon.main", "pair_catalog_wrap_failed", "paired phone catalog key wrapping failed", err, "device_id", cfg.DeviceID)
 		return
 	}
 	if err := uploadKeyPackage(cfg, phoneID, "device_catalog", "", epoch, nonce, ct); err != nil {
-		log.Printf("[daemon] pair_ready upload: %v", err)
+		opslog.Error("daemon.main", "pair_catalog_upload_failed", "paired phone catalog key upload failed", err, "device_id", cfg.DeviceID, "generation", epoch)
 		return
 	}
-	log.Printf("[daemon] published catalog key package for phone %s epoch=%d", phoneID, epoch)
+	opslog.Info("daemon.main", "pair_catalog_published", "paired phone catalog key package published", "device_id", cfg.DeviceID, "generation", epoch)
 }
 
 func identityLoadSealed(st *identity.Stored) (*sealed.Identity, error) {
@@ -2777,7 +2813,7 @@ func sendDaemonError(client *connection.Client, deviceID, sessionID, message str
 		"payload":          map[string]interface{}{"message": message},
 	}
 	if err := client.Send(msg); err != nil {
-		log.Printf("[daemon] send error message failed: %v", err)
+		opslog.Error("daemon.main", "error_message_send_failed", "daemon error message send failed", err, "device_id", deviceID, "session_id", sessionID)
 	}
 }
 

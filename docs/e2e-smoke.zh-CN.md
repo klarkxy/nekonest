@@ -5,7 +5,7 @@
 部署或部署敏感变更后的验收路径。产品目标：[v1-product.zh-CN.md](./v1-product.zh-CN.md)。发版：[release.zh-CN.md](./release.zh-CN.md)。迁移：[migration-v1.zh-CN.md](./migration-v1.zh-CN.md)。
 
 本清单必须针对**更新后的线上构建**执行，不能只测本地 Mock 或部署前二进制。对于当前
-维护猫窝的运行时改动，只要任务没有明确要求 local-only / no-deploy，部署并完成下列
+维护猫娘乐园的运行时改动，只要任务没有明确要求 local-only / no-deploy，部署并完成下列
 适用检查才算最终验收。替换前记录确切提交与产物哈希并保留回滚副本；证据至少覆盖
 公网健康、daemon 重连和此次修改的真实用户路径。部署本身不代表有权打 tag 或发布
 GitHub Release。

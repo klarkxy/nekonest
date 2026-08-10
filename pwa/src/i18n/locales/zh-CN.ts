@@ -6,7 +6,7 @@ export default {
     duoAlt: 'NekoNest 的两位原创猫娘看板娘',
     duoCaption: '双猫值守中',
     skipToContent: '跳到主内容',
-    splash: '正在打开猫窝…'
+    splash: '正在打开猫娘乐园…'
   },
   locale: {
     label: '语言',
@@ -30,7 +30,7 @@ export default {
   },
   common: {
     back: '← 返回',
-    backNest: '返回猫窝',
+    backNest: '返回猫娘乐园',
     backWorkspaces: '返回工作目录',
     retry: '重试',
     retrying: '重试中…',
@@ -52,7 +52,7 @@ export default {
     desc: '继续电脑上的 AI 会话。输入手机钥匙。',
     secretLabel: '手机钥匙',
     placeholder: '粘贴手机钥匙…',
-    enter: '进入猫窝',
+    enter: '进入猫娘乐园',
     hint: '手机钥匙由部署时设置。'
   },
   deviceList: {
@@ -60,11 +60,11 @@ export default {
     intro: '回到熟悉的工作目录，继续家里已经开着的线团。',
     connectionAria: '连接状态',
     keySettings: '钥匙设置',
-    authTitle: '进不了猫窝。',
+    authTitle: '进不了猫娘乐园。',
     authBody: '请重新设置手机钥匙，并确认与部署时记下的那串一致。',
     transportTitle: '传输模式不匹配。',
     confirmOpenTransport: '确认使用开放中继',
-    sectionKicker: '你的猫窝',
+    sectionKicker: '你的猫娘乐园',
     sectionTitle: '选择一台电脑',
     deviceCount: '{n} 台',
     loadingList: '正在读取电脑列表',
@@ -72,7 +72,7 @@ export default {
     openDevice: '打开 {name}，{status}',
     threadCount: '{n} 条线团',
     unbind: '移出',
-    unbindAria: '把 {name} 移出手机猫窝',
+    unbindAria: '把 {name} 移出手机猫娘乐园',
     unbindConfirm: '把「{name}」移出这台手机？\n不会关掉家里的电脑，只是手机不再记住它。',
     unbindSuccess: '已从手机移出',
     emptyTitle: '还没有配对的电脑',
@@ -82,10 +82,10 @@ export default {
     pairNew: '配对新电脑',
     connAuth: '手机钥匙对不上',
     connTransportError: '传输模式不匹配',
-    connServerFail: '猫窝服务器连接失败',
-    connChecking: '正在检查猫窝服务器…',
-    connLive: '猫窝实时通道已接通',
-    connServerOk: '猫窝服务器已接通',
+    connServerFail: '猫娘乐园服务器连接失败',
+    connChecking: '正在检查猫娘乐园服务器…',
+    connLive: '猫娘乐园实时通道已接通',
+    connServerOk: '猫娘乐园服务器已接通',
     connWsReconnect: '手机实时通道重连中…',
     versionTitle: '网页与 Server 版本',
     versionAligned: '网页与 Server 版本一致',
@@ -124,7 +124,7 @@ export default {
     copyFail: '复制失败，请长按命令手动复制'
   },
   deviceDetail: {
-    backNest: '猫窝',
+    backNest: '猫娘乐园',
     currentPc: '当前电脑',
     speaker: '看板娘',
     statsAria: '电脑概况',
@@ -334,15 +334,15 @@ export default {
     uncategorized: '未分类'
   },
   errors: {
-    deviceServerStatus: '猫窝服务器暂时没有回应（{status}）',
-    deviceNetwork: '连不上猫窝服务器，请检查网络或服务地址。',
+    deviceServerStatus: '猫娘乐园服务器暂时没有回应（{status}）',
+    deviceNetwork: '连不上猫娘乐园服务器，请检查网络或服务地址。',
     outboxPersist: '待发消息没存住，先别关页面',
     agentError: '猫娘这边出错了',
     ambiguousNoRetry: '结果不确定，为避免重复已关掉重试',
     sealedKeyMissing: '设备密封密钥不可用，线程未启动',
     busyRetry: '猫娘还在处理上一条，结束后再重试',
     promptRejected: '猫娘没接下这条指令',
-    wrongDevice: '这条线团属于别的电脑，请先回去换猫窝',
+    wrongDevice: '这条线团属于别的电脑，请先回去换猫娘乐园',
     historyStatus: '历史没叼回来（{status}）',
     emptyPrompt: '先说点什么，或塞个附件',
     emptySteer: '先输入要如何调整当前任务',

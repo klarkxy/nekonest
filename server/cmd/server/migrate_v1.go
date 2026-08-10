@@ -5,11 +5,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/nekonest/server/internal/db"
+	"github.com/nekonest/server/internal/opslog"
 )
 
 // runMigrateV1 performs the offline destructive v0.1 → v1 content wipe
@@ -21,6 +21,9 @@ func runMigrateV1(dataDir, backupDir string) error {
 	if backupDir == "" {
 		return fmt.Errorf("-backup required (verified copy destination)")
 	}
+	if err := preparePrivateDirectory(dataDir); err != nil {
+		return fmt.Errorf("secure data directory: %w", err)
+	}
 	dbPath := filepath.Join(dataDir, "nekonest.db")
 	if _, err := os.Stat(dbPath); err != nil {
 		return fmt.Errorf("database not found: %w", err)
@@ -31,7 +34,7 @@ func runMigrateV1(dataDir, backupDir string) error {
 		}
 	}
 
-	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+	if err := preparePrivateDirectory(backupDir); err != nil {
 		return err
 	}
 	if err := copyFile(dbPath, filepath.Join(backupDir, "nekonest.db")); err != nil {
@@ -54,8 +57,10 @@ func runMigrateV1(dataDir, backupDir string) error {
 	if err != nil {
 		return err
 	}
-	_ = os.WriteFile(filepath.Join(backupDir, "nekonest.db.sha256"), []byte(sum+"\n"), 0o644)
-	log.Printf("[migrate-v1] backup ok sha256=%s… dir=%s", sum[:16], backupDir)
+	if err := writePrivateFile(filepath.Join(backupDir, "nekonest.db.sha256"), []byte(sum+"\n")); err != nil {
+		return fmt.Errorf("write backup checksum: %w", err)
+	}
+	opslog.Info("server.migration", "backup_verified", "migration backup verified", "checksum_prefix", sum[:16])
 
 	database, err := db.New(dbPath)
 	if err != nil {
@@ -66,14 +71,16 @@ func runMigrateV1(dataDir, backupDir string) error {
 	if err := database.ClearPlaintextContentForV1(); err != nil {
 		return err
 	}
-	log.Printf("[migrate-v1] cleared plaintext messages/prompts/pair codes/push/key packages/phone identities")
-	log.Printf("[migrate-v1] preserved devices (ids + token hashes)")
-	log.Printf("[migrate-v1] phones must re-login and re-pair")
+	opslog.Info("server.migration", "plaintext_cleared", "plaintext records cleared")
+	opslog.Info("server.migration", "devices_preserved", "device identities preserved")
+	opslog.Info("server.migration", "phone_reauth_required", "phone reauthentication required")
 
 	if err := os.RemoveAll(attSrc); err == nil {
-		_ = os.MkdirAll(attSrc, 0o755)
+		if err := preparePrivateDirectory(attSrc); err != nil {
+			return fmt.Errorf("recreate attachments directory: %w", err)
+		}
 	}
-	log.Printf("[migrate-v1] live attachments cleared (restorable from backup)")
+	opslog.Info("server.migration", "attachments_cleared", "live attachments cleared")
 	return nil
 }
 
@@ -83,11 +90,15 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := preparePrivateDirectory(filepath.Dir(dst)); err != nil {
 		return err
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
+		return err
+	}
+	if err := out.Chmod(privateFileMode); err != nil {
+		_ = out.Close()
 		return err
 	}
 	defer out.Close()
@@ -106,7 +117,7 @@ func copyDir(src, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return preparePrivateDirectory(target)
 		}
 		return copyFile(path, target)
 	})

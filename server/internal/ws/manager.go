@@ -2,12 +2,12 @@ package ws
 
 import (
 	"encoding/json"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/nekonest/server/internal/db"
+	"github.com/nekonest/server/internal/opslog"
 	"github.com/nekonest/server/internal/protocol"
 )
 
@@ -208,7 +208,7 @@ func (cm *ConnectionManager) AddDaemonVersioned(deviceID string, conn *websocket
 		cm.mu.Unlock()
 
 		if old != nil {
-			log.Printf("[ws] replacing daemon connection: %s", deviceID)
+			opslog.Info("server.ws", "daemon_connection_replaced", "daemon connection replaced", "device_id", deviceID)
 			if old.Conn != nil {
 				_ = old.Conn.Close()
 			}
@@ -220,7 +220,7 @@ func (cm *ConnectionManager) AddDaemonVersioned(deviceID string, conn *websocket
 		cm.afterDaemonPublished(dc)
 	}
 
-	log.Printf("[ws] daemon connected: %s", deviceID)
+	opslog.Info("server.ws", "daemon_connected", "daemon connected", "device_id", deviceID)
 	cm.database.UpdateDeviceLastSeen(deviceID)
 	if !wasOnline && cm.onDeviceUp != nil {
 		// Hold the initial generation's lifecycle lease through notification
@@ -279,7 +279,7 @@ func (cm *ConnectionManager) RemoveDaemon(deviceID string, conn *websocket.Conn)
 	}
 	dc.mu.Unlock()
 
-	log.Printf("[ws] daemon disconnected: %s", deviceID)
+	opslog.Info("server.ws", "daemon_disconnected", "daemon disconnected", "device_id", deviceID)
 	if cm.onDeviceDown != nil {
 		cm.onDeviceDown(deviceID)
 	}
@@ -378,12 +378,12 @@ func (cm *ConnectionManager) SafeWritePhone(conn *websocket.Conn, msg *protocol.
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[ws] marshal error: %v", err)
+		opslog.Error("server.ws", "phone_message_marshal_failed", "phone message marshal failed", err)
 		return
 	}
 
 	if !enqueuePhone(out, data) {
-		log.Printf("[ws] phone outbound queue saturated; dropping connection")
+		opslog.Warn("server.ws", "phone_outbound_queue_saturated", "phone outbound queue saturated")
 		cm.dropPhone(conn)
 	}
 }
@@ -480,7 +480,7 @@ func (cm *ConnectionManager) BroadcastToPhones(deviceID string, msg *protocol.Ne
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[ws] marshal error: %v", err)
+		opslog.Error("server.ws", "phone_message_marshal_failed", "phone message marshal failed", err)
 		return
 	}
 
@@ -493,7 +493,7 @@ func (cm *ConnectionManager) BroadcastToPhones(deviceID string, msg *protocol.Ne
 			continue
 		}
 		if !enqueuePhone(out, data) {
-			log.Printf("[ws] phone outbound queue saturated; dropping connection")
+			opslog.Warn("server.ws", "phone_outbound_queue_saturated", "phone outbound queue saturated")
 			cm.dropPhone(conn)
 		}
 	}
@@ -542,7 +542,7 @@ func (cm *ConnectionManager) phoneWriter(conn *websocket.Conn, out *phoneOutboun
 			out.writeMu.Unlock()
 			out.releaseBytes(int64(len(data)))
 			if err != nil {
-				log.Printf("[ws] phone write error: %v", err)
+				opslog.Error("server.ws", "phone_write_failed", "phone websocket write failed", err)
 				cm.dropPhone(conn)
 				return
 			}

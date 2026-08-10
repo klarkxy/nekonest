@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nekonest/daemon/internal/attach"
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 // KimiCommander resumes Kimi Code sessions in stream-json print mode.
@@ -229,14 +229,14 @@ func (c *KimiCommander) sendPromptInDir(
 	executor := NewAgentExecutor("kimi_cli", sessionID)
 	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {
-		if diagnostics.suppress("kimi", sessionID, source) {
+		if diagnostics.suppress("kimi_cli", sessionID, source, line) {
 			return
 		}
 		c.handleProcessLine(sessionID, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
-		log.Printf("[kimi] session %s process exited with code %d", sessionID, exitCode)
+		opslog.Info("daemon.agentexec", "process_exited", "agent process exited", "agent_type", "kimi_cli", "session_id", sessionID, "status", exitCode)
 		if message := diagnostics.exitFailure(
 			"Kimi CLI",
 			exitCode,

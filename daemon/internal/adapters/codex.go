@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/nekonest/daemon/internal/agentexec"
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 var errCodexSubagentRollout = errors.New("codex subagent rollout")
@@ -206,13 +206,14 @@ func (a *CodexAdapter) Close() error {
 	a.watcherMu.Lock()
 	defer a.watcherMu.Unlock()
 
+	watcherCount := len(a.watchers)
 	for id, w := range a.watchers {
 		if err := w.Close(); err != nil {
-			log.Printf("[codex] error closing watcher for %s: %v", id, err)
+			opslog.Error("daemon.adapters", "watcher_close_failed", "native session watcher close failed", err, "agent_type", "codex", "session_id", id)
 		}
 		delete(a.watchers, id)
 	}
-	log.Printf("[codex] closed all watchers")
+	opslog.Info("daemon.adapters", "watchers_closed", "native session watchers closed", "agent_type", "codex", "count", watcherCount)
 	return nil
 }
 
@@ -261,7 +262,7 @@ func (a *CodexAdapter) Discover() ([]*SessionInfo, error) {
 			if errors.Is(parseErr, errCodexSubagentRollout) {
 				return nil
 			}
-			log.Printf("[codex] skip %s: %v", path, parseErr)
+			opslog.Error("daemon.adapters", "session_parse_failed", "native session rollout skipped after parse failure", parseErr, "agent_type", "codex")
 			return nil
 		}
 
@@ -973,7 +974,7 @@ func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error
 			if errors.Is(err, agentexec.ErrAppServerExited) {
 				return err
 			}
-			log.Printf("[codex] thread/resume before turn/start: %v", err)
+			opslog.Warn("daemon.adapters", "thread_resume_degraded", "Codex thread resume failed before turn start; continuing with registered thread ids", "agent_type", "codex", "session_id", sessionID)
 		}
 		a.appServer.RegisterThreadIDs(sessionID, sessionID, sessionID)
 		turnID, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments)
@@ -1022,7 +1023,7 @@ func (a *CodexAdapter) SendQueuedPrompt(sessionID string, request PromptRequest)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if _, _, err := a.appServer.ResumeThread(ctx, sessionID); err != nil {
-		log.Printf("[codex] thread/resume before queued turn/start: %v", err)
+		opslog.Warn("daemon.adapters", "queued_thread_resume_degraded", "Codex thread resume failed before queued turn start; continuing with registered thread ids", "agent_type", "codex", "session_id", sessionID)
 	}
 	a.appServer.RegisterThreadIDs(sessionID, sessionID, sessionID)
 	turnID, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments)
@@ -1117,7 +1118,7 @@ func (a *CodexAdapter) StartThread(cwd, firstPrompt string) (threadID string, er
 	if owned, ok := a.PreferOwnedID(res.SessionID, res.ThreadID, wire); ok {
 		if err != nil {
 			// Owned but turn failed — still succeed create; surface turn error as non-fatal log.
-			log.Printf("[codex] start owned=%s turn warning: %v", owned, err)
+			opslog.Warn("daemon.adapters", "thread_start_turn_failed_owned", "Codex thread is owned despite initial turn failure", "agent_type", "codex", "session_id", owned)
 			return owned, nil
 		}
 		return owned, nil
@@ -1366,7 +1367,7 @@ func (a *CodexAdapter) recoverAppServer(ctx context.Context) {
 			a.recoveryDegraded = false
 			a.recoveryCancel = nil
 			a.recoveryMu.Unlock()
-			log.Printf("[codex] app-server recovered after %d attempt(s)", attempt)
+			opslog.Info("daemon.adapters", "appserver_recovered", "Codex app-server recovered", "agent_type", "codex", "count", attempt)
 			if sink != nil {
 				sink()
 			}
@@ -1390,7 +1391,7 @@ func (a *CodexAdapter) recoverAppServer(ctx context.Context) {
 	a.recoveryDegraded = true
 	a.recoveryCancel = nil
 	a.recoveryMu.Unlock()
-	log.Printf("[codex] app-server recovery exhausted after %d attempts: %v", codexRecoveryAttempts, lastErr)
+	opslog.Error("daemon.adapters", "appserver_recovery_exhausted", "Codex app-server recovery exhausted", lastErr, "agent_type", "codex", "count", codexRecoveryAttempts)
 }
 
 func (a *CodexAdapter) abortAppServerOutput() {

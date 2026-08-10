@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 // Config holds the daemon configuration.
@@ -149,7 +150,7 @@ func WatchPath(ctx context.Context, configPath string, onChange func(*Config)) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[config] watcher stopped")
+			opslog.Info("daemon.config", "watcher_stopped", "configuration watcher stopped")
 			return
 		case <-ticker.C:
 			info, err := os.Stat(configPath)
@@ -165,10 +166,10 @@ func WatchPath(ctx context.Context, configPath string, onChange func(*Config)) {
 
 			newCfg, err := LoadFrom(configPath)
 			if err != nil {
-				log.Printf("[config] reload error: %v", err)
+				opslog.Error("daemon.config", "reload_failed", "configuration reload failed", err)
 				continue
 			}
-			log.Printf("[config] config file changed, reloading %s", configPath)
+			opslog.Info("daemon.config", "reload_detected", "configuration change detected and loaded")
 			onChange(newCfg)
 		}
 	}

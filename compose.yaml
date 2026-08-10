@@ -1,0 +1,48 @@
+name: nekonest
+
+services:
+  server:
+    image: ${NEKONEST_IMAGE:-ghcr.io/klarkxy/nekonest-server:latest}
+    build:
+      context: .
+      args:
+        VERSION: ${NEKONEST_VERSION:-0.0.0-dev}
+    environment:
+      NEKONEST_ADMIN_SECRET: ${NEKONEST_ADMIN_SECRET:?set NEKONEST_ADMIN_SECRET in .env}
+      NEKONEST_BOOTSTRAP_TOKEN: ${NEKONEST_BOOTSTRAP_TOKEN:?set NEKONEST_BOOTSTRAP_TOKEN in .env}
+      NEKONEST_ALLOWED_ORIGINS: ${NEKONEST_ALLOWED_ORIGINS:?set NEKONEST_ALLOWED_ORIGINS in .env}
+      NEKONEST_TRUST_PROXY: ${NEKONEST_TRUST_PROXY:-1}
+      NEKONEST_TRANSPORT_MODE: ${NEKONEST_TRANSPORT_MODE:-}
+      NEKONEST_VAPID_PUBLIC_KEY: ${NEKONEST_VAPID_PUBLIC_KEY:-}
+      NEKONEST_VAPID_PRIVATE_KEY: ${NEKONEST_VAPID_PRIVATE_KEY:-}
+      NEKONEST_VAPID_SUBJECT: ${NEKONEST_VAPID_SUBJECT:-}
+      NEKONEST_LOG_FORMAT: json
+      NEKONEST_LOG_LEVEL: ${NEKONEST_LOG_LEVEL:-info}
+    ports:
+      - "127.0.0.1:${NEKONEST_PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: ${NEKONEST_DATA_DIR:-./data}
+        target: /data
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1770
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health | grep -q '\"status\":\"nyan~\"'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

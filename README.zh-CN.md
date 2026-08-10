@@ -100,6 +100,26 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 
 ### 1. 在 VPS 安装并启动 Server
 
+[GHCR](https://github.com/klarkxy/nekonest/pkgs/container/nekonest-server)
+提供同时包含 Server 与匹配 PWA 的非 root `linux/amd64` + `linux/arm64`
+镜像。Daemon 为了直接访问主机 CLI，明确**不做容器化**。
+
+```bash
+git clone https://github.com/klarkxy/nekonest.git
+cd nekonest
+cp docker.env.example .env
+# 编辑 .env 后限制权限。
+chmod 600 .env
+sudo install -d -m 700 -o 10001 -g 10001 data
+docker compose pull
+docker compose up -d
+docker compose logs -f server
+```
+
+Compose 不会自动创建缺失的宿主机数据路径。Linux 上 Server 会把数据根目录
+保持为 `0700`，SQLite DB/WAL/SHM 文件保持为 `0600`；若无法落实这些私有
+权限，会在监听端口前停止启动。
+
 [GitHub Releases](https://github.com/klarkxy/nekonest/releases/latest) 提供
 Linux amd64 与 arm64 的 Server 压缩包。包内已经包含同版本的
 `pwa-dist`、中英文 README、许可证和版本标记；使用预编译包不需要安装
@@ -220,6 +240,8 @@ export NEKONEST_BOOTSTRAP_TOKEN='与 VPS 相同的注册令牌'
 | `NEKONEST_TRUSTED_PROXY_CIDRS` | 反代不在 loopback 时声明可信网段 |
 | `NEKONEST_VAPID_*` | 可选 Web Push |
 | `NEKONEST_SERVER` | Daemon 注册时使用的 VPS 地址 |
+| `NEKONEST_LOG_FORMAT` | `text`（默认）或每行一个对象的 `json` |
+| `NEKONEST_LOG_LEVEL` | `debug`、`info`（默认）、`warn`、`error` |
 
 > [!WARNING]
 > 未设置管理员密钥时，Server 只绑定 loopback，用于本地开发。不要把未鉴权模式暴露到公网。

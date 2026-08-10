@@ -2,9 +2,10 @@ package agentexec
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
+
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 // stderrDiagnostics suppresses untrusted CLI stderr content while preserving a
@@ -15,17 +16,15 @@ type stderrDiagnostics struct {
 	seen atomic.Bool
 }
 
-func (d *stderrDiagnostics) suppress(agentType, sessionID, source string) bool {
+func (d *stderrDiagnostics) suppress(agentType, sessionID, source, line string) bool {
 	if source == "stdout" {
 		return false
 	}
+	// line is intentionally never inspected or logged: CLI diagnostics may
+	// contain prompts, credentials, response bodies, and local paths.
 	d.seen.Store(true)
 	d.once.Do(func() {
-		log.Printf(
-			"[%s] session %s emitted non-stdout diagnostics; content omitted",
-			agentType,
-			sessionID,
-		)
+		opslog.Warn("daemon.agentexec", "stderr_suppressed", "non-stdout CLI diagnostics suppressed", "agent_type", agentType, "session_id", sessionID)
 	})
 	return true
 }

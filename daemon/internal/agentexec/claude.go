@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nekonest/daemon/internal/attach"
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 // ClaudeCommander handles Claude Code CLI interactions.
@@ -166,14 +166,14 @@ func (c *ClaudeCommander) startPromptInDir(
 		if onOutput != nil {
 			onOutput(source, line)
 		}
-		if diagnostics.suppress("claude", sessionID, source) {
+		if diagnostics.suppress("claude_code", sessionID, source, line) {
 			return
 		}
 		c.handleProcessLine(sessionID, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
-		log.Printf("[claude] session %s process exited with code %d", sessionID, exitCode)
+		opslog.Info("daemon.agentexec", "process_exited", "agent process exited", "agent_type", "claude_code", "session_id", sessionID, "status", exitCode)
 		if message := diagnostics.exitFailure(
 			"Claude Code",
 			exitCode,
@@ -199,7 +199,7 @@ func (c *ClaudeCommander) startPromptInDir(
 	_ = executor.CloseStdin()
 
 	c.executors[sessionID] = executor
-	log.Printf("[claude] started process for session %s", sessionID)
+	opslog.Info("daemon.agentexec", "process_started", "agent process started", "agent_type", "claude_code", "session_id", sessionID)
 	return nil
 }
 

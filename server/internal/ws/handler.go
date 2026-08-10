@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"net"
 	"net/http"
@@ -17,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
+	"github.com/nekonest/server/internal/opslog"
 	"github.com/nekonest/server/internal/protocol"
 	pushsub "github.com/nekonest/server/internal/push"
 )
@@ -112,14 +112,14 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 	// P2-F: Rate limiting (per IP host, not host:ephemeral-port)
 	clientIP := clientIPKey(r)
 	if !wsRateLimiter.allow(clientIP) {
-		log.Printf("[ws] rate limit exceeded for daemon: %s", clientIP)
+		opslog.Warn("server.ws", "daemon_rate_limited", "daemon websocket rate limit exceeded")
 		http.Error(w, "too many connections", http.StatusTooManyRequests)
 		return
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[ws] daemon upgrade error: %v", err)
+		opslog.Error("server.ws", "daemon_upgrade_failed", "daemon websocket upgrade failed", err)
 		return
 	}
 	conn.SetReadLimit(unauthenticatedReadLimit)
@@ -212,18 +212,18 @@ func (s *Server) daemonReadLoop(dc *DaemonConn) {
 		_, data, err := dc.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("[ws] daemon read error: %v", err)
+				opslog.Error("server.ws", "daemon_read_failed", "daemon websocket read failed", err)
 			}
 			return
 		}
 
 		var msg protocol.NekoMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
-			log.Printf("[ws] daemon unmarshal error: %v", err)
+			opslog.Error("server.ws", "daemon_frame_decode_failed", "daemon websocket frame decode failed", err)
 			continue
 		}
 		if err := protocol.ValidateFrameForTransport(&msg, s.TransportMode()); err != nil {
-			log.Printf("[ws] rejecting daemon frame type=%s device=%s: %v", msg.Type, dc.DeviceID, err)
+			opslog.Error("server.ws", "daemon_frame_rejected", "daemon websocket frame rejected", err, "frame_type", safeMessageTypeForLog(msg.Type))
 			_ = dc.Conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 				Type: protocol.MsgError, DeviceID: dc.DeviceID, Timestamp: time.Now().Unix(),
 				Payload: map[string]any{"error_code": protocol.ErrCodeInvalidEnvelope, "message": "invalid transport envelope"},
@@ -319,7 +319,7 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		// ciphertext only (no application plaintext on the nest).
 		if msg.SealedPayload != nil {
 			if err := s.db.SaveSealedMessage(dc.DeviceID, msg.SessionID, msg); err != nil {
-				log.Printf("[ws] save sealed message error: %v", err)
+				opslog.Error("server.ws", "sealed_message_save_failed", "sealed message persistence failed", err)
 			}
 		} else if msg.Payload != nil {
 			if msgData, ok := msg.Payload["message"]; ok {
@@ -327,7 +327,7 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 				var sessionMsg protocol.SessionMessage
 				if err := json.Unmarshal(data, &sessionMsg); err == nil {
 					if err := s.db.SaveMessage(dc.DeviceID, msg.SessionID, &sessionMsg); err != nil {
-						log.Printf("[ws] save message error: %v", err)
+						opslog.Error("server.ws", "message_save_failed", "message persistence failed", err)
 					}
 				}
 			}
@@ -375,12 +375,12 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 	case protocol.MsgPromptNotSeen:
 		clientMsgID := promptClientMsgID(msg)
 		if clientMsgID == "" {
-			log.Printf("[ws] prompt_not_seen without valid client_msg_id from %s", dc.DeviceID)
+			opslog.Warn("server.ws", "prompt_not_seen_invalid", "prompt-not-seen frame missing a valid client message identifier")
 			return
 		}
 		cmd, err := s.db.GetPromptCommand(dc.DeviceID, clientMsgID)
 		if err != nil {
-			log.Printf("[ws] prompt_not_seen unknown command %s/%s: %v", dc.DeviceID, clientMsgID, err)
+			opslog.Error("server.ws", "prompt_not_seen_lookup_failed", "prompt-not-seen command lookup failed", err)
 			return
 		}
 		if cmd.Status != db.PromptPending {
@@ -388,18 +388,18 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		}
 		retry := promptCommandMessage(cmd)
 		if retry == nil {
-			log.Printf("[ws] stored prompt envelope is invalid for %s/%s", dc.DeviceID, clientMsgID)
+			opslog.Warn("server.ws", "prompt_envelope_invalid", "stored prompt envelope is invalid")
 			return
 		}
 		if err := s.connMgr.sendToDaemonLocked(dc, s.stampEnvelope(retry)); err != nil {
 			// Keep pending. The next phone outbox flush will query again.
-			log.Printf("[ws] resend not-seen prompt %s/%s: %v", dc.DeviceID, clientMsgID, err)
+			opslog.Error("server.ws", "prompt_not_seen_resend_failed", "prompt-not-seen resend failed", err)
 		}
 
 	case protocol.MsgPromptAccepted:
 		clientMsgID := promptClientMsgID(msg)
 		if clientMsgID == "" {
-			log.Printf("[ws] prompt_accepted without valid client_msg_id from %s", dc.DeviceID)
+			opslog.Warn("server.ws", "prompt_accepted_invalid", "prompt-accepted frame missing a valid client message identifier")
 			return
 		}
 		// Backward compatibility for daemons that predate prompt_queued. Queue
@@ -410,7 +410,7 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		}
 		cmd, _, err := s.db.MarkPromptAccepted(dc.DeviceID, clientMsgID)
 		if err != nil {
-			log.Printf("[ws] accept unknown prompt %s/%s: %v", dc.DeviceID, clientMsgID, err)
+			opslog.Error("server.ws", "prompt_accept_lookup_failed", "prompt acceptance lookup failed", err)
 			return
 		}
 		if cmd.Status != db.PromptAccepted {
@@ -420,7 +420,7 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		// Upsert every time so a crash between the durable status transition
 		// and message persistence is healed by a duplicate daemon ACK.
 		if err := s.persistAcceptedPrompt(cmd); err != nil {
-			log.Printf("[ws] save accepted user prompt: %v", err)
+			opslog.Error("server.ws", "accepted_prompt_save_failed", "accepted prompt persistence failed", err)
 			return
 		}
 		s.sendPromptCommittedLocked(dc, cmd)
@@ -432,7 +432,7 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 	case protocol.MsgPromptFailed:
 		clientMsgID := promptClientMsgID(msg)
 		if clientMsgID == "" {
-			log.Printf("[ws] prompt_failed without valid client_msg_id from %s", dc.DeviceID)
+			opslog.Warn("server.ws", "prompt_failed_invalid", "prompt-failed frame missing a valid client message identifier")
 			return
 		}
 		failure := "daemon rejected prompt"
@@ -468,7 +468,7 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 			retryAllowed,
 		)
 		if err != nil {
-			log.Printf("[ws] fail unknown prompt %s/%s: %v", dc.DeviceID, clientMsgID, err)
+			opslog.Error("server.ws", "prompt_failure_lookup_failed", "prompt failure lookup failed", err)
 			return
 		}
 		if cmd.Status == db.PromptFailed || cmd.Status == db.PromptIndeterminate {
@@ -497,7 +497,7 @@ func (s *Server) handleDaemonMessage(dc *DaemonConn, msg *protocol.NekoMessage) 
 		// Just keep-alive, already updated LastPing
 
 	default:
-		log.Printf("[ws] unexpected message type from daemon: %s", msg.Type)
+		opslog.Warn("server.ws", "daemon_message_unexpected", "unexpected daemon message type", "frame_type", safeMessageTypeForLog(msg.Type))
 	}
 }
 
@@ -529,7 +529,7 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 	// P2-F: Rate limiting (per IP host, not host:ephemeral-port)
 	clientIP := clientIPKey(r)
 	if !wsRateLimiter.allow(clientIP) {
-		log.Printf("[ws] rate limit exceeded for phone: %s", clientIP)
+		opslog.Warn("server.ws", "phone_rate_limited", "phone websocket rate limit exceeded")
 		http.Error(w, "too many connections", http.StatusTooManyRequests)
 		return
 	}
@@ -543,7 +543,7 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[ws] phone upgrade error: %v", err)
+		opslog.Error("server.ws", "phone_upgrade_failed", "phone websocket upgrade failed", err)
 		return
 	}
 	defer conn.Close()
@@ -740,7 +740,7 @@ func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
 func (s *Server) requestFreshSessionCatalog(deviceID string) {
 	refresh := s.stampEnvelope(protocol.NewMessage(protocol.MsgRefreshSessions, deviceID))
 	if err := s.connMgr.SendToDaemon(deviceID, refresh); err != nil && !errors.Is(err, ErrDeviceOffline) {
-		log.Printf("[ws] request fresh session catalog for %s: %v", deviceID, err)
+		opslog.Error("server.ws", "catalog_refresh_request_failed", "fresh session catalog request failed", err)
 	}
 }
 
@@ -775,7 +775,7 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID, protocolVersion s
 			continue
 		}
 		if err := protocol.ValidateFrameForTransport(&msg, s.TransportMode()); err != nil {
-			log.Printf("[ws] rejecting phone frame type=%s device=%s: %v", msg.Type, deviceID, err)
+			opslog.Error("server.ws", "phone_frame_rejected", "phone websocket frame rejected", err, "frame_type", safeMessageTypeForLog(msg.Type))
 			s.writePhoneError(conn, deviceID, msg.SessionID, "invalid transport envelope")
 			return deviceID
 		}
@@ -1039,7 +1039,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 			if cmd.Status == db.PromptAccepted {
 				// Also heals a crash after acceptance but before message save.
 				if err := s.persistAcceptedPrompt(cmd); err != nil {
-					log.Printf("[ws] heal accepted user prompt: %v", err)
+					opslog.Error("server.ws", "accepted_prompt_heal_failed", "accepted prompt reconciliation failed", err)
 					return
 				}
 				s.sendPromptCommitted(cmd)
@@ -1058,7 +1058,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 				query.Payload = map[string]any{"client_msg_id": cmd.ClientMsgID}
 				if err := s.connMgr.SendToDaemon(deviceID, s.stampEnvelope(query)); err != nil {
 					// Keep pending; a later outbox flush can query again.
-					log.Printf("[ws] prompt status query %s/%s: %v", deviceID, clientMsgID, err)
+					opslog.Error("server.ws", "prompt_status_query_failed", "prompt status query failed", err)
 				}
 			}
 			return
@@ -1084,7 +1084,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 				retryAllowed,
 			)
 			if markErr != nil {
-				log.Printf("[ws] mark prompt forward failure: %v", markErr)
+				opslog.Error("server.ws", "prompt_forward_failure_mark_failed", "prompt forward failure persistence failed", markErr)
 				failed = cmd
 				failed.Status = db.PromptFailed
 				if outcome == db.PromptIndeterminate {
@@ -1096,7 +1096,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 			}
 			if failed.Status == db.PromptAccepted {
 				if err := s.persistAcceptedPrompt(failed); err != nil {
-					log.Printf("[ws] save concurrently accepted user prompt: %v", err)
+					opslog.Error("server.ws", "concurrent_accepted_prompt_save_failed", "concurrent accepted prompt persistence failed", err)
 				} else {
 					s.broadcastPromptSent(failed)
 				}
@@ -1107,7 +1107,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 			if _, _, err := s.db.MarkPromptForwarded(deviceID, clientMsgID); err != nil {
 				// Leave registered on persistence failure. Replaying the same
 				// ID is safe against the daemon's durable execution journal.
-				log.Printf("[ws] mark prompt forwarded %s/%s: %v", deviceID, clientMsgID, err)
+				opslog.Error("server.ws", "prompt_forward_mark_failed", "prompt forward persistence failed", err)
 			}
 		}
 
@@ -1180,7 +1180,7 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 		}
 
 	default:
-		log.Printf("[ws] unexpected message type from phone: %s", msg.Type)
+		opslog.Warn("server.ws", "phone_message_unexpected", "unexpected phone message type", "frame_type", safeMessageTypeForLog(msg.Type))
 	}
 }
 
@@ -1235,7 +1235,7 @@ func (s *Server) handleSealedPrompt(deviceID string, msg *protocol.NekoMessage) 
 			query.ClientMsgID = cmd.ClientMsgID
 			query.Payload = map[string]any{"client_msg_id": cmd.ClientMsgID}
 			if err := s.connMgr.SendToDaemon(deviceID, s.stampEnvelope(query)); err != nil {
-				log.Printf("[ws] sealed prompt status query %s/%s: %v", deviceID, clientMsgID, err)
+				opslog.Error("server.ws", "sealed_prompt_status_query_failed", "sealed prompt status query failed", err)
 			}
 		}
 		return
@@ -1252,7 +1252,7 @@ func (s *Server) handleSealedPrompt(deviceID string, msg *protocol.NekoMessage) 
 		}
 		failed, _, markErr := s.db.MarkPromptFailed(deviceID, clientMsgID, failureMessage, outcome, retryAllowed)
 		if markErr != nil {
-			log.Printf("[ws] mark sealed prompt forward failure: %v", markErr)
+			opslog.Error("server.ws", "sealed_prompt_forward_failure_mark_failed", "sealed prompt forward failure persistence failed", markErr)
 			failed = cmd
 			failed.Status = db.PromptFailed
 			if outcome == db.PromptIndeterminate {
@@ -1270,7 +1270,7 @@ func (s *Server) handleSealedPrompt(deviceID string, msg *protocol.NekoMessage) 
 		return
 	}
 	if _, _, err := s.db.MarkPromptForwarded(deviceID, clientMsgID); err != nil {
-		log.Printf("[ws] mark sealed prompt forwarded %s/%s: %v", deviceID, clientMsgID, err)
+		opslog.Error("server.ws", "sealed_prompt_forward_mark_failed", "sealed prompt forward persistence failed", err)
 	}
 }
 
@@ -1284,7 +1284,7 @@ func (s *Server) acceptAttentionEvent(deviceID string, msg *protocol.NekoMessage
 	}
 	accepted, err := s.db.AcceptAttentionEvent(deviceID, eventID, time.Now())
 	if err != nil {
-		log.Printf("[ws] persist attention event error: %v", err)
+		opslog.Error("server.ws", "attention_event_persist_failed", "attention event persistence failed", err)
 		return false
 	}
 	return accepted
@@ -1422,7 +1422,7 @@ func promptAttachments(cmd *db.PromptCommand) []map[string]any {
 	}
 	var attachments []map[string]any
 	if err := json.Unmarshal([]byte(cmd.AttachmentsJSON), &attachments); err != nil {
-		log.Printf("[ws] decode prompt attachments %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+		opslog.Error("server.ws", "prompt_attachments_decode_failed", "prompt attachment metadata decode failed", err)
 		return nil
 	}
 	return attachments
@@ -1504,11 +1504,11 @@ func promptCommittedMessage(cmd *db.PromptCommand) *protocol.NekoMessage {
 func (s *Server) sendPromptCommittedLocked(dc *DaemonConn, cmd *db.PromptCommand) {
 	committed := s.stampEnvelope(promptCommittedMessage(cmd))
 	if err := s.connMgr.sendToDaemonLocked(dc, committed); err != nil {
-		log.Printf("[ws] send prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+		opslog.Error("server.ws", "prompt_commit_send_failed", "prompt-committed notification send failed", err)
 		return
 	}
 	if err := s.db.MarkPromptCommitted(cmd.DeviceID, cmd.ClientMsgID); err != nil {
-		log.Printf("[ws] persist prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+		opslog.Error("server.ws", "prompt_commit_persist_failed", "prompt-committed persistence failed", err)
 		return
 	}
 	s.connMgr.BroadcastToPhones(cmd.DeviceID, committed)
@@ -1517,11 +1517,11 @@ func (s *Server) sendPromptCommittedLocked(dc *DaemonConn, cmd *db.PromptCommand
 func (s *Server) sendPromptCommitted(cmd *db.PromptCommand) {
 	committed := s.stampEnvelope(promptCommittedMessage(cmd))
 	if err := s.connMgr.SendToDaemon(cmd.DeviceID, committed); err != nil {
-		log.Printf("[ws] resend prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+		opslog.Error("server.ws", "prompt_commit_resend_failed", "prompt-committed resend failed", err)
 		return
 	}
 	if err := s.db.MarkPromptCommitted(cmd.DeviceID, cmd.ClientMsgID); err != nil {
-		log.Printf("[ws] persist prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+		opslog.Error("server.ws", "prompt_commit_persist_failed", "prompt-committed persistence failed", err)
 		return
 	}
 	s.connMgr.BroadcastToPhones(cmd.DeviceID, committed)
@@ -1531,7 +1531,7 @@ func (s *Server) replayPromptCommits(dc *DaemonConn) {
 	for {
 		commands, err := s.db.ListUncommittedAcceptedPrompts(dc.DeviceID, 100)
 		if err != nil {
-			log.Printf("[ws] list uncommitted prompts for %s: %v", dc.DeviceID, err)
+			opslog.Error("server.ws", "uncommitted_prompt_list_failed", "uncommitted prompt list failed", err)
 			return
 		}
 		if len(commands) == 0 {
@@ -1542,18 +1542,18 @@ func (s *Server) replayPromptCommits(dc *DaemonConn) {
 			// user-facing history row was written. Heal that first; only then
 			// tell the daemon it may discard its durable execution journal.
 			if err := s.persistAcceptedPrompt(cmd); err != nil {
-				log.Printf("[ws] heal accepted prompt before commit %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+				opslog.Error("server.ws", "accepted_prompt_heal_failed", "accepted prompt reconciliation failed", err)
 				return
 			}
 			if err := s.connMgr.SendToDaemon(
 				dc.DeviceID,
 				s.stampEnvelope(promptCommittedMessage(cmd)),
 			); err != nil {
-				log.Printf("[ws] replay prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+				opslog.Error("server.ws", "prompt_commit_replay_failed", "prompt-committed replay failed", err)
 				return
 			}
 			if err := s.db.MarkPromptCommitted(cmd.DeviceID, cmd.ClientMsgID); err != nil {
-				log.Printf("[ws] persist replayed prompt_committed %s/%s: %v", cmd.DeviceID, cmd.ClientMsgID, err)
+				opslog.Error("server.ws", "prompt_commit_replay_persist_failed", "replayed prompt-committed persistence failed", err)
 				return
 			}
 		}
@@ -1615,13 +1615,13 @@ func (s *Server) sendPushNotification(deviceID, sessionID, title, body string) {
 			Auth:     sub.Auth,
 		})
 	}
-	log.Printf("[push] device=%s session=%s title=%q subs=%d", deviceID, sessionID, title, len(payload))
+	opslog.Info("server.push", "delivery_requested", "push delivery requested", "subscription_count", len(payload))
 	pushsub.Send(payload, title, body, url, deviceID, sessionID, func(endpoint string) {
 		if err := s.db.DeletePushSubscription(endpoint); err != nil {
-			log.Printf("[push] delete expired endpoint: %v", err)
+			opslog.Error("server.push", "expired_subscription_delete_failed", "expired push subscription deletion failed", err)
 			return
 		}
-		log.Printf("[push] deleted expired endpoint %s", endpoint)
+		opslog.Info("server.push", "expired_subscription_deleted", "expired push subscription deleted")
 	})
 }
 
@@ -1633,7 +1633,7 @@ func CORSMiddleware(next http.Handler) http.Handler {
 
 		if origin != "" {
 			if !isAllowedOrigin(r, origin) {
-				log.Printf("[cors] rejected origin: %s", origin)
+				opslog.Warn("server.http", "cors_origin_rejected", "CORS origin rejected")
 				http.Error(w, "origin not allowed", http.StatusForbidden)
 				return
 			}
@@ -1827,13 +1827,78 @@ func sanitizeClientMsgID(id string) string {
 // LoggingMiddleware logs HTTP requests.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Preserve optional ResponseWriter interfaces required by WebSocket
+		// upgrades. Health and static requests are intentionally not logged.
+		if strings.HasPrefix(r.URL.Path, "/ws/") ||
+			r.URL.Path == "/health" ||
+			strings.HasPrefix(r.URL.Path, "/static/") ||
+			strings.HasPrefix(r.URL.Path, "/assets/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
-		next.ServeHTTP(w, r)
+		response := &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(response, r)
 		duration := time.Since(start)
 
-		// Skip logging for static files and health checks
-		if !strings.HasPrefix(r.URL.Path, "/ws/") && r.URL.Path != "/health" {
-			log.Printf("[http] %s %s %v", r.Method, r.URL.Path, duration)
-		}
+		route := requestRoute(r)
+		opslog.Info("server.http", "request_completed", "HTTP request completed",
+			"method", r.Method,
+			"route", route,
+			"status", response.status,
+			"duration_ms", duration.Milliseconds(),
+		)
 	})
+}
+
+// requestRoute returns an allowlisted route label instead of an arbitrary URL.
+// This intentionally excludes query values and dynamic attachment identifiers.
+func requestRoute(r *http.Request) string {
+	path := r.URL.Path
+	switch {
+	case strings.HasPrefix(path, "/api/attachments/"):
+		return "/api/attachments/{id}"
+	case strings.HasPrefix(path, "/static/"):
+		return "/static/*"
+	case strings.HasPrefix(path, "/assets/"):
+		return "/assets/*"
+	case knownOperatorRoute(path):
+		return path
+	case strings.HasPrefix(path, "/api/"):
+		return "api_unmatched"
+	case path == "/":
+		return "/"
+	default:
+		return "spa_route"
+	}
+}
+
+func knownOperatorRoute(path string) bool {
+	switch path {
+	case "/api/devices", "/api/devices/register", "/api/devices/sessions",
+		"/api/phones/bootstrap", "/api/phones", "/api/phones/revoke",
+		"/api/messages", "/api/attachments", "/api/push/subscribe",
+		"/api/push/vapid-public-key", "/api/pair/generate", "/api/pair/consume",
+		"/api/devices/keys", "/api/devices/grants", "/api/keys", "/api/keys/upload":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeMessageTypeForLog(msgType protocol.MessageType) string {
+	if protocol.BodyPolicy(msgType) == protocol.MessageBodyUnknown {
+		return "unknown"
+	}
+	return string(msgType)
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *loggingResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
 }

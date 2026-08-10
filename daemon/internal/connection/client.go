@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"runtime"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/nekonest/daemon/internal/buildinfo"
+	"github.com/nekonest/daemon/internal/opslog"
 	"github.com/nekonest/daemon/internal/wire"
 )
 
@@ -146,7 +146,7 @@ func (c *Client) Connect() error {
 		c.mu.Unlock()
 
 		wsURL := serverURL + "/ws/daemon"
-		log.Printf("[conn] connecting to %s", wsURL)
+		opslog.Info("daemon.connection", "connect_attempt", "connecting to server", "device_id", deviceID, "generation", generation)
 
 		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
@@ -226,19 +226,14 @@ func (c *Client) Connect() error {
 			negotiatedVersion, _ = payload["protocol_version"].(string)
 			serverVersion, _ := payload["server_version"].(string)
 			if serverVersion != "" {
-				log.Printf(
-					"[conn] component versions daemon=%s server=%s update_required=%v",
-					buildinfo.Version,
-					serverVersion,
-					serverVersion != buildinfo.Version,
-				)
+				opslog.Info("daemon.connection", "version_negotiated", "component versions negotiated", "device_id", deviceID, "generation", generation, "daemon_version", buildinfo.Version, "server_version", serverVersion, "update_required", serverVersion != buildinfo.Version)
 			}
 		}
 		if negotiatedVersion == "" {
 			negotiatedVersion, _ = resp["protocol_version"].(string)
 		}
 		if negotiatedVersion == "" {
-			// Compatibility with pre-negotiation test/development servers. A real
+			// Backward support for pre-negotiation test/development servers. A real
 			// v1.1 server sends the negotiated version in auth_response payload.
 			negotiatedVersion = wire.CurrentProtocolVersion
 		}
@@ -273,7 +268,7 @@ func (c *Client) Connect() error {
 			_ = oldConn.Close()
 		}
 
-		log.Printf("[conn] authenticated as %s", deviceID)
+		opslog.Info("daemon.connection", "authenticated", "server authentication completed", "device_id", deviceID, "generation", generation)
 		if onConnect != nil {
 			// The callback is generation-bound. If an endpoint switch wins
 			// before this goroutine starts, it is discarded; if the callback
@@ -332,16 +327,18 @@ func (c *Client) StartReadLoop(ctx context.Context) {
 		// Check if we should stop
 		select {
 		case <-ctx.Done():
-			log.Printf("[conn] read loop stopped (context done)")
+			opslog.Info("daemon.connection", "read_loop_stopped", "connection read loop stopped", "reason", "context_done")
 			return
 		case <-c.closeCh:
-			log.Printf("[conn] read loop stopped (closed)")
+			opslog.Info("daemon.connection", "read_loop_stopped", "connection read loop stopped", "reason", "closed")
 			return
 		default:
 		}
 
 		c.mu.Lock()
 		conn := c.conn
+		deviceID := c.deviceID
+		generation := c.generation
 		c.mu.Unlock()
 
 		if conn == nil {
@@ -362,7 +359,7 @@ func (c *Client) StartReadLoop(ctx context.Context) {
 			default:
 			}
 
-			log.Printf("[conn] read error: %v", err)
+			opslog.Error("daemon.connection", "read_failed", "connection read failed", err, "device_id", deviceID, "generation", generation)
 			c.mu.Lock()
 			wasCurrent := c.conn == conn
 			if wasCurrent {
@@ -411,11 +408,15 @@ func (c *Client) StartHeartbeat(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			msg := c.heartbeatMessage(time.Now())
+			c.mu.Lock()
+			deviceID := c.deviceID
+			generation := c.generation
+			c.mu.Unlock()
 			if err := c.Send(msg); err != nil {
-				log.Printf("[conn] heartbeat error: %v", err)
+				opslog.Error("daemon.connection", "heartbeat_failed", "heartbeat send failed", err, "device_id", deviceID, "generation", generation)
 			}
 		case <-ctx.Done():
-			log.Printf("[conn] heartbeat stopped")
+			opslog.Info("daemon.connection", "heartbeat_stopped", "heartbeat stopped")
 			return
 		case <-c.closeCh:
 			return
@@ -465,14 +466,14 @@ func (c *Client) Close() {
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"),
 		)
 		if err != nil {
-			log.Printf("[conn] close message error: %v", err)
+			opslog.Error("daemon.connection", "close_message_failed", "close message failed", err, "device_id", c.deviceID, "generation", c.generation)
 		}
 		c.conn.Close()
 		c.conn = nil
 		c.connected = false
 	}
 
-	log.Printf("[conn] connection closed")
+	opslog.Info("daemon.connection", "closed", "connection closed", "device_id", c.deviceID, "generation", c.generation)
 }
 
 // reconnect attempts to reconnect with exponential backoff.
@@ -481,10 +482,12 @@ func (c *Client) reconnect(ctx context.Context) bool {
 	c.mu.Lock()
 	c.reconnects++
 	attempt := c.reconnects
+	deviceID := c.deviceID
+	generation := c.generation
 	c.mu.Unlock()
 
 	if attempt > maxReconnects {
-		log.Printf("[conn] max reconnection attempts (%d) reached, giving up", maxReconnects)
+		opslog.Error("daemon.connection", "reconnect_exhausted", "maximum reconnection attempts reached", nil, "device_id", deviceID, "generation", generation, "count", maxReconnects)
 		return false
 	}
 
@@ -493,7 +496,7 @@ func (c *Client) reconnect(ctx context.Context) bool {
 		delay = maxReconnectDelay
 	}
 
-	log.Printf("[conn] reconnecting in %v (attempt %d/%d)", delay, attempt, maxReconnects)
+	opslog.Info("daemon.connection", "reconnect_scheduled", "reconnect scheduled", "device_id", deviceID, "generation", generation, "attempt", attempt, "count", maxReconnects, "delay_ms", delay.Milliseconds())
 
 	select {
 	case <-time.After(delay):
@@ -504,7 +507,7 @@ func (c *Client) reconnect(ctx context.Context) bool {
 	}
 
 	if err := c.Connect(); err != nil {
-		log.Printf("[conn] reconnect failed: %v", err)
+		opslog.Error("daemon.connection", "reconnect_failed", "reconnect attempt failed", err, "device_id", deviceID, "generation", generation, "attempt", attempt)
 		return true // keep trying
 	}
 	return true

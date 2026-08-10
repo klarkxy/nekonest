@@ -65,6 +65,20 @@ gh release view vX.Y.Z --repo klarkxy/nekonest
 - Server + 同版本 PWA：Linux amd64、Linux arm64
 - Daemon：Windows amd64、Linux amd64、Linux arm64
 - 覆盖以上五个压缩包的 `checksums.txt`
+- 带 SBOM/provenance 的 `ghcr.io/klarkxy/nekonest-server` 多架构镜像
+
+稳定版发布 `vX.Y.Z`、`X.Y.Z`、`X.Y`、`latest`；预发布只发布精确的
+`vX.Y.Z-suffix` 与 `X.Y.Z-suffix`。精确标签不可变：同源码 revision 的重跑跳过，
+不一致则失败。容器发布会全局串行且不取消排队版本：先构建或修复两个精确标签，
+后续复制固定使用已验证 digest，再按版本推进稳定别名。别名已指向更新版本时成功
+保持不动；同版本冲突或非法元数据会失败关闭。Registry 读取会重试，只有明确的
+manifest 缺失才视为不存在。工作流退出登录后会匿名验证两个精确标签及最终稳定
+别名 digest，因此 GHCR 包必须公开。
+
+个人账号下的 GHCR 包首次发布后可能仍是私有。此时工作流会在已发布精确镜像后，
+于匿名验证阶段按设计中止。请在 GitHub 中将该包的可见性改为 **Public**，再对同一
+不可变 tag 重跑；重跑会核验既有 digest，并安全完成别名与 Release 附件，不会重建
+或覆写该镜像。
 
 Release 附件名不含版本号，因此 README 可以使用
 `releases/latest/download` 稳定链接；不可变 tag 与每个压缩包内的
@@ -73,7 +87,8 @@ README 快速开始与中英文部署文档。
 
 若要补齐既有不可变 tag 缺失的附件，可手动运行 **Release binaries** 并填写
 该 tag。工作流会检出该 tag 的源码，同时使用所选工作流版本中的发布自动化，
-不会移动 tag。修复运行仍会校验各处版本号、构建该 tag 的 PWA 与全部五个包、
+包括当前可信 Dockerfile；所有构建输入仍来自精确 tag 源码，且不会移动 tag。
+修复运行仍会校验各处版本号、构建该 tag 的 PWA 与全部五个包、
 执行同架构二进制 smoke，并发布校验和；但不会重跑可能已随 runner 环境漂移的
 旧 tag 单测，原 tag 的既有验收仍是依据。正常由 tag 触发的发布始终执行
 Server、Daemon、PWA 全部门禁。
@@ -82,7 +97,7 @@ Server、Daemon、PWA 全部门禁。
 
 标签不等于已部署。
 
-发布附件本身不会更新生产环境。但对于当前配置线上猫窝的运行时维护，只要任务没有
+发布附件本身不会更新生产环境。但对于当前配置线上猫娘乐园的运行时维护，只要任务没有
 明确限定 local-only，本地测试就不算最终验收。
 
 1. 合并并推送已批准提交；从这个确切提交重新构建 Server、PWA 与 daemon。

@@ -26,6 +26,9 @@ func New(dbPath string) (*DB, error) {
 // first initialization; a later mismatch is rejected rather than silently
 // changing how a nest carries application data.
 func NewWithTransportMode(dbPath, requestedMode string) (*DB, error) {
+	if err := preparePrivateDatabase(dbPath); err != nil {
+		return nil, err
+	}
 	// modernc.org/sqlite applies connection-local PRAGMAs through repeated
 	// _pragma query parameters. The similarly named _journal_mode and
 	// _busy_timeout parameters are not recognized by this driver, which leaves
@@ -50,6 +53,10 @@ func NewWithTransportMode(dbPath, requestedMode string) (*DB, error) {
 		return nil, err
 	}
 	if err := db.migrate(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := tightenPrivateDatabaseArtifacts(dbPath); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}

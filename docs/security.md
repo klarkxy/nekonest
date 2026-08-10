@@ -138,13 +138,15 @@ Details: [architecture.md](./architecture.md).
 - [ ] `NEKONEST_PHONE_SECRET` and `NEKONEST_BOOTSTRAP_TOKEN` set, long, distinct
 - [ ] `NEKONEST_ALLOWED_ORIGINS` set to the public HTTPS origin
 - [ ] `NEKONEST_TRUST_PROXY=1` only with header-overwriting proxy config
-- [ ] systemd (or equivalent) runs as a dedicated user; `data/` not world-readable
+- [ ] systemd (or equivalent) runs as a dedicated user; Linux `data/` is `0700` and DB/WAL/SHM files are `0600`
+- [ ] Docker uses the non-root image user, read-only root filesystem, dropped capabilities, and a pre-created `0700` `/data` bind mount owned by uid/gid `10001`
 - [ ] Secrets via `EnvironmentFile` with restricted permissions, not world-readable unit files
 - [ ] Firewall: only 80/443 public; app port (e.g. 8080) localhost-only
 - [ ] Backups of `data/` encrypted and access-controlled
 - [ ] Daemon `config.json` ACL limited to the PC user
 - [ ] VAPID keys generated offline if Web Push is enabled
 - [ ] No debug builds or open registration on the public host
+- [ ] Shared operator logs contain stable identifier pseudonyms/status only—never raw identifiers, credentials, prompt/response bodies, approval/input details, attachment paths, push text, or raw CLI stderr
 
 ## What NekoNest does not claim
 

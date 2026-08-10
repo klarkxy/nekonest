@@ -126,12 +126,17 @@ Self-hosters sometimes add path/process exclusions (see [deploy-windows.md](./de
 
 ## Still stuck
 
-1. Capture **non-secret** logs from server systemd and daemon console.
+1. Capture **non-secret** logs from `journalctl -u nekonest`,
+   `docker compose logs server`, or the daemon console. Set
+   `NEKONEST_LOG_FORMAT=json` for machine parsing and use
+   `NEKONEST_LOG_LEVEL=debug` only for a bounded diagnostic window.
 2. Verify `/health` and device online state.
 3. Run [e2e-smoke.md](./e2e-smoke.md) checklist items until the first failure.
 4. For contributors, trace PWA → server → daemon → adapter end-to-end ([architecture.md](./architecture.md)).
 
 Never paste device tokens, phone secrets, or bootstrap tokens into public issues.
+JSON logs deliberately omit raw upstream errors and user content; correlate by
+`component`, `event`, and stable pseudonyms for available device/session/message identifiers. Raw identifiers are not emitted, so matching events remain correlatable without turning an attacker-controlled wire field into log content.
 
 ## Protocol 1.2 controls and blockers
 

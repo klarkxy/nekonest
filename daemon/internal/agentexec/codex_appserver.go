@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/nekonest/daemon/internal/attach"
 	"github.com/nekonest/daemon/internal/buildinfo"
+	"github.com/nekonest/daemon/internal/opslog"
 )
 
 // CodexAppServer is a long-lived stdio JSON-RPC client for codex app-server.
@@ -348,7 +348,7 @@ func (c *CodexAppServer) ensureProcess() error {
 		waitErr := cmd.Wait()
 		c.handleProcessExit(generation, cmd, waitErr)
 	}()
-	log.Printf("[codex-app-server] started pid=%d generation=%d", cmd.Process.Pid, generation)
+	opslog.Info("daemon.agentexec", "appserver_started", "Codex app-server started", "agent_type", "codex", "generation", generation)
 	c.mu.Unlock()
 	return nil
 }
@@ -398,7 +398,7 @@ func (c *CodexAppServer) ensureInitialized() error {
 	}
 	c.initialized = true
 	c.mu.Unlock()
-	log.Printf("[codex-app-server] initialized generation=%d", generation)
+	opslog.Info("daemon.agentexec", "appserver_initialized", "Codex app-server initialized", "agent_type", "codex", "generation", generation)
 	return nil
 }
 
@@ -459,7 +459,7 @@ func (c *CodexAppServer) handleProcessExit(generation uint64, cmd *exec.Cmd, wai
 		handler(AppServerExit{Generation: generation, Sessions: sessions, Err: exitErr})
 	}
 	c.eventMu.Unlock()
-	log.Printf("[codex-app-server] unexpected exit generation=%d affected_sessions=%d: %v", generation, len(sessions), exitErr)
+	opslog.Error("daemon.agentexec", "appserver_unexpected_exit", "Codex app-server exited unexpectedly", exitErr, "agent_type", "codex", "generation", generation, "count", len(sessions))
 }
 
 func (c *CodexAppServer) invalidateProcessStateLocked() map[string]chan rpcResult {
@@ -717,7 +717,7 @@ func (c *CodexAppServer) StartThreadWithAttachments(ctx context.Context, cwd, fi
 		return out, fmt.Errorf("thread/start: empty thread id in response: %s", truncateRPC(raw, 240))
 	}
 	c.RegisterThreadIDs(out.ThreadID, out.SessionID, out.WireID())
-	log.Printf("[codex-app-server] thread/start threadId=%s sessionId=%s cwd=%s", out.ThreadID, out.SessionID, cwd)
+	opslog.Info("daemon.agentexec", "thread_started", "Codex native thread started", "agent_type", "codex", "session_id", out.WireID())
 
 	prompt := strings.TrimSpace(firstPrompt)
 	if prompt != "" || len(files) > 0 {
@@ -728,7 +728,7 @@ func (c *CodexAppServer) StartThreadWithAttachments(ctx context.Context, cwd, fi
 		turnID, turnErr := c.StartTurn(ctx, turnThread, prompt, files)
 		out.TurnID = turnID
 		if turnErr != nil {
-			log.Printf("[codex-app-server] turn/start after thread/start: %v", turnErr)
+			opslog.Error("daemon.agentexec", "initial_turn_start_failed", "initial Codex turn start failed", turnErr, "agent_type", "codex", "session_id", out.WireID())
 			return out, fmt.Errorf("thread created (%s) but turn/start failed: %w", out.WireID(), turnErr)
 		}
 	}
@@ -1645,7 +1645,7 @@ func (c *CodexAppServer) probeMethodsUncached() map[string]bool {
 	if err := c.Ensure(); err != nil {
 		out["ensure"] = false
 		out["initialize"] = false
-		log.Printf("[codex-app-server] probe ensure: %v", err)
+		opslog.Error("daemon.agentexec", "appserver_probe_failed", "Codex app-server probe failed", err, "agent_type", "codex")
 		return out
 	}
 	out["ensure"] = true
@@ -1671,8 +1671,8 @@ func (c *CodexAppServer) probeGeneratedSchema() map[string]bool {
 	if err != nil {
 		return out
 	}
-	if output, err := exec.CommandContext(ctx, command, args...).CombinedOutput(); err != nil {
-		log.Printf("[codex-app-server] schema probe: %v (%s)", err, truncateRPC(output, 200))
+	if _, err := exec.CommandContext(ctx, command, args...).CombinedOutput(); err != nil {
+		opslog.Error("daemon.agentexec", "appserver_schema_probe_failed", "Codex app-server schema probe failed", err, "agent_type", "codex")
 		return out
 	}
 	var schema strings.Builder
@@ -1729,7 +1729,7 @@ func (c *CodexAppServer) readLoop(generation uint64, reader *bufio.Reader) {
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(line, &msg); err != nil {
-			log.Printf("[codex-app-server] skip non-json line: %s", truncateRPC(line, 120))
+			opslog.Warn("daemon.agentexec", "appserver_non_json_output", "non-JSON app-server output suppressed", "agent_type", "codex", "generation", generation)
 			continue
 		}
 
@@ -1748,10 +1748,10 @@ func (c *CodexAppServer) readLoop(generation uint64, reader *bufio.Reader) {
 			reqID := rawIDString(msg.ID)
 			req := ServerRequest{ID: reqID, Method: msg.Method, Params: msg.Params}
 			if p := c.TrackServerRequest(req); p != nil {
-				log.Printf("[codex-app-server] pending approval id=%s method=%s thread=%s", p.ID, p.Method, p.ThreadID)
+				opslog.Info("daemon.agentexec", "approval_requested", "Codex approval requested", "agent_type", "codex", "session_id", p.WireID, "generation", generation)
 			}
 			if pending := c.TrackUserInput(req); pending != nil {
-				log.Printf("[codex-app-server] pending user input request=%s item=%s thread=%s", pending.RequestID, pending.ItemID, pending.ThreadID)
+				opslog.Info("daemon.agentexec", "user_input_requested", "Codex user input requested", "agent_type", "codex", "session_id", pending.WireID, "generation", generation)
 			}
 			c.mu.Lock()
 			fn := c.onRequest

@@ -14,6 +14,33 @@ Full env/flag reference: [configuration.md](./configuration.md). Security: [secu
 - Reverse proxy with TLS (Caddy or Nginx recommended)
 - Two long random secrets: admin secret and bootstrap token (**different**)
 
+## Docker Compose (recommended)
+
+The published image is `ghcr.io/klarkxy/nekonest-server`. It contains the
+matching PWA, runs as uid/gid `10001`, keeps the root filesystem read-only, and
+writes durable SQLite/attachment state only under `/data`.
+
+```bash
+git clone https://github.com/klarkxy/nekonest.git
+cd nekonest
+cp docker.env.example .env
+# Replace every placeholder in .env.
+chmod 600 .env
+sudo install -d -m 700 -o 10001 -g 10001 data
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs -f server
+```
+
+Compose publishes only `127.0.0.1:8080`, enables the container health check,
+and bounds Docker's `json-file` log rotation. Set `NEKONEST_DATA_DIR` before
+startup to use an existing absolute data directory. Back that directory up as
+one unit; never start the binary and container against it simultaneously.
+Compose refuses to create a missing host path. The Server enforces mode `0700`
+on the Linux data root and `0600` on SQLite DB/WAL/SHM files, and fails before
+listening if it cannot make the mounted path private.
+
 ## 1. Build
 
 ```bash
@@ -44,8 +71,11 @@ Upload to the VPS, for example:
 ```bash
 export NEKONEST_ADMIN_SECRET='long-random-string'
 export NEKONEST_BOOTSTRAP_TOKEN='another-long-random-string'
-export NEKONEST_TRANSPORT_MODE='open' # v0.2 operational default
+# New data defaults to sealed; set only to assert/choose a deliberate mode.
+# export NEKONEST_TRANSPORT_MODE='sealed'
 export NEKONEST_ALLOWED_ORIGINS='https://nekonest.example.com'
+export NEKONEST_LOG_FORMAT='json'
+export NEKONEST_LOG_LEVEL='info'
 # Behind a header-overwriting reverse proxy on this host:
 export NEKONEST_TRUST_PROXY=1
 # If the proxy is not loopback:
@@ -102,6 +132,7 @@ WantedBy=multi-user.target
 ```bash
 sudo useradd --system --home /opt/nekonest --shell /usr/sbin/nologin nekonest
 sudo chown -R nekonest:nekonest /opt/nekonest
+sudo install -d -m 700 -o nekonest -g nekonest /opt/nekonest/data
 sudo chmod 600 /opt/nekonest/.env   # if used
 sudo systemctl daemon-reload
 sudo systemctl enable --now nekonest
@@ -157,6 +188,11 @@ server {
 - [ ] Full path: [e2e-smoke.md](./e2e-smoke.md)
 
 ## 6. Upgrade
+
+For Docker, pull the target immutable `vX.Y.Z` tag, record its manifest digest,
+back up the bind-mounted data directory, then recreate the service and run the
+acceptance checks below. Roll back by restoring the previous image digest; only
+restore data when an explicit migration requires it.
 
 1. Merge/push the approved change and build `nekonest-server` plus `pwa/dist`
    from that exact commit. Record local SHA-256 hashes.

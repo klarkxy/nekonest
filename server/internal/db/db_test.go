@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -208,6 +210,33 @@ func TestSQLitePragmasApplied(t *testing.T) {
 	}
 	if journalMode != "wal" {
 		t.Fatalf("journal_mode=%q, want wal", journalMode)
+	}
+}
+
+func TestSQLiteDatabaseAndSidecarsArePrivateOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses ACLs rather than POSIX permission bits")
+	}
+	path := filepath.Join(t.TempDir(), "private.db")
+	if err := os.WriteFile(path, nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	database, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, artifact := range []string{path, path + "-wal", path + "-shm"} {
+		info, err := os.Stat(artifact)
+		if err != nil {
+			t.Fatalf("stat %s: %v", filepath.Base(artifact), err)
+		}
+		if got := info.Mode().Perm(); got != privateDatabaseMode {
+			t.Fatalf("%s mode=%#o want=%#o", filepath.Base(artifact), got, privateDatabaseMode)
+		}
 	}
 }
 

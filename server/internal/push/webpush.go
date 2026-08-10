@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+	"github.com/nekonest/server/internal/opslog"
 )
 
 // Subscription is the browser push endpoint + keys.
@@ -201,11 +201,11 @@ func Send(
 	valid := make([]Subscription, 0, len(subs))
 	for _, s := range subs {
 		if err := validatePushURL(s.Endpoint); err != nil {
-			log.Printf("[push] reject endpoint: %v", err)
+			opslog.Warn("server.push", "subscription_endpoint_rejected", "push subscription endpoint rejected")
 			continue
 		}
 		if err := ValidateKeys(s.P256DH, s.Auth); err != nil {
-			log.Printf("[push] reject subscription keys: %v", err)
+			opslog.Warn("server.push", "subscription_keys_rejected", "push subscription keys rejected")
 			continue
 		}
 		valid = append(valid, s)
@@ -214,7 +214,7 @@ func Send(
 		return false
 	}
 	if !Enabled() {
-		log.Printf("[push] skip send (set NEKONEST_VAPID_*): %s — %s (%d subs)", title, body, len(valid))
+		opslog.Info("server.push", "delivery_disabled", "push delivery skipped because VAPID is not configured", "subscription_count", len(valid))
 		return false
 	}
 	payload, _ := marshalNotification(title, body, openURL, deviceID, sessionID)
@@ -225,7 +225,7 @@ func Send(
 		onGone:        onGone,
 	}
 	if !enqueueNotification(pushQueue, job) {
-		log.Printf("[push] queue full; dropping notification device=%s session=%s", deviceID, sessionID)
+		opslog.Warn("server.push", "queue_full", "push notification dropped because queue is full", "subscription_count", len(valid))
 		return false
 	}
 	return true
@@ -289,7 +289,7 @@ func deliverNotification(job notificationJob) {
 			HTTPClient:      httpClient,
 		})
 		if err != nil {
-			log.Printf("[push] send error: %v", err)
+			opslog.Error("server.push", "delivery_failed", "push delivery failed", err)
 			continue
 		}
 		if resp == nil {
@@ -299,7 +299,7 @@ func deliverNotification(job notificationJob) {
 		_ = resp.Body.Close()
 		handleDeliveryStatus(job, s.Endpoint, status)
 		if status >= 400 {
-			log.Printf("[push] HTTP %d", status)
+			opslog.Warn("server.push", "delivery_http_error", "push endpoint returned an error status", "status", status)
 		}
 	}
 }

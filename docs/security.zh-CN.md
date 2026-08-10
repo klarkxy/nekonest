@@ -138,13 +138,15 @@ NekoNest 如何信任各组件、哪些密钥保护哪些接口，以及运维�
 - [ ] 设置长且互不相同的 `NEKONEST_PHONE_SECRET` 与 `NEKONEST_BOOTSTRAP_TOKEN`
 - [ ] `NEKONEST_ALLOWED_ORIGINS` 设为公网 HTTPS 来源
 - [ ] 仅在覆盖 XFF 的反代后启用 `NEKONEST_TRUST_PROXY=1`
-- [ ] systemd（或等价）用专用用户；`data/` 非 world-readable
+- [ ] systemd（或等价）使用专用用户；Linux `data/` 为 `0700`，DB/WAL/SHM 文件为 `0600`
+- [ ] Docker 使用非 root 镜像用户、只读根文件系统、移除 capabilities，并挂载预先创建且由 uid/gid `10001` 持有的 `0700` `/data`
 - [ ] 密钥放在权限受限的 `EnvironmentFile`，勿写进 world-readable unit
 - [ ] 防火墙仅 80/443 公网；应用端口（如 8080）仅本机
 - [ ] `data/` 备份加密且访问受控
 - [ ] Daemon `config.json` ACL 限本机用户
 - [ ] 启用 Web Push 时离线生成 VAPID
 - [ ] 公网主机无调试/开放注册模式
+- [ ] 共享运维日志只含稳定标识匿名值/状态，不含原始标识、凭据、提示词/响应正文、审批/输入详情、附件路径、推送正文或原始 CLI stderr
 
 ## NekoNest 不声称的能力
 

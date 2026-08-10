@@ -25,14 +25,14 @@ test.describe('390px primary visual matrix', () => {
   test('setup fresh', async ({ page, request }) => {
     await openScenario(page, request, 'setup-fresh', '/setup', { authenticated: false })
     await expect(page.getByRole('heading', { name: '猫娘窝' })).toBeVisible()
-    await expect(page.getByRole('button', { name: '进入猫窝' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '进入猫娘乐园' })).toBeDisabled()
     await capture(page, 'setup-fresh.png')
   })
 
   test('setup whitespace stays invalid', async ({ page, request }) => {
     await openScenario(page, request, 'setup-whitespace', '/setup', { authenticated: false })
     await page.locator('#phone-secret').fill('   ')
-    await expect(page.getByRole('button', { name: '进入猫窝' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '进入猫娘乐园' })).toBeDisabled()
     await capture(page, 'setup-whitespace-invalid.png')
   })
 
@@ -83,7 +83,7 @@ test.describe('390px primary visual matrix', () => {
 
   test('devices authentication error', async ({ page, request }) => {
     await openScenario(page, request, 'devices-auth-error', '/', { bindings: false })
-    await expect(page.getByRole('alert')).toContainText('进不了猫窝')
+    await expect(page.getByRole('alert')).toContainText('进不了猫娘乐园')
     await capture(page, 'devices-auth-error.png')
   })
 
