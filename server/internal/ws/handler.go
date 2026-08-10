@@ -804,6 +804,9 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID, protocolVersion s
 			}
 			if newID == deviceID {
 				s.writeSubscribeAck(conn, deviceID, subscriptionID, pwaVersion, protocolVersion)
+				if subscribeRequestsFreshSessionCatalog(msg.Payload) {
+					s.requestFreshSessionCatalog(deviceID)
+				}
 				continue
 			}
 			if !allowDeviceSwitch(&switches, time.Now()) {
@@ -818,6 +821,9 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID, protocolVersion s
 			deviceID = newID
 			s.writeSubscribeAck(conn, newID, subscriptionID, pwaVersion, protocolVersion)
 			s.pushPhoneSnapshot(conn, newID)
+			if subscribeRequestsFreshSessionCatalog(msg.Payload) {
+				s.requestFreshSessionCatalog(newID)
+			}
 			continue
 		}
 

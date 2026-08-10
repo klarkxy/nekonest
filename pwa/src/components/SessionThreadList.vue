@@ -569,7 +569,9 @@ function onAvatarError(event: Event) {
 
 .project-group {
   margin-bottom: 8px;
-  overflow: hidden;
+  /* The project-level New menu opens below the header, including when the
+     project body is collapsed, so the card cannot clip that popup. */
+  overflow: visible;
   border: 1px solid var(--neko-line);
   border-radius: 14px;
   background: var(--neko-surface-solid);

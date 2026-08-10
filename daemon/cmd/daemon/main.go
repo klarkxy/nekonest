@@ -2463,7 +2463,7 @@ func validateInboundRoutingFrame(msg map[string]interface{}) error {
 	}
 	msgType, _ := msg["type"].(string)
 	switch msgType {
-	case "pair_ready", "prompt_status_query", "prompt_committed", "heartbeat",
+	case "refresh_sessions", "pair_ready", "prompt_status_query", "prompt_committed", "heartbeat",
 		"key_package", "phone_revoked", "attention_event", "error":
 		return nil
 	default:

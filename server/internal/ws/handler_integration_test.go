@@ -102,14 +102,18 @@ func boolPayload(payload map[string]any, key string) bool {
 }
 
 func connectDaemon(t *testing.T, httpServer *httptest.Server, token string) *websocket.Conn {
+	return connectDaemonForDevice(t, httpServer, token, "dev1")
+}
+
+func connectDaemonForDevice(t *testing.T, httpServer *httptest.Server, token, deviceID string) *websocket.Conn {
 	t.Helper()
 	conn, _, err := websocket.DefaultDialer.Dial(websocketURL(httpServer.URL, "/ws/daemon"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	if err := conn.WriteJSON(v1Envelope(protocol.MsgRegisterDevice, "dev1", map[string]any{
-		"device_id":      "dev1",
+	if err := conn.WriteJSON(v1Envelope(protocol.MsgRegisterDevice, deviceID, map[string]any{
+		"device_id":      deviceID,
 		"token":          token,
 		"daemon_version": buildinfo.Version,
 	})); err != nil {
@@ -213,6 +217,87 @@ func TestPhoneSubscriptionRequestsFreshDaemonSessionCatalog(t *testing.T) {
 	}
 	if refresh.Type != protocol.MsgRefreshSessions || refresh.DeviceID != "dev1" || refresh.Payload != nil || refresh.SealedPayload != nil {
 		t.Fatalf("fresh catalog request = %#v", refresh)
+	}
+}
+
+func TestPhoneResubscriptionRequestsFreshDaemonSessionCatalog(t *testing.T) {
+	oldLimiter := wsRateLimiter
+	wsRateLimiter = newRateLimiter(100, time.Minute)
+	t.Cleanup(func() { wsRateLimiter = oldLimiter })
+
+	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	daemon := connectDaemonReady(t, server, httpServer, token)
+	phone := connectPhone(t, httpServer, "phone-secret")
+
+	if err := phone.WriteJSON(v1Envelope(protocol.MsgSubscribe, "dev1", map[string]any{
+		"subscription_id":  "subscription-refresh-again",
+		"refresh_sessions": true,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var ack protocol.NekoMessage
+	if err := phone.ReadJSON(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Type != protocol.MsgSubscribeAck || stringPayload(ack.Payload, "subscription_id") != "subscription-refresh-again" {
+		t.Fatalf("resubscribe ACK: %#v", ack)
+	}
+
+	if err := daemon.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var refresh protocol.NekoMessage
+	if err := daemon.ReadJSON(&refresh); err != nil {
+		t.Fatal(err)
+	}
+	if refresh.Type != protocol.MsgRefreshSessions || refresh.DeviceID != "dev1" {
+		t.Fatalf("resubscribe fresh catalog request = %#v", refresh)
+	}
+}
+
+func TestPhoneDeviceSwitchRequestsFreshDaemonSessionCatalog(t *testing.T) {
+	oldLimiter := wsRateLimiter
+	wsRateLimiter = newRateLimiter(100, time.Minute)
+	t.Cleanup(func() { wsRateLimiter = oldLimiter })
+
+	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	_ = connectDaemonReady(t, server, httpServer, token)
+	token2, err := server.db.RegisterDevice("dev2", "PC 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon2 := connectDaemonForDevice(t, httpServer, token2, "dev2")
+	deadline := time.Now().Add(2 * time.Second)
+	for !server.connMgr.IsDaemonOnline("dev2") {
+		if time.Now().After(deadline) {
+			t.Fatal("second daemon did not finish its online transition")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	phone := connectPhone(t, httpServer, "phone-secret")
+
+	if err := phone.WriteJSON(v1Envelope(protocol.MsgSubscribe, "dev2", map[string]any{
+		"subscription_id":  "subscription-switch-refresh",
+		"refresh_sessions": true,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		var response protocol.NekoMessage
+		if err := phone.ReadJSON(&response); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := daemon2.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var refresh protocol.NekoMessage
+	if err := daemon2.ReadJSON(&refresh); err != nil {
+		t.Fatal(err)
+	}
+	if refresh.Type != protocol.MsgRefreshSessions || refresh.DeviceID != "dev2" {
+		t.Fatalf("device-switch fresh catalog request = %#v", refresh)
 	}
 }
 

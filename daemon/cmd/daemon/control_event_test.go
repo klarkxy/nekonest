@@ -43,4 +43,11 @@ func TestRefreshSessionsRemainsRoutingOnly(t *testing.T) {
 	if daemonInboundApplicationType("refresh_sessions") {
 		t.Fatal("refresh_sessions must remain a routing-only frame in sealed mode")
 	}
+	if err := validateInboundRoutingFrame(map[string]interface{}{
+		"protocol_version": "1.2",
+		"transport_mode":   daemonTransport,
+		"type":             "refresh_sessions",
+	}); err != nil {
+		t.Fatalf("refresh_sessions routing frame rejected: %v", err)
+	}
 }

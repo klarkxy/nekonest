@@ -123,6 +123,8 @@ test.describe('390px primary visual matrix', () => {
     await projectHeader.click()
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'false')
     await expect(codexStart).toBeHidden()
+    await startMenu.locator('summary').click()
+    await expect(startMenu.getByRole('button', { name: 'Kimi CLI' })).toBeVisible()
     await projectHeader.click()
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'true')
     await expect(codexStart).toBeVisible()
