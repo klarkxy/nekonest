@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-11
+
 ### Added
 
 - Add an official non-root Server + PWA container, private `0700`/`0600` data
@@ -22,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document direct installation from GitHub Release archives in both READMEs;
   Server packages include the matching PWA build.
 
+### Changed
+
+- Rename Chinese setup and device copy to “猫娘乐园” while retaining the
+  existing NekoNest / 猫娘窝 product brand.
+
 ### Fixed
 
 - Normalize both slash styles before attachment filename sanitization so Linux
@@ -29,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refresh a phone's cached session catalog from an online daemon's native stores,
   and avoid rendering empty agent groups by placing enabled missing agents in
   the project's New menu.
+- Make immutable GHCR tag inspection fail closed, prevent stable aliases from
+  rolling backward, and keep exact tagged-source builds reproducible.
 
 ## [0.2.4] - 2026-08-09
 
@@ -257,7 +266,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/klarkxy/nekonest/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/klarkxy/nekonest/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/klarkxy/nekonest/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/klarkxy/nekonest/compare/v0.2.1...v0.2.2
