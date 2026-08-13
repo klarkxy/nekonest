@@ -38,19 +38,23 @@ func TestLoadAdminSecretRejectsAmbiguousInputs(t *testing.T) {
 }
 
 func TestReadPrivateSecretFileRejectsUnsafeOrOversizedInput(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "admin-secret")
-	if err := os.WriteFile(path, []byte("secret"), 0o644); err != nil {
+	dir := t.TempDir()
+	unsafe := filepath.Join(dir, "unsafe")
+	if err := os.WriteFile(unsafe, []byte("secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.GOOS != "windows" {
-		if _, err := readPrivateSecretFile(path); err == nil || !strings.Contains(err.Error(), "group/world") {
+		if _, err := readPrivateSecretFile(unsafe); err == nil || !strings.Contains(err.Error(), "group/world") {
 			t.Fatalf("unsafe mode error = %v", err)
 		}
 	}
-	if err := os.WriteFile(path, make([]byte, maxAdminSecretFileBytes+1), 0o600); err != nil {
+	// WriteFile only applies the mode when creating a file. Reuse a new path so
+	// the oversized check is not preempted by leftover 0644 permissions.
+	oversized := filepath.Join(dir, "oversized")
+	if err := os.WriteFile(oversized, make([]byte, maxAdminSecretFileBytes+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readPrivateSecretFile(path); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := readPrivateSecretFile(oversized); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("oversized secret error = %v", err)
 	}
 }
