@@ -2,9 +2,34 @@
 
 import { runtimeTransportMode } from '@/api/transport'
 
-export const PROTOCOL_VERSION = '1.2' as const
+export const PROTOCOL_VERSION = '1.3' as const
 
 export type TransportMode = 'sealed' | 'open'
+
+export const SERVICE_ERROR_CODES = [
+  'device_credential_invalid',
+  'phone_credential_invalid',
+  'access_suspended',
+  'registration_disabled',
+  'device_capacity_exceeded',
+  'device_identity_conflict',
+  'device_already_connected',
+  'protocol_upgrade_required',
+  'registration_rate_limited',
+  'service_provisioning',
+  'route_unavailable',
+  'region_unavailable'
+] as const
+
+export type ServiceErrorCode = typeof SERVICE_ERROR_CODES[number]
+
+export interface ServiceErrorPayload {
+  error_code: ServiceErrorCode | string
+  message: string
+  retryable: boolean
+  retry_after_seconds?: number
+  action_url?: string
+}
 
 export type MessageType =
   | 'device_online'

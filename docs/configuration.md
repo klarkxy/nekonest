@@ -37,6 +37,7 @@ Do not put an unauthenticated server behind a LAN-facing proxy.
 | Variable | Required (public) | Description |
 |---|---|---|
 | `NEKONEST_ADMIN_SECRET` | **Yes** | Preferred admin bootstrap secret. It can authenticate directly and mint independent phone identities/tokens. |
+| `NEKONEST_ADMIN_SECRET_FILE` | Managed runtime | Path to a private regular file containing the admin secret. Cannot be combined with either inline admin-secret variable; on non-Windows hosts group/other permissions are rejected. |
 | `NEKONEST_PHONE_SECRET` | Compatibility | Deprecated one-release alias for `NEKONEST_ADMIN_SECRET`. |
 | `NEKONEST_BOOTSTRAP_TOKEN` | **Yes** | Protects `POST /api/devices/register` via `X-Neko-Bootstrap`. Must differ from the admin secret. |
 | `NEKONEST_TRANSPORT_MODE` | No | First start: optional `open` \| `sealed` selection (new DB defaults sealed). Later starts: an assertion that must match the immutable SQLite value. A legacy DB without metadata is persisted as open and cannot be switched by env. |
@@ -110,11 +111,19 @@ Binary: `nekonest-daemon.exe` (`daemon/cmd/daemon`).
 
 | Variable | When | Description |
 |---|---|---|
-| `NEKONEST_SERVER` | `-register` | VPS base URL, e.g. `https://nekonest.example.com` (http(s) is normalized to ws(s) for the dial) |
+| `NEKONEST_SERVER` | `-register` | Stable service base URL, e.g. `https://nekonest.example.com`; registration and `/ws/daemon` remain on this origin. |
 | `NEKONEST_BOOTSTRAP_TOKEN` | `-register` on public VPS | Same value as server `NEKONEST_BOOTSTRAP_TOKEN`; sent as `X-Neko-Bootstrap` |
 | `NEKONEST_TRANSPORT_MODE` | Registration / optional assertion | Registration reads the Server mode and persists it. If supplied, the value must match. Existing daemon configs without the field are legacy open. |
 | `NEKONEST_LOG_FORMAT` | Every run | `text` (default) or one JSON object per line (`json`). |
 | `NEKONEST_LOG_LEVEL` | Every run | `debug`, `info` (default), `warn`, or `error`. |
+
+Registration requests include `registration_proof`, an Ed25519 signature over
+a domain-separated, length-prefixed transcript containing the one-time
+bootstrap credential, OS, daemon public keys, identity fingerprint, and
+transport mode. Direct/self-hosted servers safely ignore this extra field.
+Managed Cloud requires a valid proof when a fresh pairing credential attempts
+to restore a previously revoked host record; first-time registration remains
+compatible with older daemons.
 
 Steady-state runs load credentials from the config file, not from these env vars.
 
@@ -128,7 +137,7 @@ Default path: `%USERPROFILE%\.nekonest\config.json`
 
 | Field | JSON key | Description |
 |---|---|---|
-| Server URL | `server_url` | `wss://…` or `ws://…` (http(s) accepted and normalized) |
+| Service URL | `server_url` | Stable service endpoint (`wss://…` / `ws://…`) used for the daemon WebSocket |
 | Device ID | `device_id` | Assigned at registration |
 | Token | `token` | Device auth token; **secret** |
 | Work dir | `work_dir` | Optional base directory hint for agent sessions |
@@ -145,6 +154,11 @@ Example shape (placeholders only):
   "transport_mode": "sealed"
 }
 ```
+
+The unreleased `control_plane_url`, `activation_poll_path`, and
+`relay_generation` configuration shape is no longer supported. Loading one
+fails with an explicit re-registration instruction. A normal v0.2.5
+self-hosted `server_url` configuration continues to load unchanged.
 
 ### Instance lock and journal
 
@@ -185,6 +199,27 @@ Deploy guide: [deploy-windows.md](./deploy-windows.md).
 | Build variable | Default | Description |
 |---|---|---|
 | `VITE_NEKONEST_TRANSPORT_MODE` | unset | Development/build assertion only. The PWA reads `/health.transport_mode` before WebSocket; a supplied override that differs displays an error and stops connection. |
+| `VITE_NEKONEST_MANAGED` | unset | Set to `true` only for an official managed build. Such a build requires deploy-time runtime config and refuses an open Relay. |
+
+At startup the PWA reads `/runtime-config.json` from its own static origin with
+`no-store`. The self-hosted file is `{}` and preserves same-origin behavior.
+A managed deployment supplies:
+
+```json
+{
+  "api_base": "https://connect.example.com",
+  "ws_base": "wss://connect.example.com",
+  "attachment_base": "https://connect.example.com",
+  "push_base": "https://connect.example.com",
+  "managed": true,
+  "handoff_exchange_path": "/api/pwa/handoff/exchange"
+}
+```
+
+`api_base`, `ws_base`, `attachment_base`, and `push_base` must be exact origins
+without credentials, paths, query strings, or fragments. The latter three are
+optional and fall back to `api_base`. The file is excluded from PWA precaching,
+so placement never requires a client-visible backend URL or a PWA rebuild.
 
 ---
 

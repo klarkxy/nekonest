@@ -1,6 +1,7 @@
-package ws
+package relaycore
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -12,34 +13,120 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nekonest/server/internal/buildinfo"
-	"github.com/nekonest/server/internal/db"
-	"github.com/nekonest/server/internal/opslog"
-	"github.com/nekonest/server/internal/protocol"
-	"github.com/nekonest/server/internal/push"
+	"github.com/klarkxy/nekonest/relaycore/internal/opslog"
+	"github.com/klarkxy/nekonest/relaycore/protocol"
+	db "github.com/klarkxy/nekonest/relaycore/store"
+	push "github.com/klarkxy/nekonest/relaycore/webpush"
 )
 
-// Server is the main NekoNest server.
-type Server struct {
-	db            *db.DB
-	connMgr       *ConnectionManager
-	phoneSecret   string // if non-empty, required for phone REST + phone WS
-	dataDir       string // SQLite + attachments root
-	transportMode protocol.TransportMode
+// DuplicateDaemonPolicy controls how a second live connection using the same
+// device identity is handled. Standalone deployments preserve their historic
+// replacement behavior; shared relay deployments use RejectNew so one identity
+// cannot occupy two concurrent machines.
+type DuplicateDaemonPolicy uint8
+
+const (
+	ReplaceExisting DuplicateDaemonPolicy = iota
+	RejectNew
+)
+
+// Config contains only single-nest relay concerns. Placement and admission
+// policy belong to the deployment shell.
+type Config struct {
+	Store           db.Store
+	Ports           Ports
+	PhoneSecret     string
+	DataDir         string
+	AppVersion      string
+	TransportMode   protocol.TransportMode
+	DuplicateDaemon DuplicateDaemonPolicy
+	AllowedOrigins  []string
 }
 
+// Engine owns the data plane for exactly one nest.
+type Engine struct {
+	db             db.Store
+	connMgr        *ConnectionManager
+	phoneSecret    string // if non-empty, required for phone REST + phone WS
+	dataDir        string // SQLite + attachments root
+	transportMode  protocol.TransportMode
+	appVersion     string
+	allowedOrigins map[string]struct{}
+	attachments    AttachmentStore
+	attachmentURLs AttachmentURLBuilder
+	pushSink       PushSink
+	audit          AuditSink
+	clock          Clock
+	synchronizer   PrincipalSynchronizer
+}
+
+func (s *Engine) auditEvent(component, name, message string, err error, attributes ...any) {
+	if s == nil || s.audit == nil {
+		return
+	}
+	s.audit.Emit(context.Background(), AuditEvent{Component: component, Name: name, Message: message, Err: err, Attributes: attributes})
+}
+
+// Server is kept as a source-compatible name for the standalone wrapper.
+type Server = Engine
+
 // New creates a new NekoNest server.
-func New(database *db.DB) *Server {
+func New(database db.Store) *Engine {
 	return NewWithSecret(database, "")
 }
 
 // NewWithSecret creates a server with an optional phone shared secret.
-func NewWithSecret(database *db.DB, phoneSecret string) *Server {
-	s := &Server{
-		db:            database,
-		connMgr:       NewConnectionManager(database),
-		phoneSecret:   phoneSecret,
-		transportMode: protocol.TransportSealed,
+func NewWithSecret(database db.Store, phoneSecret string) *Engine {
+	engine, err := NewEngine(Config{Store: database, PhoneSecret: phoneSecret})
+	if err != nil {
+		panic(err)
+	}
+	return engine
+}
+
+// NewEngine constructs one isolated relay engine.
+func NewEngine(config Config) (*Engine, error) {
+	store := config.Store
+	if store == nil {
+		p := config.Ports
+		if p.PrincipalAuthenticator == nil || p.DeviceStore == nil || p.PhoneGrantStore == nil || p.PromptJournal == nil || p.MessageStore == nil || p.KeyPackageStore == nil {
+			return nil, errors.New("relaycore: durable ports are required")
+		}
+		store = composedStore{p.PrincipalAuthenticator, p.DeviceStore, p.PhoneGrantStore, p.PromptJournal, p.MessageStore, p.KeyPackageStore}
+	}
+	clock := config.Ports.Clock
+	if clock == nil {
+		clock = realClock{}
+	}
+	audit := config.Ports.AuditSink
+	if audit == nil {
+		audit = nopAudit{}
+	}
+	mode := config.TransportMode
+	if mode == "" {
+		mode = protocol.TransportSealed
+	}
+	parsed, err := protocol.ParseTransportMode(string(mode))
+	if err != nil {
+		return nil, err
+	}
+	if config.DuplicateDaemon != ReplaceExisting && config.DuplicateDaemon != RejectNew {
+		return nil, errors.New("relaycore: invalid duplicate daemon policy")
+	}
+	s := &Engine{
+		db:             store,
+		connMgr:        NewConnectionManagerWithPolicy(store, config.DuplicateDaemon),
+		phoneSecret:    config.PhoneSecret,
+		dataDir:        config.DataDir,
+		transportMode:  parsed,
+		appVersion:     strings.TrimSpace(config.AppVersion),
+		allowedOrigins: normalizeAllowedOrigins(config.AllowedOrigins),
+		attachments:    config.Ports.AttachmentStore,
+		attachmentURLs: config.Ports.AttachmentURLBuilder,
+		pushSink:       config.Ports.PushSink,
+		audit:          audit,
+		clock:          clock,
+		synchronizer:   config.Ports.PrincipalSynchronizer,
 	}
 
 	// Set up device online/offline callbacks. Replacements with a different
@@ -62,7 +149,44 @@ func NewWithSecret(database *db.DB, phoneSecret string) *Server {
 		s.connMgr.BroadcastToPhones(deviceID, msg)
 	})
 
-	return s
+	return s, nil
+}
+
+// AppVersion returns the deployment shell's release identity.
+func (s *Engine) AppVersion() string {
+	if s == nil || s.appVersion == "" {
+		return "dev"
+	}
+	return s.appVersion
+}
+
+// SetAppVersion supplies the deployment shell release identity.
+func (s *Engine) SetAppVersion(version string) { s.appVersion = strings.TrimSpace(version) }
+
+// Connections exposes the live connection manager. Tests and deployment
+// shells use it to observe daemon/phone membership without reaching into
+// unexported fields.
+func (s *Engine) Connections() *ConnectionManager {
+	if s == nil {
+		return nil
+	}
+	return s.connMgr
+}
+
+// Handler returns a standalone-compatible handler with bootstrap routes.
+func (s *Engine) Handler() http.Handler {
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	return s.CORSMiddleware(mux)
+}
+
+// Close disconnects all data-plane principals. The Store lifecycle remains
+// owned by the deployment shell so it can sequence database shutdown safely.
+func (s *Engine) Close() error {
+	if s != nil && s.connMgr != nil {
+		s.connMgr.Close()
+	}
+	return nil
 }
 
 // SetDataDir sets the root directory for attachments (and related files).
@@ -109,11 +233,18 @@ func (s *Server) writeHandshakeError(conn interface {
 	Close() error
 }, result protocol.HandshakeResult) {
 	payload := protocol.HandshakeErrorPayload(result)
+	// Protocol 1.3 exposes a deployment-neutral action code while retaining the
+	// old negotiation detail for diagnostics.
+	if result.ErrorCode == protocol.ErrCodeVersionMismatch {
+		payload["legacy_error_code"] = result.ErrorCode
+		payload["error_code"] = protocol.ServiceErrorProtocolUpgradeRequired
+	}
+	payload["retryable"] = false
 	payload["transport_mode"] = string(s.TransportMode())
-	payload["server_version"] = buildinfo.Version
+	payload["server_version"] = s.AppVersion()
 	_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 		Type:      protocol.MsgError,
-		Timestamp: time.Now().Unix(),
+		Timestamp: s.clock.Now().Unix(),
 		Payload:   payload,
 	}))
 	_ = conn.Close()
@@ -137,16 +268,23 @@ func (s *Server) negotiateFirstFrame(msg *protocol.NekoMessage) protocol.Handsha
 
 // RegisterRoutes sets up HTTP routes.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+	s.RegisterDataPlaneRoutes(mux)
+	mux.HandleFunc("/api/devices/register", s.handleRegisterDevice)
+	mux.HandleFunc("/api/phones/bootstrap", s.handlePhoneBootstrap)
+	mux.HandleFunc("/health", s.handleHealth)
+}
+
+// RegisterDataPlaneRoutes installs routes safe for a deployment shell that
+// performs registration and first-phone handoff itself.
+func (s *Server) RegisterDataPlaneRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/daemon", s.HandleDaemonWS)
 	mux.HandleFunc("/ws/phone", s.HandlePhoneWS)
 
 	// Device APIs
 	mux.HandleFunc("/api/devices", s.handleListDevices)
-	mux.HandleFunc("/api/devices/register", s.handleRegisterDevice)
 	mux.HandleFunc("/api/devices/sessions", s.handleDeviceSessions)
 
 	// Phone identity APIs (v1)
-	mux.HandleFunc("/api/phones/bootstrap", s.handlePhoneBootstrap)
 	mux.HandleFunc("/api/phones", s.handleListPhones)
 	mux.HandleFunc("/api/phones/revoke", s.handleRevokePhone)
 
@@ -169,16 +307,120 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/keys", s.handleKeyPackages)
 	mux.HandleFunc("/api/keys/upload", s.handleUploadKeyPackage)
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store, max-age=0")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":           "nyan~",
-			"server_version":   buildinfo.Version,
-			"protocol_version": protocol.CurrentProtocolVersion,
-			"transport_mode":   string(s.TransportMode()),
-		})
+}
+
+func (s *Engine) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":           "nyan~",
+		"server_version":   s.AppVersion(),
+		"protocol_version": protocol.CurrentProtocolVersion,
+		"transport_mode":   string(s.TransportMode()),
 	})
+}
+
+// TrustedDevice is supplied only after a deployment shell has authorized a
+// registration. It deliberately has no deployment-policy fields.
+type TrustedDevice struct {
+	ID, Name, OS, Ed25519Public, X25519Public, IdentityFingerprint string
+}
+
+func (s *Engine) RegisterTrustedDevice(device TrustedDevice) (string, error) {
+	token, err := s.db.RegisterDevice(device.ID, device.Name, device.OS)
+	if err != nil {
+		return "", err
+	}
+	if device.Ed25519Public != "" || device.X25519Public != "" {
+		if err := s.db.SetDevicePublicKeys(device.ID, device.Ed25519Public, device.X25519Public, device.IdentityFingerprint); err != nil {
+			return "", err
+		}
+	}
+	return token, nil
+}
+
+type TrustedPhone struct {
+	Name, Ed25519Public, X25519Public string
+}
+
+func (s *Engine) CreateTrustedPhone(phone TrustedPhone) (string, string, error) {
+	id, token, err := s.db.CreatePhoneIdentity(phone.Name)
+	if err != nil {
+		return "", "", err
+	}
+	if phone.Ed25519Public != "" || phone.X25519Public != "" {
+		if err := s.db.SetPhonePublicKeys(id, phone.Ed25519Public, phone.X25519Public); err != nil {
+			return "", "", err
+		}
+	}
+	return id, token, nil
+}
+
+type ApprovedDevice struct {
+	ID, Name, OS string
+	Credential   Credential
+}
+type ApprovedPhone struct {
+	ID, Name   string
+	Credential Credential
+}
+
+func (s *Engine) SyncApprovedDevice(device ApprovedDevice) error {
+	if s.synchronizer == nil {
+		return errors.New("relaycore: principal synchronization is not configured")
+	}
+	if err := validateCredential(device.Credential); err != nil {
+		return err
+	}
+	return s.synchronizer.SyncDevice(device.ID, device.Name, device.OS, device.Credential)
+}
+
+func (s *Engine) RevokeApprovedDevice(id string) error {
+	if s.synchronizer == nil {
+		return errors.New("relaycore: principal synchronization is not configured")
+	}
+	err := s.synchronizer.RevokeDevice(id)
+	if dc := s.connMgr.currentDaemon(id); dc != nil && dc.Conn != nil {
+		_ = dc.Conn.Close()
+	}
+	return err
+}
+
+func (s *Engine) SyncApprovedPhone(phone ApprovedPhone) error {
+	if s.synchronizer == nil {
+		return errors.New("relaycore: principal synchronization is not configured")
+	}
+	if err := validateCredential(phone.Credential); err != nil {
+		return err
+	}
+	return s.synchronizer.SyncPhone(phone.ID, phone.Name, phone.Credential)
+}
+
+func validateCredential(credential Credential) error {
+	if credential.Value == "" {
+		return errors.New("relaycore: credential is required")
+	}
+	if credential.Kind == CredentialRaw {
+		return nil
+	}
+	if credential.Kind != CredentialSHA256 || len(credential.Value) != 64 {
+		return errors.New("relaycore: invalid credential kind or digest")
+	}
+	for _, r := range credential.Value {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return errors.New("relaycore: invalid sha256 credential digest")
+		}
+	}
+	return nil
+}
+
+func (s *Engine) RevokeApprovedPhone(id string) error {
+	if s.synchronizer == nil {
+		return errors.New("relaycore: principal synchronization is not configured")
+	}
+	err := s.synchronizer.RevokePhone(id)
+	s.connMgr.ClosePhonesByPrincipal(id)
+	return err
 }
 
 func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +476,7 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"devices":        devices,
-		"server_version": buildinfo.Version,
+		"server_version": s.AppVersion(),
 	})
 }
 
@@ -383,13 +625,20 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown device", http.StatusNotFound)
 		return
 	}
-	if err := push.ValidateEndpoint(req.Endpoint); err != nil {
+	if s.pushSink != nil {
+		if err := s.pushSink.Validate(req.Endpoint, req.P256DH, req.Auth); err != nil {
+			http.Error(w, "invalid push subscription", http.StatusBadRequest)
+			return
+		}
+	} else if err := push.ValidateEndpoint(req.Endpoint); err != nil {
 		http.Error(w, "invalid push endpoint", http.StatusBadRequest)
 		return
 	}
-	if err := push.ValidateKeys(req.P256DH, req.Auth); err != nil {
-		http.Error(w, "invalid push subscription keys", http.StatusBadRequest)
-		return
+	if s.pushSink == nil {
+		if err := push.ValidateKeys(req.P256DH, req.Auth); err != nil {
+			http.Error(w, "invalid push subscription keys", http.StatusBadRequest)
+			return
+		}
 	}
 
 	sub := &db.PushSubscription{
@@ -426,6 +675,10 @@ func (s *Server) handleVAPIDPublicKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if s.pushSink != nil {
+		writeJSON(w, map[string]any{"enabled": s.pushSink.Enabled(), "public_key": s.pushSink.PublicKey()})
+		return
+	}
 	if !push.Enabled() {
 		writeJSON(w, map[string]any{"enabled": false, "public_key": ""})
 		return
@@ -443,7 +696,7 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	// so /api/devices/register is not open to the internet.
 	bootstrap := strings.TrimSpace(os.Getenv("NEKONEST_BOOTSTRAP_TOKEN"))
 	if s.phoneSecret != "" && bootstrap == "" {
-		http.Error(w, "server misconfigured: set NEKONEST_BOOTSTRAP_TOKEN", http.StatusServiceUnavailable)
+		WriteAPIError(w, stableError(protocol.ServiceErrorRegistrationDisabled, "device registration is disabled", false, http.StatusServiceUnavailable))
 		return
 	}
 	if bootstrap != "" {
@@ -452,7 +705,7 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 			got = r.URL.Query().Get("bootstrap")
 		}
 		if got != bootstrap {
-			http.Error(w, "bootstrap token required", http.StatusUnauthorized)
+			WriteAPIError(w, stableError(protocol.ServiceErrorDeviceCredentialInvalid, "registration credential invalid", false, http.StatusUnauthorized))
 			return
 		}
 	}
@@ -496,12 +749,7 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	opslog.Info("server.registration", "device_registered", "device registered", "os", safeDeviceOSForLog(req.OS))
 
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]string{
-		"device_id":      req.DeviceID,
-		"token":          token,
-		"name":           req.Name,
-		"transport_mode": string(s.TransportMode()),
-	})
+	writeJSON(w, protocol.DeviceRegistrationResponse{DeviceID: req.DeviceID, Token: token, Name: req.Name, TransportMode: s.TransportMode(), ConnectionState: protocol.ConnectionReady})
 }
 
 func safeDeviceOSForLog(value string) string {
@@ -538,7 +786,7 @@ func (s *Server) handleGeneratePairCode(w http.ResponseWriter, r *http.Request) 
 	}
 	// Pair codes mint device binding capability — require the device's own token.
 	if req.Token == "" || !s.db.ValidateDeviceToken(req.DeviceID, req.Token) {
-		http.Error(w, "invalid device token", http.StatusUnauthorized)
+		WriteAPIError(w, stableError(protocol.ServiceErrorDeviceCredentialInvalid, "invalid device token", false, http.StatusUnauthorized))
 		return
 	}
 	if req.Ed25519Public != "" && req.X25519Public != "" {
@@ -550,7 +798,7 @@ func (s *Server) handleGeneratePairCode(w http.ResponseWriter, r *http.Request) 
 	rand.Read(b)
 	code := hex.EncodeToString(b)[:6]
 
-	expiresAt := time.Now().Add(5 * time.Minute)
+	expiresAt := s.clock.Now().Add(5 * time.Minute)
 	if err := s.db.CreatePairCode(code, req.DeviceID, expiresAt); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -599,7 +847,7 @@ func (s *Server) handleUploadDeviceKeys(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if req.DeviceID == "" || req.Token == "" || !s.db.ValidateDeviceToken(req.DeviceID, req.Token) {
-		http.Error(w, "invalid device token", http.StatusUnauthorized)
+		WriteAPIError(w, stableError(protocol.ServiceErrorDeviceCredentialInvalid, "invalid device token", false, http.StatusUnauthorized))
 		return
 	}
 	if req.Ed25519Public == "" || req.X25519Public == "" || req.IdentityFingerprint == "" {
@@ -626,7 +874,7 @@ func (s *Server) handleListDeviceGrants(w http.ResponseWriter, r *http.Request) 
 		token = phoneSecretFromRequest(r) // Bearer device token also ok
 	}
 	if deviceID == "" || token == "" || !s.db.ValidateDeviceToken(deviceID, token) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		WriteAPIError(w, stableError(protocol.ServiceErrorDeviceCredentialInvalid, "invalid device token", false, http.StatusUnauthorized))
 		return
 	}
 	grants, err := s.db.ListPhoneGrantsForDevice(deviceID)
@@ -714,7 +962,7 @@ func (s *Server) handleUploadKeyPackage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if req.DeviceID == "" || req.Token == "" || !s.db.ValidateDeviceToken(req.DeviceID, req.Token) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		WriteAPIError(w, stableError(protocol.ServiceErrorDeviceCredentialInvalid, "invalid device token", false, http.StatusUnauthorized))
 		return
 	}
 	if req.PhoneID == "" || req.Scope == "" || req.WrappedKey == "" || req.Nonce == "" {
@@ -849,7 +1097,7 @@ func (s *Server) handlePhoneBootstrap(w http.ResponseWriter, r *http.Request) {
 	if s.phoneSecret != "" {
 		got := phoneSecretFromRequest(r)
 		if !secureEqual(got, s.phoneSecret) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			WriteAPIError(w, stableError(protocol.ServiceErrorPhoneCredentialInvalid, "phone credential invalid", false, http.StatusUnauthorized))
 			return
 		}
 	}
@@ -877,7 +1125,7 @@ func (s *Server) handleListPhones(w http.ResponseWriter, r *http.Request) {
 	}
 	// Admin-only listing.
 	if s.phoneSecret != "" && !secureEqual(phoneSecretFromRequest(r), s.phoneSecret) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		WriteAPIError(w, stableError(protocol.ServiceErrorPhoneCredentialInvalid, "phone credential invalid", false, http.StatusUnauthorized))
 		return
 	}
 	phones, err := s.db.ListPhones()
@@ -931,6 +1179,7 @@ func (s *Server) handleRevokePhone(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.connMgr.ClosePhonesByPrincipal(req.PhoneID)
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]string{"status": "revoked", "phone_id": req.PhoneID})
 }
@@ -950,7 +1199,7 @@ func (s *Server) requirePhoneAuthResult(w http.ResponseWriter, r *http.Request) 
 	}
 	cred := phoneSecretFromRequest(r)
 	if cred == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		WriteAPIError(w, stableError(protocol.ServiceErrorPhoneCredentialInvalid, "phone credential invalid", false, http.StatusUnauthorized))
 		return nil, false
 	}
 	// Admin nest secret (legacy full access / bootstrap).
@@ -960,7 +1209,7 @@ func (s *Server) requirePhoneAuthResult(w http.ResponseWriter, r *http.Request) 
 	// Independent phone token.
 	auth, err := s.db.ValidatePhoneToken(cred)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		WriteAPIError(w, stableError(protocol.ServiceErrorPhoneCredentialInvalid, "phone credential invalid", false, http.StatusUnauthorized))
 		return nil, false
 	}
 	return auth, true

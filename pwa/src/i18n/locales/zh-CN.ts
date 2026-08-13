@@ -1,7 +1,7 @@
 /** Default product locale — Simplified Chinese brand voice. */
 export default {
   brand: {
-    name: '猫娘窝',
+    name: '猫娘乐园',
     nameEn: 'NekoNest',
     duoAlt: 'NekoNest 的两位原创猫娘看板娘',
     duoCaption: '双猫值守中',
@@ -20,12 +20,13 @@ export default {
     dark: '深色'
   },
   title: {
-    brand: '猫娘窝',
-    devices: '猫娘窝',
+    brand: '猫娘乐园',
+    devices: '猫娘乐园',
     deviceDetail: '工作目录',
     session: '线团',
     pair: '配对电脑',
     setup: '手机钥匙',
+    handoffError: 'Cloud 链接',
     sep: ' · '
   },
   common: {
@@ -48,12 +49,19 @@ export default {
     imageAttachment: '图片附件'
   },
   setup: {
-    title: '猫娘窝',
+    title: '猫娘乐园',
     desc: '继续电脑上的 AI 会话。输入手机钥匙。',
     secretLabel: '手机钥匙',
     placeholder: '粘贴手机钥匙…',
     enter: '进入猫娘乐园',
     hint: '手机钥匙由部署时设置。'
+  },
+  handoff: {
+    eyebrow: 'Cloud 交接',
+    title: '这个链接无法使用',
+    fallback: '请返回 NekoNest Cloud，重新获取一次性链接。',
+    returnCloud: '返回 Cloud',
+    openSetup: '打开自部署设置'
   },
   deviceList: {
     eyebrow: '猫娘值守中',
@@ -64,6 +72,7 @@ export default {
     authBody: '请重新设置手机钥匙，并确认与部署时记下的那串一致。',
     transportTitle: '传输模式不匹配。',
     confirmOpenTransport: '确认使用开放中继',
+    serviceAction: '打开服务账户页面',
     sectionKicker: '你的猫娘乐园',
     sectionTitle: '选择一台电脑',
     deviceCount: '{n} 台',

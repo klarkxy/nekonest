@@ -24,7 +24,7 @@ GOOS=linux GOARCH=arm64 go build -o nekonest-daemon-linux-arm64 ./cmd/daemon
 
 ```bash
 export NEKONEST_SERVER=https://your-nest.example
-export NEKONEST_BOOTSTRAP_TOKEN=...   # 窝已设 admin secret 时需要
+export NEKONEST_BOOTSTRAP_TOKEN=...   # 乐园已设 admin secret 时需要
 nekonest-daemon -register -name "Home Linux"
 nekonest-daemon -pair gen             # 打印配对码 + QR JSON + 指纹
 ```
@@ -37,7 +37,7 @@ nekonest-daemon -pair gen             # 打印配对码 + QR JSON + 指纹
 nekonest-daemon -doctor
 ```
 
-检查 OS、传输模式、配置、E2E 身份文件、各 agent CLI，以及窝 `/health`。
+检查 OS、传输模式、配置、E2E 身份文件、各 agent CLI，以及乐园 `/health`。
 
 ## systemd 用户单元
 

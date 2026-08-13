@@ -391,6 +391,40 @@
         }
       }
     },
+    "ServiceErrorCode": {
+      "type": "string",
+      "enum": [
+        "device_credential_invalid", "phone_credential_invalid", "access_suspended",
+        "registration_disabled", "device_capacity_exceeded", "device_identity_conflict",
+        "device_already_connected", "protocol_upgrade_required", "registration_rate_limited",
+        "service_provisioning", "route_unavailable", "region_unavailable"
+      ]
+    },
+    "ServiceErrorPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error_code", "message", "retryable"],
+      "properties": {
+        "error_code": { "$ref": "#/definitions/ServiceErrorCode" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "retry_after_seconds": { "type": "integer", "minimum": 0 },
+        "action_url": { "type": "string" }
+      }
+    },
+    "DeviceRegistrationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "token", "name", "transport_mode", "connection_state"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "token": { "type": "string" },
+        "name": { "type": "string" },
+        "transport_mode": { "$ref": "#/definitions/TransportMode" },
+        "connection_state": { "type": "string", "enum": ["ready", "provisioning"] },
+        "retry_after_seconds": { "type": "integer", "minimum": 0 }
+      }
+    },
     "ThreadStartResult": {
       "type": "object",
       "description": "Payload for thread_starting, thread_owned, thread_failed, and thread_indeterminate. thread_owned is legal only after both positive first-prompt acknowledgement and ownership in the selected agent's native store; otherwise the sender must fail closed as thread_indeterminate.",

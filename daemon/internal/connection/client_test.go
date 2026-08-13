@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,12 +116,221 @@ func TestConnectUsesConfiguredModeAndRejectsAuthModeMismatch(t *testing.T) {
 	}
 }
 
+func TestConnectParsesStructuredWebSocketErrorFailClosed(t *testing.T) {
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{
+			"type": "error",
+			"payload": map[string]any{
+				"error_code": "device_capacity_exceeded",
+				"message":    "capacity reached",
+				"retryable":  true,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(context.Background(), websocketTestURL(server.URL), "device", "token", "sealed")
+	err := client.Connect()
+	remote, ok := err.(*RemoteError)
+	if !ok || remote.Code != "device_capacity_exceeded" || remote.Retryable() {
+		t.Fatalf("error=%T %v", err, err)
+	}
+}
+
+func TestConnectFailsClosedForUnstructuredWebSocketError(t *testing.T) {
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"type": "error", "payload": map[string]any{"message": "denied"}})
+	}))
+	defer server.Close()
+
+	err := NewClient(context.Background(), websocketTestURL(server.URL), "device", "token", "sealed").Connect()
+	remote, ok := err.(*RemoteError)
+	if !ok || remote.Code != "unknown_remote_error" || remote.Retryable() {
+		t.Fatalf("error=%T %v", err, err)
+	}
+}
+
+func TestConnectIgnoresStaleGenerationTerminalHandshakeError(t *testing.T) {
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(arrived) })
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error_code":"device_already_connected","message":"still leased","retryable":false}`))
+	}))
+	defer bad.Close()
+
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(testAuthResponse("sealed"))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer good.Close()
+
+	client := NewClient(context.Background(), websocketTestURL(bad.URL), "device", "token", "sealed")
+	done := make(chan error, 1)
+	go func() { done <- client.Connect() }()
+	select {
+	case <-arrived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale endpoint was never dialed")
+	}
+	client.SetServerURL(websocketTestURL(good.URL))
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("stale terminal handshake error leaked: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Connect did not finish after endpoint change")
+	}
+	defer client.Close()
+}
+
+func TestConnectParsesPreUpgradeServiceError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ws/daemon" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error_code":"service_provisioning","message":"starting","retryable":true,"retry_after_seconds":17}`))
+	}))
+	defer server.Close()
+
+	err := NewClient(context.Background(), websocketTestURL(server.URL), "device", "token", "sealed").Connect()
+	remote, ok := err.(*RemoteError)
+	if !ok || remote.Code != "service_provisioning" || !remote.Retryable() || remote.RetryAfter != 17*time.Second || remote.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("error=%T %v", err, err)
+	}
+}
+
+func TestConnectUntilConnectedRetriesProvisioningBeyondNetworkLimit(t *testing.T) {
+	var calls atomic.Int32
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= maxReconnects+1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error_code":"service_provisioning","retryable":true}`))
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(testAuthResponse("sealed"))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(context.Background(), websocketTestURL(server.URL), "device", "token", "sealed")
+	client.retryWait = func(context.Context, time.Duration) bool { return true }
+	if err := client.ConnectUntilConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if got, want := calls.Load(), int32(maxReconnects+2); got != want {
+		t.Fatalf("calls=%d want %d", got, want)
+	}
+	client.mu.Lock()
+	networkRetries := client.reconnects
+	client.mu.Unlock()
+	if networkRetries != 0 {
+		t.Fatalf("service retries consumed generic retry budget: %d", networkRetries)
+	}
+}
+
+func TestConnectUntilConnectedHonorsServiceRetryAfter(t *testing.T) {
+	var calls atomic.Int32
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error_code":"route_unavailable","retryable":true,"retry_after_seconds":19}`))
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(testAuthResponse("sealed"))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	var waited time.Duration
+	client := NewClient(context.Background(), websocketTestURL(server.URL), "device", "token", "sealed")
+	client.retryWait = func(_ context.Context, delay time.Duration) bool {
+		waited = delay
+		return true
+	}
+	if err := client.ConnectUntilConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if waited != 19*time.Second {
+		t.Fatalf("retry delay=%s", waited)
+	}
+}
+
 func TestHeartbeatCarriesNegotiatedTransportEnvelope(t *testing.T) {
 	now := time.Unix(1234, 0)
 	client := NewClient(context.Background(), "ws://example.invalid", "device-a", "token", "open")
 
 	frame := client.heartbeatMessage(now)
-	if frame["protocol_version"] != "1.2" || frame["transport_mode"] != "open" {
+	if frame["protocol_version"] != "1.3" || frame["transport_mode"] != "open" {
 		t.Fatalf("heartbeat envelope = %#v", frame)
 	}
 	if frame["type"] != "heartbeat" || frame["device_id"] != "device-a" || frame["timestamp"] != int64(1234) {
@@ -161,6 +371,58 @@ func TestConnectUsesNegotiatedProtocolVersionForHeartbeat(t *testing.T) {
 	}
 	if got := client.heartbeatMessage(time.Unix(1, 0))["protocol_version"]; got != "1.1" {
 		t.Fatalf("heartbeat protocol = %#v", got)
+	}
+}
+
+func TestPauseStopsDialAndSendUntilVerifiedEndpointResumes(t *testing.T) {
+	var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	var auths atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		auths.Add(1)
+		_ = conn.WriteJSON(testAuthResponse("sealed"))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	url := websocketTestURL(server.URL)
+	client := NewClient(context.Background(), url, "device", "token", "sealed")
+	if err := client.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	var published atomic.Int32
+	client.PauseAndPublish(func() { published.Add(1) })
+	if published.Load() != 1 {
+		t.Fatal("pause did not publish runtime state")
+	}
+	if err := client.Connect(); !errors.Is(err, ErrEndpointPaused) {
+		t.Fatalf("paused Connect error = %v", err)
+	}
+	if err := client.Send(map[string]any{"type": "heartbeat"}); !errors.Is(err, ErrEndpointPaused) {
+		t.Fatalf("paused Send error = %v", err)
+	}
+	if auths.Load() != 1 {
+		t.Fatalf("paused client dialed again: auths=%d", auths.Load())
+	}
+
+	client.SetServerURLAndPublish(url, func() { published.Add(1) })
+	if err := client.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if auths.Load() != 2 || published.Load() != 2 {
+		t.Fatalf("resume auths=%d publishes=%d", auths.Load(), published.Load())
 	}
 }
 

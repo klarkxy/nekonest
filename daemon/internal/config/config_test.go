@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +89,22 @@ func TestLoadFromPreservesExplicitSealedTransportMode(t *testing.T) {
 	}
 	if _, err := NormalizeTransportMode("invalid"); err == nil {
 		t.Fatal("invalid transport mode accepted")
+	}
+}
+
+func TestLoadFromRejectsLegacyManagedActivationConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	for _, legacyKey := range []string{"control_plane_url", "activation_poll_path", "relay_generation", "relay_url"} {
+		raw := `{"server_url":"wss://connect.example","` + legacyKey + `":"legacy"}`
+		if legacyKey == "relay_generation" {
+			raw = `{"server_url":"wss://connect.example","relay_generation":3}`
+		}
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadFrom(path); err == nil || !strings.Contains(err.Error(), "re-register this device") {
+			t.Fatalf("legacy key %s error = %v", legacyKey, err)
+		}
 	}
 }
 

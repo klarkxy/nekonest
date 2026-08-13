@@ -15,10 +15,36 @@ JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致
 
 | 字段 | 规则 |
 |---|---|
-| `protocol_version` | `major.minor`（当前 **1.2**）。主版本不匹配则拒绝；次版本向后兼容。1.2 PWA 仅在确认能力生产者为 1.1 或更旧时兼容推定发送/中断；来源未知时失败关闭。 |
-| `transport_mode` | 全窝统一 `sealed` \| `open`。一窝一种持久化模式；**禁止** sealed→open 自动降级。新数据库默认 sealed；无元数据旧库一次性认定为 open。 |
+| `protocol_version` | `major.minor`（当前 **1.3**）。主版本不匹配则拒绝；次版本向后兼容。1.2+ PWA 仅在确认能力生产者为 1.1 或更旧时兼容推定发送/中断；来源未知时失败关闭。 |
+| `transport_mode` | 整个乐园统一为 `sealed` \| `open`。每个乐园只有一种持久化模式；**禁止** sealed→open 自动降级。新数据库默认 sealed；无元数据旧库一次性认定为 open。 |
 
 首帧（daemon 的 `register_device`、手机的 `subscribe`）**必须**带上述字段。之后每一帧都按已协商的主版本、传输模式和明确的「路由/应用正文」策略校验：sealed 模式的应用帧必须有 `sealed_payload`，open 模式拒绝它，混合正文始终拒绝。Server 在 `auth_response` / `subscribe_ack` 返回协商结果。稳定错误码：`version_mismatch`、`transport_mode_mismatch`、`invalid_envelope`。
+
+### 协议 1.3 服务错误与注册响应
+
+HTTP 失败与 WebSocket `error` 帧使用同一种公开结构：
+
+| 字段 | 必需 | 含义 |
+|---|---|---|
+| `error_code` | 是 | 稳定、机器可读的代码 |
+| `message` | 是 | 仅供人阅读的诊断，客户端不得解析文案决定行为 |
+| `retryable` | 是 | 是否允许在同一稳定服务端点重试 |
+| `retry_after_seconds` | 否 | 服务端指定的最小退避时间 |
+| `action_url` | 否 | 供用户操作的 HTTPS 页面；只展示，绝不是数据面重定向 |
+
+首批稳定代码为 `device_credential_invalid`、`phone_credential_invalid`、
+`access_suspended`、`registration_disabled`、`device_capacity_exceeded`、
+`device_identity_conflict`、`device_already_connected`、
+`protocol_upgrade_required`、`registration_rate_limited`、
+`service_provisioning`、`route_unavailable`、`region_unavailable`。未知代码
+失败关闭。客户端不能根据错误码判断是否 Cloud，也不能通过错误跳转到新的 Relay 来源。
+`device_already_connected` 允许在同一 `server_url` 重试：共享中继会拒绝第二
+条在线连接，Daemon 等待旧租约过期，而不是停止读循环。
+
+`POST /api/devices/register` 保留 `device_id`、`token`、`name`、
+`transport_mode`，增加 `connection_state: ready | provisioning` 与可选
+`retry_after_seconds`。Standalone 始终返回 `ready`。托管 Daemon 收到
+`provisioning` 后保存凭据，并在同一 `server_url` 重试 `/ws/daemon`；不轮询控制面。
 
 ### 应用发行版本
 
@@ -226,10 +252,10 @@ WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权�
 
 ## 线上明确非目标
 
-- 支持的产品合同中**没有**通用手机侧 `create_session`（或等价物）或窝侧幽灵线程。
+- 支持的产品合同中**没有**通用手机侧 `create_session`（或等价物）或乐园侧幽灵线程。
 - 唯一允许的手机新建路径是 agent 范围的 `start_thread`：先创建手机本地草稿；仅当所选 agent 的 starter 已安装/探测通过且宣告 `spawn=true` 时，才将首条提示词原生建线程。目录必须来自 daemon **当前原生发现项目目录并集**。
 - 生命周期为 `thread_starting → thread_owned | thread_failed | thread_indeterminate`；仅在首条提示词得到正向确认、且所选 agent 原生 store 明确认领后才发送 `thread_owned`，否则报 `thread_indeterminate`。
-- 不得发明永久窝侧会话行。
+- 不得发明永久乐园侧会话行。
 
 ## REST 配套 API
 

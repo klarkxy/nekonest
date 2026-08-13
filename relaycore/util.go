@@ -1,4 +1,4 @@
-package ws
+package relaycore
 
 import (
 	"encoding/json"

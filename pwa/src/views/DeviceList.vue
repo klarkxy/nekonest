@@ -89,11 +89,13 @@
     <div v-if="deviceStore.authError" class="auth-banner" role="alert">
       <strong>{{ t('deviceList.authTitle') }}</strong>
       <span>{{ t('deviceList.authBody') }}</span>
+      <a v-if="deviceStore.serviceActionURL" :href="deviceStore.serviceActionURL">{{ t('deviceList.serviceAction') }}</a>
     </div>
 
     <div v-if="deviceStore.transportError" class="auth-banner" role="alert">
       <strong>{{ t('deviceList.transportTitle') }}</strong>
       <span>{{ deviceStore.transportError }}</span>
+      <a v-if="deviceStore.serviceActionURL" :href="deviceStore.serviceActionURL">{{ t('deviceList.serviceAction') }}</a>
       <button
         v-if="deviceStore.needsOpenTransportConsent"
         type="button"

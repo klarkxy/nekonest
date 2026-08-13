@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getPhoneSecret } from '../api/http'
+import { getPhoneSecret, getPhoneToken } from '../api/http'
 import { appRoutes } from './routes'
 import { routePageTitle, setDocumentTitle } from './title'
 
@@ -13,7 +13,7 @@ router.beforeEach((to) => {
   if (to.meta.public) return true
   // Soft gate: if never set secret, go to setup once.
   // Empty secret is allowed only when server also has no secret (dev).
-  if (!getPhoneSecret() && to.name !== 'setup') {
+  if (!getPhoneSecret() && !getPhoneToken() && to.name !== 'setup') {
     // Allow through if user already dismissed — we use a flag
     const skipped = localStorage.getItem('nekonest_setup_done')
     if (!skipped) {

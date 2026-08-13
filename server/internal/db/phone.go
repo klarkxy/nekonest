@@ -7,31 +7,20 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	corestore "github.com/klarkxy/nekonest/relaycore/store"
 )
 
 // PhoneIdentity is an independent phone client identity.
-type PhoneIdentity struct {
-	ID            string
-	Name          string
-	Ed25519Public string
-	X25519Public  string
-	CreatedAt     int64
-	LastSeen      int64
-	RevokedAt     int64 // 0 if active
-}
+type PhoneIdentity = corestore.PhoneIdentity
 
 // PhoneAuth is the result of validating a phone bearer token.
-type PhoneAuth struct {
-	PhoneID string
-	Name    string
-	// AdminBypass is true when the nest admin secret was used (legacy/full access).
-	AdminBypass bool
-}
+type PhoneAuth = corestore.PhoneAuth
 
 var (
-	ErrPhoneNotFound     = errors.New("phone not found")
-	ErrPhoneRevoked      = errors.New("phone revoked")
-	ErrPhoneTokenInvalid = errors.New("invalid phone token")
+	ErrPhoneNotFound     = corestore.ErrPhoneNotFound
+	ErrPhoneRevoked      = corestore.ErrPhoneRevoked
+	ErrPhoneTokenInvalid = corestore.ErrPhoneTokenInvalid
 	ErrGrantNotFound     = errors.New("device grant not found")
 	ErrGrantRevoked      = errors.New("device grant revoked")
 )
@@ -281,13 +270,7 @@ func (db *DB) UpsertKeyPackage(phoneID, deviceID, scope, sessionID string, epoch
 }
 
 // PhoneGrant describes an active phone→device grant with optional E2E pubs.
-type PhoneGrant struct {
-	PhoneID       string
-	DeviceID      string
-	Ed25519Public string
-	X25519Public  string
-	PairedAt      int64
-}
+type PhoneGrant = corestore.PhoneGrant
 
 // ListPhoneGrantsForDevice returns active grants for a host (daemon key wrap).
 func (db *DB) ListPhoneGrantsForDevice(deviceID string) ([]*PhoneGrant, error) {

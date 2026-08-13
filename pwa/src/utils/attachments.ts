@@ -1,4 +1,5 @@
-import { getPhoneSecret } from '@/api/http'
+import { authHeaders } from '@/api/http'
+import { attachmentURL } from '@/config/runtimeEndpoint'
 import { tGlobal } from '@/i18n'
 
 export type AttachmentRef = {
@@ -181,15 +182,11 @@ export async function uploadAttachment(
   if (opts.deviceId) fd.append('device_id', opts.deviceId)
   if (opts.sessionId) fd.append('session_id', opts.sessionId)
 
-  const headers: Record<string, string> = {}
-  const secret = getPhoneSecret()
-  if (secret) {
-    headers.Authorization = `Bearer ${secret}`
-    headers['X-Neko-Secret'] = secret
-  }
+  const headers = authHeaders()
+  headers.delete('Content-Type')
   // Do NOT set Content-Type — browser sets multipart boundary
 
-  const res = await fetch('/api/attachments', {
+  const res = await fetch(attachmentURL('/api/attachments'), {
     method: 'POST',
     headers,
     body: fd,
@@ -202,7 +199,7 @@ export async function uploadAttachment(
   const data = await res.json()
   return {
     id: data.id,
-    url: data.url,
+    url: attachmentURL(data.url),
     name: data.name || uploadFile.name,
     mime: data.mime || mime,
     size: data.size || uploadFile.size,

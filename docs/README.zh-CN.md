@@ -28,6 +28,7 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 | [security.zh-CN.md](./security.zh-CN.md) | 信任模型、密钥、加固 |
 | [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md) | **分 harness 现行能力矩阵**（Codex / Claude / Kimi / Grok） |
 | [architecture.zh-CN.md](./architecture.zh-CN.md) | 组件、发现、提示词路径 |
+| [relay-core.zh-CN.md](./relay-core.zh-CN.md) | Relay Core、Standalone 与 Cloud 的边界及稳定端点合同 |
 | [protocol.zh-CN.md](./protocol.zh-CN.md) | 线协议信封、消息类型、REST |
 | [development.zh-CN.md](./development.zh-CN.md) | 本地开发与测试 |
 | [release.zh-CN.md](./release.zh-CN.md) | 维护者发版 |
@@ -48,6 +49,7 @@ NekoNest 的现行运维与贡献者文档。产品概览：[../README.zh-CN.md]
 | [security.md](./security.md) | [security.zh-CN.md](./security.zh-CN.md) |
 | [agent-capability-matrix.md](./agent-capability-matrix.md) | [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md) |
 | [architecture.md](./architecture.md) | [architecture.zh-CN.md](./architecture.zh-CN.md) |
+| [relay-core.md](./relay-core.md) | [relay-core.zh-CN.md](./relay-core.zh-CN.md) |
 | [protocol.md](./protocol.md) | [protocol.zh-CN.md](./protocol.zh-CN.md) |
 | [development.md](./development.md) | [development.zh-CN.md](./development.zh-CN.md) |
 | [troubleshooting.md](./troubleshooting.md) | [troubleshooting.zh-CN.md](./troubleshooting.zh-CN.md) |

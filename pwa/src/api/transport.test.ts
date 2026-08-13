@@ -7,16 +7,19 @@ import {
   runtimeTransportMode,
   transportModeError
 } from './transport'
+import { setRuntimeConfigForTests } from '@/config/runtimeEndpoint'
 
 describe('runtime transport mode', () => {
   beforeEach(() => {
     localStorage.clear()
+    setRuntimeConfigForTests(undefined)
     resetTransportModeForTests()
     vi.stubGlobal('fetch', vi.fn())
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    setRuntimeConfigForTests(undefined)
     resetTransportModeForTests()
   })
 
@@ -60,6 +63,15 @@ describe('runtime transport mode', () => {
     acknowledgeOpenTransport()
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ transport_mode: 'open' }), { status: 200 }))
     await expect(ensureTransportMode(true)).rejects.toThrow('downgrade blocked')
+    expect(runtimeTransportMode()).toBeNull()
+  })
+
+  it('rejects open transport unconditionally for a managed Cloud build', async () => {
+    setRuntimeConfigForTests({ api_base: 'https://connect.example.cn', managed: true })
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ transport_mode: 'open' }), { status: 200 }))
+
+    await expect(ensureTransportMode()).rejects.toThrow('requires sealed transport')
+    expect(openTransportConsentRequired()).toBe(false)
     expect(runtimeTransportMode()).toBeNull()
   })
 })

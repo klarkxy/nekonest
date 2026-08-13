@@ -8,7 +8,7 @@ NekoNest monorepo 贡献者环境。跨层不变量：[AGENTS.md](../AGENTS.md)�
 
 | 工具 | 说明 |
 |---|---|
-| Go 1.22+ | `server/` 与 `daemon/` 各自独立 module |
+| Go 1.22+ | `relaycore/`、`server/` 与 `daemon/` 各自独立 module |
 | Node.js + pnpm | PWA；使用已提交的 `pnpm-lock.yaml` |
 | 可选 agent CLI | 仅 Windows 上做只读发现冒烟时需要 |
 | codegraph（可选） | 代码导航；改源码后 `codegraph sync` |
@@ -18,6 +18,7 @@ NekoNest monorepo 贡献者环境。跨层不变量：[AGENTS.md](../AGENTS.md)�
 ```text
 nekonest/
 ├── protocol/          # protocol.json（手动类型）
+├── relaycore/         # module github.com/klarkxy/nekonest/relaycore
 ├── server/            # module github.com/nekonest/server
 ├── daemon/            # module github.com/nekonest/daemon
 ├── pwa/               # Vue 3 + TypeScript + Pinia
@@ -28,7 +29,7 @@ nekonest/
 └── README.zh-CN.md
 ```
 
-**没有根 Go module**。勿把 `_archive/`、`go-sdk/`、`gocache/`、`.pnpm-store/`、`bin/`、`data/`、已构建 PWA 或原生 agent 存储当作应用源码。
+**没有根 Go module**。根目录 `go.work` 只用于三个 Go module 的本地联调；发布后的消费者必须固定 Relay Core 版本，不得依赖相邻目录 `replace`。勿把 `_archive/`、`go-sdk/`、`gocache/`、`.pnpm-store/`、`bin/`、`data/`、已构建 PWA 或原生 agent 存储当作应用源码。
 
 ## 本地 Server（loopback 开发模式）
 

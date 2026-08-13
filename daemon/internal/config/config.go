@@ -15,7 +15,9 @@ import (
 
 // Config holds the daemon configuration.
 type Config struct {
-	ServerURL string `json:"server_url"` // e.g. "wss://nekonest.example.com" (ws/wss)
+	// ServerURL is the stable NekoNest service endpoint. It is used directly by
+	// both self-hosted servers and managed relay services.
+	ServerURL string `json:"server_url,omitempty"` // ws/wss
 	DeviceID  string `json:"device_id"`
 	Token     string `json:"token"`
 	WorkDir   string `json:"work_dir"` // base directory for agent sessions
@@ -97,6 +99,15 @@ func LoadFrom(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"control_plane_url", "activation_poll_path", "relay_generation", "relay_url"} {
+		if _, found := raw[key]; found {
+			return nil, fmt.Errorf("legacy managed activation configuration detected (%s); re-register this device with a stable service endpoint", key)
+		}
+	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
@@ -114,8 +125,16 @@ func LoadFrom(path string) (*Config, error) {
 
 // Save writes config to the default path.
 func (c *Config) Save() error {
-	path := DefaultConfigPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	return c.SaveTo(DefaultConfigPath())
+}
+
+// SaveTo durably replaces a configuration at path.
+func (c *Config) SaveTo(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("config path is required")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -123,7 +142,31 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	tmp, err := os.CreateTemp(dir, ".nekonest-config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := replaceFile(tmpPath, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 // WatchForChanges monitors the default config path.

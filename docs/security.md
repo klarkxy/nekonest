@@ -47,6 +47,12 @@ Pairing trust: QR carries daemon public-key fingerprint; six-digit code alone is
 | Pair code + QR fingerprint | Short-lived | Binding a phone to a registered device |
 | VAPID keys | Operator | Optional Web Push |
 
+Cloud account, entitlement, placement, and regional routing policy live outside
+the public Server and Relay Core. A managed Relay resolves an authenticated
+credential to an internal tenant before selecting an Engine; clients never
+choose a raw tenant ID. Standalone registration remains protected by the local
+bootstrap token and does not contact Cloud.
+
 ### Rules
 
 1. **Phone secret ≠ bootstrap token.** Use two independent long random strings.
@@ -77,6 +83,7 @@ Pairing trust: QR carries daemon public-key fingerprint; six-digit code alone is
 
 - `POST /api/devices/register` with JSON body `{"name":"…"}` and header `X-Neko-Bootstrap: <token>` on public servers
 - Response yields `device_id` + device token stored under `%USERPROFILE%\.nekonest\config.json`
+- The daemon signs a domain-separated registration transcript with its long-term Ed25519 key. Managed Cloud requires this proof before reusing a revoked host ID; a public fingerprint or old bearer token is insufficient.
 
 ### Daemon runtime
 

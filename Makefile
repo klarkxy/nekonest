@@ -35,7 +35,10 @@ dev-pwa:
 	cd pwa && pnpm dev
 
 # Unit tests
-test: test-server test-daemon test-pwa
+test: test-relaycore test-server test-daemon test-pwa
+
+test-relaycore:
+	cd relaycore && go test ./...
 
 test-server:
 	cd server && go test ./...

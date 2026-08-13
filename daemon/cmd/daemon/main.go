@@ -160,6 +160,10 @@ func main() {
 		opslog.Error("daemon.main", "config_path_canonicalize_failed", "config path canonicalization failed", err)
 		os.Exit(1)
 	}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	ctx, stopSignals := signal.NotifyContext(baseCtx, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	defer stopSignals()
 	journalPath := promptJournalPath(activeConfigPath, deviceID)
 	instanceLock, lockErr := acquireDaemonInstanceLock(activeConfigPath + ".daemon.lock")
 	if lockErr != nil {
@@ -213,10 +217,6 @@ func main() {
 	for _, a := range adapterList {
 		opslog.Info("daemon.main", "adapter_initialized", "adapter initialized", "agent_type", a.Name(), "available", a.IsAvailable())
 	}
-
-	// Create root context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Create server connection
 	client := connection.NewClient(ctx, initialCfg.ServerURL, deviceID, token, daemonTransport)
@@ -1112,14 +1112,13 @@ func main() {
 	})
 
 	// Connect to server
-	if err := client.Connect(); err != nil {
+	if err := client.ConnectUntilConnected(ctx); err != nil {
 		opslog.Error("daemon.main", "connect_failed", "initial server connection failed", err, "device_id", deviceID)
 		os.Exit(1)
 	}
 
 	// Start heartbeat in context
 	go client.StartHeartbeat(ctx)
-
 	// Session discovery loop with context
 	go func() {
 		// Initial scan after 2 seconds
@@ -1285,28 +1284,25 @@ func main() {
 		if urlChanged {
 			opslog.Info("daemon.main", "config_reload_endpoint_changed", "server endpoint changed; reconnect requested", "device_id", deviceID)
 		}
-		// Endpoint change and snapshot publication share the same dispatch
-		// linearization point. Existing callbacks finish against oldCfg; no
-		// callback from the new endpoint can start before nextCfg is visible.
-		client.SetServerURLAndPublish(nextCfg.ServerURL, func() {
+		if urlChanged {
+			// Endpoint change and snapshot publication share the same dispatch
+			// linearization point. Existing callbacks finish against oldCfg; no
+			// callback from the new endpoint can start before nextCfg is visible.
+			client.SetServerURLAndPublish(nextCfg.ServerURL, func() {
+				runtimeCfg.Store(&nextCfg)
+			})
+		} else {
 			runtimeCfg.Store(&nextCfg)
-		})
+		}
 		opslog.Info("daemon.main", "config_reload_applied", "runtime config snapshot applied", "device_id", deviceID, "endpoint_changed", urlChanged, "credentials_changed", credChanged)
 	})
 
 	// Start read loop (blocking, handles reconnection)
 	go client.StartReadLoop(ctx)
 
-	// Wait for shutdown signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case sig := <-sigCh:
-		opslog.Info("daemon.main", "shutdown_signal_received", "shutdown signal received", "signal", sig.String())
-	case <-ctx.Done():
-		opslog.Info("daemon.main", "shutdown_context_cancelled", "daemon context cancelled")
-	}
+	// Wait for shutdown signal.
+	<-ctx.Done()
+	opslog.Info("daemon.main", "shutdown_context_cancelled", "daemon context cancelled")
 
 	// Graceful shutdown
 	opslog.Info("daemon.main", "shutdown_started", "daemon shutdown started", "device_id", deviceID)
@@ -1831,7 +1827,7 @@ func handleRegistration(deviceName string) int {
 		}
 		fmt.Printf("Already registered.\n")
 		fmt.Printf("  Device: %s\n", existing.DeviceID)
-		fmt.Printf("  Server: %s\n", existing.ServerURL)
+		fmt.Printf("  Service: %s\n", existing.ServerURL)
 		fmt.Printf("Config:  %s\n", config.DefaultConfigPath())
 		fmt.Println("To re-register, delete the config file first.")
 		// Still mint a fresh pair code for the phone
@@ -1857,68 +1853,54 @@ func handleRegistration(deviceName string) int {
 	httpBase := config.HTTPBaseURL(serverURL)
 	wsURL := config.NormalizeServerURL(serverURL)
 
-	_, st, err := identity.LoadOrCreate(identity.Path())
+	id, st, err := identity.LoadOrCreate(identity.Path())
 	if err != nil {
 		return commandFailure("registration_identity_failed", "registration identity load failed", err)
 	}
 
-	body, _ := json.Marshal(map[string]string{
+	transportMode := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE"))
+	bootstrapToken := os.Getenv("NEKONEST_BOOTSTRAP_TOKEN")
+	proofTranscript := registrationProofTranscript(
+		bootstrapToken,
+		runtime.GOOS,
+		st.Ed25519Public,
+		st.X25519Public,
+		st.Fingerprint,
+		transportMode,
+	)
+	registrationPayload := map[string]string{
 		"name":                 deviceName,
 		"os":                   runtime.GOOS,
 		"ed25519_public":       st.Ed25519Public,
 		"x25519_public":        st.X25519Public,
 		"identity_fingerprint": st.Fingerprint,
-		"transport_mode":       strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE")),
-	})
-	req, err := http.NewRequest(http.MethodPost, httpBase+"/api/devices/register", bytes.NewReader(body))
+		"transport_mode":       transportMode,
+		"registration_proof":   sealed.B64(id.Sign(proofTranscript)),
+		"daemon_version":       buildinfo.Version,
+	}
+	if bootstrapToken != "" {
+		registrationPayload["registration_retry_key"] = registrationRetryKey(bootstrapToken, wsURL, st.Fingerprint)
+	}
+	body, _ := json.Marshal(registrationPayload)
+	result, err := completeDeviceRegistration(newRegistrationHTTPClient(), httpBase+"/api/devices/register", body, bootstrapToken, nil)
 	if err != nil {
-		return commandFailure("registration_request_build_failed", "registration request build failed", err)
+		return commandFailure("registration_rejected", "registration was rejected by service", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if bootstrap := os.Getenv("NEKONEST_BOOTSTRAP_TOKEN"); bootstrap != "" {
-		req.Header.Set("X-Neko-Bootstrap", bootstrap)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return commandFailure("registration_request_failed", "registration request failed", err)
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return commandFailure("registration_rejected", "registration was rejected by server", nil, "status", resp.StatusCode)
-	}
-
-	var result struct {
-		DeviceID      string `json:"device_id"`
-		Token         string `json:"token"`
-		Name          string `json:"name"`
-		TransportMode string `json:"transport_mode"`
-	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return commandFailure("registration_response_invalid", "registration response could not be parsed", err, "status", resp.StatusCode)
-	}
-	mode, modeErr := registrationTransportMode(result.TransportMode, os.Getenv("NEKONEST_TRANSPORT_MODE"))
-	if modeErr != nil {
-		return commandFailure("registration_response_transport_invalid", "registration response transport mode is invalid", modeErr, "status", resp.StatusCode)
-	}
-	if result.DeviceID == "" || result.Token == "" {
-		return commandFailure("registration_response_credentials_missing", "registration response is missing credentials", nil, "status", resp.StatusCode)
-	}
-
-	cfg := &config.Config{
-		ServerURL:     wsURL,
-		DeviceID:      result.DeviceID,
-		Token:         result.Token,
-		TransportMode: mode,
+	cfg, connectionState, cfgErr := registrationConfig(wsURL, result, os.Getenv("NEKONEST_TRANSPORT_MODE"))
+	if cfgErr != nil {
+		return commandFailure("registration_response_invalid", "registration response is not safe to persist", cfgErr)
 	}
 	if err := cfg.Save(); err != nil {
 		return commandFailure("registration_config_save_failed", "registered configuration could not be saved", err, "device_id", result.DeviceID)
 	}
 
 	fmt.Printf("✅ Registered as %s (%s)\n", result.Name, result.DeviceID)
-	fmt.Printf("   Server: %s\n", wsURL)
 	fmt.Printf("   Config: %s\n", config.DefaultConfigPath())
 	fmt.Printf("   Fingerprint: %s\n", st.Fingerprint)
+	fmt.Printf("   Service: %s\n", wsURL)
+	if connectionState == registrationConnectionProvisioning {
+		fmt.Println("   Connection: provisioning; the daemon will retry this same service endpoint.")
+	}
 
 	if code, exp, err := requestPairCode(cfg, st); err != nil {
 		opslog.Error("daemon.main", "registration_pair_code_failed", "registration succeeded but pair code generation failed", err, "device_id", result.DeviceID)
@@ -1926,7 +1908,7 @@ func handleRegistration(deviceName string) int {
 		fmt.Println("You can still list the device on phone if you use the phone secret.")
 	} else {
 		fmt.Printf("\n📱 Phone pair code: %s (expires ~%s)\n", code, exp.Local().Format("15:04:05"))
-		qr := identity.BuildPairQR(httpBase, result.DeviceID, result.Name, code, exp.Unix(), st, mode)
+		qr := identity.BuildPairQR(httpBase, result.DeviceID, result.Name, code, exp.Unix(), st, cfg.TransportMode)
 		qrJSON, _ := json.Marshal(qr)
 		fmt.Println(string(qrJSON))
 		fmt.Println("1. Open PWA → 配对电脑 → enter code / paste QR payload")
@@ -1970,7 +1952,6 @@ func handlePairing(code string) int {
 		fmt.Println("Device not registered yet. Run with -register first.")
 		return commandFailure("pairing_config_load_failed", "pairing configuration could not be loaded", err)
 	}
-
 	// Historical flag took a code string; we now always mint a server code for the phone.
 	_ = code
 	_, st, err := identity.LoadOrCreate(identity.Path())
@@ -2839,7 +2820,7 @@ func runDoctor(configPath string) int {
 		check("config", false, err.Error())
 	} else {
 		check("config", cfg.DeviceID != "" && cfg.Token != "" && cfg.ServerURL != "",
-			fmt.Sprintf("device=%s server=%s path=%s", cfg.DeviceID, cfg.ServerURL, configPath))
+			fmt.Sprintf("device=%s endpoint=%s path=%s", cfg.DeviceID, cfg.ServerURL, configPath))
 		transportOK := true
 		if requested := strings.TrimSpace(os.Getenv("NEKONEST_TRANSPORT_MODE")); requested != "" {
 			mode, modeErr := config.NormalizeTransportMode(requested)
@@ -2886,7 +2867,7 @@ func runDoctor(configPath string) int {
 		_ = reg.Close()
 	}
 
-	if cfg != nil {
+	if cfg != nil && cfg.ServerURL != "" {
 		httpBase := config.HTTPBaseURL(cfg.ServerURL)
 		client := &http.Client{Timeout: 8 * time.Second}
 		resp, err := client.Get(httpBase + "/health")

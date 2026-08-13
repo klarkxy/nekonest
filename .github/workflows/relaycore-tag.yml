@@ -1,0 +1,59 @@
+name: Verify Relay Core tag
+
+on:
+  push:
+    tags:
+      - "relaycore/v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Relay Core tag to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relaycore-tag-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELAY_CORE_TAG: ${{ inputs.tag || github.ref_name }}
+  GOWORK: 'off'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELAY_CORE_TAG }}
+          fetch-depth: 0
+
+      - name: Validate immutable module tag
+        shell: pwsh
+        run: |
+          if ($env:RELAY_CORE_TAG -notmatch '^relaycore/v(?<version>[0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw 'Relay Core tag must match relaycore/vX.Y.Z'
+          }
+          git show-ref --verify --quiet "refs/tags/$env:RELAY_CORE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Relay Core input must name an existing tag' }
+          $module = (go mod edit -json relaycore/go.mod | ConvertFrom-Json).Module.Path
+          if ($module -ne 'github.com/klarkxy/nekonest/relaycore') {
+            throw "unexpected Relay Core module path: $module"
+          }
+          if (Select-String -Path relaycore/go.mod -Pattern '^replace\s' -Quiet) {
+            throw 'Relay Core module must not contain replace directives'
+          }
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: relaycore/go.mod
+          cache-dependency-path: relaycore/go.sum
+
+      - name: Test and vet the standalone module
+        working-directory: relaycore
+        run: |
+          go test -count=1 ./...
+          go vet ./...

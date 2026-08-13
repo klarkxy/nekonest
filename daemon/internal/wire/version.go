@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	CurrentProtocolVersion = "1.2"
+	CurrentProtocolVersion = "1.3"
 	CurrentProtocolMajor   = 1
-	CurrentProtocolMinor   = 2
+	CurrentProtocolMinor   = 3
 )
 
 // ValidateNegotiatedVersion accepts only a version this daemon actually

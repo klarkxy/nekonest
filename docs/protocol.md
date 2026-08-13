@@ -15,10 +15,39 @@ Keep JSON field names, enums, optionality, timestamps, and meanings identical ac
 
 | Field | Rule |
 |---|---|
-| `protocol_version` | `major.minor` (current **1.2**). Major mismatch rejects; minor is backward compatible. A 1.2 PWA infers legacy send/interrupt only when the capability producer is confirmed as 1.1 or older; unknown producer versions fail closed. |
+| `protocol_version` | `major.minor` (current **1.3**). Major mismatch rejects; minor is backward compatible. A 1.2+ PWA infers legacy send/interrupt only when the capability producer is confirmed as 1.1 or older; unknown producer versions fail closed. |
 | `transport_mode` | Nest-wide `sealed` \| `open`. One persisted mode per nest; **no** sealed→open automatic downgrade. New databases default sealed; legacy databases without metadata are classified once as open. |
 
 First frames (`register_device` for daemon, `subscribe` for phone) **must** include both fields. Every later frame is validated against the negotiated major version, transport mode, and its explicit routing-vs-application body policy. In sealed mode application frames require `sealed_payload`; open mode rejects it; mixed bodies are always rejected. Server returns negotiated version/mode on `auth_response` / `subscribe_ack`. Stable error codes: `version_mismatch`, `transport_mode_mismatch`, `invalid_envelope`.
+
+### Protocol 1.3 service errors and registration
+
+HTTP failures and WebSocket `error` frames use the same public shape:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `error_code` | yes | Stable machine-readable code |
+| `message` | yes | Human-readable diagnostic, never parsed for behavior |
+| `retryable` | yes | Whether retrying the same stable service endpoint is allowed |
+| `retry_after_seconds` | no | Server-selected minimum backoff |
+| `action_url` | no | HTTPS page for a user action; display only, never a data-plane redirect |
+
+The initial stable codes are `device_credential_invalid`,
+`phone_credential_invalid`, `access_suspended`, `registration_disabled`,
+`device_capacity_exceeded`, `device_identity_conflict`,
+`device_already_connected`, `protocol_upgrade_required`,
+`registration_rate_limited`, `service_provisioning`, `route_unavailable`, and
+`region_unavailable`. Unknown codes fail closed. A client never infers Cloud
+from a code and never follows an error to a replacement Relay origin.
+`device_already_connected` is retryable on the same `server_url`: a shared
+relay rejects a second live socket, and the daemon waits for the stale lease
+to expire instead of stopping.
+
+`POST /api/devices/register` preserves `device_id`, `token`, `name`, and
+`transport_mode`, and adds `connection_state: ready | provisioning` plus an
+optional `retry_after_seconds`. Standalone always returns `ready`. A managed
+daemon that receives `provisioning` stores its credential and retries
+`/ws/daemon` at the same `server_url`; it does not poll a control plane.
 
 ### Application release versions
 

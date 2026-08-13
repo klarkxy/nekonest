@@ -8,7 +8,7 @@ Contributor setup for the NekoNest monorepo. Cross-layer invariants: [AGENTS.md]
 
 | Tool | Notes |
 |---|---|
-| Go 1.22+ | Separate modules under `server/` and `daemon/` |
+| Go 1.22+ | Separate modules under `relaycore/`, `server/`, and `daemon/` |
 | Node.js + pnpm | PWA; use committed `pnpm-lock.yaml` |
 | Optional agent CLIs | For live discovery smoke on Windows only |
 | codegraph (optional) | Repo navigation; run `codegraph sync` after source edits |
@@ -18,6 +18,7 @@ Contributor setup for the NekoNest monorepo. Cross-layer invariants: [AGENTS.md]
 ```text
 nekonest/
 ├── protocol/          # protocol.json (manual types)
+├── relaycore/         # module github.com/klarkxy/nekonest/relaycore
 ├── server/            # module github.com/nekonest/server
 ├── daemon/            # module github.com/nekonest/daemon
 ├── pwa/               # Vue 3 + TypeScript + Pinia
@@ -28,7 +29,7 @@ nekonest/
 └── README.zh-CN.md
 ```
 
-There is **no root Go module**. Do not treat `_archive/`, `go-sdk/`, `gocache/`, `.pnpm-store/`, `bin/`, `data/`, built PWA output, or native agent stores as application source.
+There is **no root Go module**. The root `go.work` links the three Go modules for local development; published consumers must pin a Relay Core version and must not rely on a sibling-directory `replace`. Do not treat `_archive/`, `go-sdk/`, `gocache/`, `.pnpm-store/`, `bin/`, `data/`, built PWA output, or native agent stores as application source.
 
 ## Local server (loopback dev mode)
 

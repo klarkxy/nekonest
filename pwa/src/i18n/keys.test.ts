@@ -21,4 +21,13 @@ describe('i18n locale parity', () => {
     const enKeys = flattenKeys(en as unknown as Record<string, unknown>)
     expect(enKeys).toEqual(zhKeys)
   })
+
+  it('uses the current Chinese product terminology everywhere', () => {
+    const copy = JSON.stringify(zhCN)
+
+    expect(copy).not.toContain('\u7a9d')
+    expect(zhCN.brand.name).toBe('猫娘乐园')
+    expect(zhCN.title.brand).toBe('猫娘乐园')
+    expect(zhCN.setup.title).toBe('猫娘乐园')
+  })
 })

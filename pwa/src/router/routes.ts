@@ -4,6 +4,7 @@ import DeviceDetail from '../views/DeviceDetail.vue'
 import SessionDetail from '../views/SessionDetail.vue'
 import PairDevice from '../views/PairDevice.vue'
 import Setup from '../views/Setup.vue'
+import HandoffError from '../views/HandoffError.vue'
 import { deviceDetailLocation } from './navigation'
 
 export const appRoutes: RouteRecordRaw[] = [
@@ -11,6 +12,12 @@ export const appRoutes: RouteRecordRaw[] = [
     path: '/setup',
     name: 'setup',
     component: Setup,
+    meta: { public: true }
+  },
+  {
+    path: '/handoff-error',
+    name: 'handoff-error',
+    component: HandoffError,
     meta: { public: true }
   },
   {

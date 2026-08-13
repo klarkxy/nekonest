@@ -1,4 +1,5 @@
 import type { TransportMode } from '@/types/protocol'
+import { apiURL, endpointOrigin, isManagedRuntime } from '@/config/runtimeEndpoint'
 
 const VALID_MODES = new Set<TransportMode>(['sealed', 'open'])
 
@@ -11,7 +12,7 @@ const PIN_KEY_PREFIX = 'nekonest_transport_pin:'
 const OPEN_CONSENT_KEY_PREFIX = 'nekonest_open_transport_consent:'
 
 function originKey(prefix: string): string {
-  return `${prefix}${location.origin}`
+  return `${prefix}${endpointOrigin()}`
 }
 
 function readLocal(key: string): string {
@@ -47,7 +48,7 @@ export async function ensureTransportMode(force = false): Promise<TransportMode>
   resolvePromise = (async () => {
     try {
       const override = configuredOverride()
-      const response = await fetch('/health', { cache: 'no-store' })
+      const response = await fetch(apiURL('/health'), { cache: 'no-store' })
       if (!response.ok) throw new Error(`Could not read nest transport mode (HTTP ${response.status})`)
       const body = await response.json() as { transport_mode?: unknown }
       const mode = body.transport_mode
@@ -56,6 +57,9 @@ export async function ensureTransportMode(force = false): Promise<TransportMode>
       }
       if (override && override !== mode) {
         throw new Error(`Transport mode mismatch: web app expects ${override}, nest server is ${mode}`)
+      }
+      if (isManagedRuntime() && mode !== 'sealed') {
+        throw new Error('Managed NekoNest requires sealed transport')
       }
       const pinKey = originKey(PIN_KEY_PREFIX)
       const pinned = readLocal(pinKey)

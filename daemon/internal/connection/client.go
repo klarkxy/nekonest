@@ -3,7 +3,10 @@ package connection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"runtime"
 	"strings"
 	"sync"
@@ -16,30 +19,39 @@ import (
 )
 
 const (
-	maxReconnects     = 50
-	maxReconnectDelay = 60 * time.Second
-	writeTimeout      = 10 * time.Second
-	readCloseTimeout  = 3 * time.Second
+	maxReconnects      = 50
+	maxReconnectDelay  = 60 * time.Second
+	writeTimeout       = 10 * time.Second
+	readCloseTimeout   = 3 * time.Second
+	maxRemoteErrorBody = 64 << 10
 )
+
+var ErrEndpointPaused = errors.New("relay endpoint paused")
 
 // Client manages the WebSocket connection to the NekoNest server.
 type Client struct {
-	serverURL       string
-	deviceID        string
-	token           string
-	transportMode   string
-	protocolVersion string
-	conn            *websocket.Conn
-	mu              sync.Mutex
-	connectMu       sync.Mutex
-	dispatchMu      sync.RWMutex // linearizes callbacks against endpoint changes/Close
-	onMessage       func([]byte)
-	onConnect       func() // called after successful auth (initial + reconnect)
-	connected       bool
-	reconnects      int
-	closed          bool
-	generation      uint64        // incremented whenever the desired endpoint changes
-	closeCh         chan struct{} // closed when Close() is called
+	serverURL        string
+	deviceID         string
+	token            string
+	transportMode    string
+	protocolVersion  string
+	conn             *websocket.Conn
+	mu               sync.Mutex
+	connectMu        sync.Mutex
+	dispatchMu       sync.RWMutex // linearizes callbacks against endpoint changes/Close
+	onMessage        func([]byte)
+	onConnect        func() // called after successful auth (initial + reconnect)
+	connected        bool
+	reconnects       int // generic network/transient failures only
+	serviceRetries   int // allowed service provisioning retries; never capped
+	retryableService bool
+	retryAfter       time.Duration
+	retryWait        func(context.Context, time.Duration) bool
+	closed           bool
+	endpointActive   bool
+	endpointChanged  chan struct{}
+	generation       uint64        // incremented whenever the desired endpoint changes
+	closeCh          chan struct{} // closed when Close() is called
 }
 
 // NewClient creates a new connection client.
@@ -54,7 +66,17 @@ func NewClient(ctx context.Context, serverURL, deviceID, token string, modes ...
 		token:           token,
 		transportMode:   transportMode,
 		protocolVersion: wire.CurrentProtocolVersion,
+		endpointActive:  strings.TrimSpace(serverURL) != "",
+		endpointChanged: make(chan struct{}),
 		closeCh:         make(chan struct{}),
+		retryWait: func(ctx context.Context, delay time.Duration) bool {
+			select {
+			case <-time.After(delay):
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		},
 	}
 }
 
@@ -99,6 +121,11 @@ func (c *Client) SetServerURL(url string) {
 // The publish callback must not call back into Client methods that acquire
 // dispatchMu.
 func (c *Client) SetServerURLAndPublish(url string, publish func()) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		c.PauseAndPublish(publish)
+		return
+	}
 	c.dispatchMu.Lock()
 	var oldConn *websocket.Conn
 	defer func() {
@@ -109,10 +136,12 @@ func (c *Client) SetServerURLAndPublish(url string, publish func()) {
 	}()
 
 	c.mu.Lock()
-	if !c.closed && c.serverURL != url {
+	if !c.closed && (c.serverURL != url || !c.endpointActive) {
 		c.serverURL = url
+		c.endpointActive = true
 		c.generation++
 		c.reconnects = 0
+		c.signalEndpointChangeLocked()
 		// Detach before close so an old read error cannot clear a connection that
 		// has already authenticated against the new endpoint.
 		oldConn = c.conn
@@ -125,6 +154,40 @@ func (c *Client) SetServerURLAndPublish(url string, publish func()) {
 	if publish != nil {
 		publish()
 	}
+}
+
+// PauseAndPublish disables dialing without destroying the client. Resume by
+// calling SetServerURLAndPublish with a configured service endpoint.
+func (c *Client) PauseAndPublish(publish func()) {
+	c.dispatchMu.Lock()
+	var oldConn *websocket.Conn
+	defer func() {
+		c.dispatchMu.Unlock()
+		if oldConn != nil {
+			_ = oldConn.Close()
+		}
+	}()
+
+	c.mu.Lock()
+	if !c.closed && c.endpointActive {
+		c.endpointActive = false
+		c.generation++
+		c.reconnects = 0
+		c.signalEndpointChangeLocked()
+		oldConn = c.conn
+		c.conn = nil
+		c.connected = false
+		c.protocolVersion = wire.CurrentProtocolVersion
+	}
+	c.mu.Unlock()
+	if publish != nil {
+		publish()
+	}
+}
+
+func (c *Client) signalEndpointChangeLocked() {
+	close(c.endpointChanged)
+	c.endpointChanged = make(chan struct{})
 }
 
 // Connect establishes the WebSocket connection and authenticates.
@@ -143,13 +206,23 @@ func (c *Client) Connect() error {
 		token := c.token
 		transportMode := c.transportMode
 		generation := c.generation
+		endpointActive := c.endpointActive
 		c.mu.Unlock()
+		if !endpointActive {
+			return ErrEndpointPaused
+		}
 
 		wsURL := serverURL + "/ws/daemon"
 		opslog.Info("daemon.connection", "connect_attempt", "connecting to server", "device_id", deviceID, "generation", generation)
 
-		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		conn, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
+			if remote := remoteErrorFromHandshake(response); remote != nil {
+				if !c.isCurrentGeneration(generation) {
+					continue
+				}
+				return remote
+			}
 			if !c.isCurrentGeneration(generation) {
 				continue
 			}
@@ -157,6 +230,7 @@ func (c *Client) Connect() error {
 		}
 
 		if transportMode != "open" && transportMode != "sealed" {
+			_ = conn.Close()
 			return fmt.Errorf("invalid configured transport_mode %q", transportMode)
 		}
 		authMsg := map[string]interface{}{
@@ -173,6 +247,10 @@ func (c *Client) Connect() error {
 			},
 		}
 
+		if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("auth write deadline: %w", err)
+		}
 		if err := conn.WriteJSON(authMsg); err != nil {
 			_ = conn.Close()
 			if !c.isCurrentGeneration(generation) {
@@ -205,7 +283,17 @@ func (c *Client) Connect() error {
 		}
 		if resp["type"] == "error" {
 			_ = conn.Close()
-			return fmt.Errorf("auth failed: %v", resp["payload"])
+			if !c.isCurrentGeneration(generation) {
+				continue
+			}
+			if payload, ok := resp["payload"]; ok {
+				if encoded, marshalErr := json.Marshal(payload); marshalErr == nil {
+					if remote, parsed := DecodeRemoteError(encoded, 0); parsed {
+						return remote
+					}
+				}
+			}
+			return &RemoteError{Code: "unknown_remote_error", Message: fmt.Sprintf("authentication failed: %v", resp["payload"])}
 		}
 		if resp["type"] != "auth_response" {
 			_ = conn.Close()
@@ -244,7 +332,7 @@ func (c *Client) Connect() error {
 
 		c.dispatchMu.Lock()
 		c.mu.Lock()
-		if c.closed || c.generation != generation || c.serverURL != serverURL {
+		if c.closed || !c.endpointActive || c.generation != generation || c.serverURL != serverURL {
 			closed := c.closed
 			c.mu.Unlock()
 			c.dispatchMu.Unlock()
@@ -261,6 +349,9 @@ func (c *Client) Connect() error {
 		c.connected = true
 		c.protocolVersion = negotiatedVersion
 		c.reconnects = 0
+		c.serviceRetries = 0
+		c.retryableService = false
+		c.retryAfter = 0
 		onConnect := c.onConnect
 		c.mu.Unlock()
 		c.dispatchMu.Unlock()
@@ -279,10 +370,47 @@ func (c *Client) Connect() error {
 	}
 }
 
+func remoteErrorFromHandshake(response *http.Response) *RemoteError {
+	if response == nil || response.Body == nil {
+		return nil
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxRemoteErrorBody+1))
+	if err != nil || len(data) > maxRemoteErrorBody {
+		return nil
+	}
+	remote, ok := DecodeRemoteError(data, response.StatusCode)
+	if !ok {
+		return nil
+	}
+	return remote
+}
+
+// ConnectUntilConnected makes initial provisioning resilient: a credential
+// accepted by registration may keep retrying the same stable endpoint while
+// the service provisions its tenant. Terminal and unknown errors stop.
+func (c *Client) ConnectUntilConnected(ctx context.Context) error {
+	for {
+		err := c.Connect()
+		if err == nil {
+			return nil
+		}
+		if !c.recordConnectionFailure(err) {
+			return err
+		}
+		if !c.waitForReconnect(ctx) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+	}
+}
+
 func (c *Client) isCurrentGeneration(generation uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.closed && c.generation == generation
+	return !c.closed && c.endpointActive && c.generation == generation
 }
 
 func (c *Client) dispatchConnect(conn *websocket.Conn, onConnect func()) {
@@ -301,6 +429,9 @@ func (c *Client) Send(msg interface{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if !c.endpointActive {
+		return ErrEndpointPaused
+	}
 	if c.conn == nil {
 		return fmt.Errorf("not connected")
 	}
@@ -413,6 +544,9 @@ func (c *Client) StartHeartbeat(ctx context.Context) {
 			generation := c.generation
 			c.mu.Unlock()
 			if err := c.Send(msg); err != nil {
+				if errors.Is(err, ErrEndpointPaused) {
+					continue
+				}
 				opslog.Error("daemon.connection", "heartbeat_failed", "heartbeat send failed", err, "device_id", deviceID, "generation", generation)
 			}
 		case <-ctx.Done():
@@ -479,36 +613,110 @@ func (c *Client) Close() {
 // reconnect attempts to reconnect with exponential backoff.
 // Returns false if context was cancelled.
 func (c *Client) reconnect(ctx context.Context) bool {
+	if !c.waitForReconnect(ctx) {
+		return false
+	}
+	if err := c.Connect(); err != nil {
+		return c.recordConnectionFailure(err)
+	}
+	return true
+}
+
+func (c *Client) recordConnectionFailure(err error) bool {
+	if errors.Is(err, ErrEndpointPaused) {
+		return true
+	}
 	c.mu.Lock()
-	c.reconnects++
-	attempt := c.reconnects
+	deviceID := c.deviceID
+	generation := c.generation
+	c.mu.Unlock()
+	if remote := (*RemoteError)(nil); AsRemoteError(err, &remote) {
+		if !remote.Retryable() {
+			opslog.Error("daemon.connection", "reconnect_refused", "service rejected reconnect without a retryable error code", err, "device_id", deviceID, "generation", generation, "error_code", remote.Code)
+			return false
+		}
+		c.mu.Lock()
+		c.retryableService = true
+		c.retryAfter = remote.RetryAfter
+		c.mu.Unlock()
+		opslog.Info("daemon.connection", "reconnect_service_retry", "service requested stable-endpoint retry", "device_id", deviceID, "generation", generation, "error_code", remote.Code)
+		return true
+	}
+	c.mu.Lock()
+	c.retryableService = false
+	c.retryAfter = 0
+	c.mu.Unlock()
+	opslog.Error("daemon.connection", "reconnect_failed", "reconnect attempt failed", err, "device_id", deviceID, "generation", generation)
+	return true
+}
+
+func (c *Client) waitForReconnect(ctx context.Context) bool {
+	if !c.waitUntilEndpointActive(ctx) {
+		return false
+	}
+	c.mu.Lock()
+	serviceRetry := c.retryableService
+	var attempt int
+	if serviceRetry {
+		c.serviceRetries++
+		attempt = c.serviceRetries
+	} else {
+		c.reconnects++
+		attempt = c.reconnects
+	}
+	retryAfter := c.retryAfter
+	c.retryAfter = 0
 	deviceID := c.deviceID
 	generation := c.generation
 	c.mu.Unlock()
 
-	if attempt > maxReconnects {
-		opslog.Error("daemon.connection", "reconnect_exhausted", "maximum reconnection attempts reached", nil, "device_id", deviceID, "generation", generation, "count", maxReconnects)
+	if !serviceRetry && attempt > maxReconnects {
+		opslog.Error("daemon.connection", "reconnect_exhausted", "maximum generic reconnection attempts reached", nil, "device_id", deviceID, "generation", generation, "count", maxReconnects)
 		return false
 	}
-
 	delay := time.Duration(attempt) * 5 * time.Second
+	if retryAfter > delay {
+		delay = retryAfter
+	}
 	if delay > maxReconnectDelay {
 		delay = maxReconnectDelay
 	}
-
-	opslog.Info("daemon.connection", "reconnect_scheduled", "reconnect scheduled", "device_id", deviceID, "generation", generation, "attempt", attempt, "count", maxReconnects, "delay_ms", delay.Milliseconds())
-
-	select {
-	case <-time.After(delay):
-	case <-ctx.Done():
+	class := "network"
+	if serviceRetry {
+		class = "service"
+	}
+	opslog.Info("daemon.connection", "reconnect_scheduled", "reconnect scheduled", "device_id", deviceID, "generation", generation, "attempt", attempt, "class", class, "delay_ms", delay.Milliseconds())
+	if c.retryWait != nil && !c.retryWait(ctx, delay) {
 		return false
+	}
+	select {
 	case <-c.closeCh:
 		return false
+	default:
+		return true
 	}
+}
 
-	if err := c.Connect(); err != nil {
-		opslog.Error("daemon.connection", "reconnect_failed", "reconnect attempt failed", err, "device_id", deviceID, "generation", generation, "attempt", attempt)
-		return true // keep trying
+func (c *Client) waitUntilEndpointActive(ctx context.Context) bool {
+	for {
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return false
+		}
+		if c.endpointActive {
+			c.mu.Unlock()
+			return true
+		}
+		changed := c.endpointChanged
+		c.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.closeCh:
+			return false
+		case <-changed:
+		}
 	}
-	return true
 }

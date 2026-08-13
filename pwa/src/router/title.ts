@@ -12,6 +12,8 @@ export function routePageTitle(name: string | symbol | null | undefined): string
       return tGlobal('title.pair')
     case 'setup':
       return tGlobal('title.setup')
+    case 'handoff-error':
+      return tGlobal('title.handoffError')
     default:
       return ''
   }

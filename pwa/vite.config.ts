@@ -21,8 +21,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       injectRegister: false,
       manifest: {
-        name: 'NekoNest 猫娘窝',
-        short_name: '猫娘窝',
+        name: 'NekoNest 猫娘乐园',
+        short_name: '猫娘乐园',
         description: '按工作目录和猫娘，整理家里电脑上的线团',
         lang: 'zh-CN',
         theme_color: '#F8F1ED',
@@ -58,6 +58,7 @@ export default defineConfig({
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff2}'],
         globIgnores: [
+          'runtime-config.json',
           'brand/nekonest-mark-1024.png',
           'brand/apple-touch-icon.png',
           'brand/pwa-192x192.png',

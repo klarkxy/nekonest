@@ -1,4 +1,4 @@
-package ws
+package relaycore
 
 import (
 	"encoding/json"
@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/nekonest/server/internal/db"
-	"github.com/nekonest/server/internal/opslog"
-	"github.com/nekonest/server/internal/protocol"
+	"github.com/klarkxy/nekonest/relaycore/internal/opslog"
+	"github.com/klarkxy/nekonest/relaycore/protocol"
+	db "github.com/klarkxy/nekonest/relaycore/store"
 )
 
 // ConnectionManager handles all WebSocket connections.
@@ -18,11 +18,13 @@ type ConnectionManager struct {
 	nextDaemonGeneration  uint64
 	phoneConns            map[string][]*websocket.Conn // device_id -> phone connections (subscribed to that device)
 	phoneOutbounds        map[*websocket.Conn]*phoneOutbound
-	database              *db.DB
+	phonePrincipals       map[*websocket.Conn]phonePrincipal
+	database              db.Store
 	onDeviceUp            func(deviceID, appVersion string)
 	onDeviceDown          func(deviceID string)
 	onDeviceVersionChange func(deviceID, appVersion string)
 	afterDaemonPublished  func(*DaemonConn) // test synchronization hook; nil in production
+	duplicatePolicy       DuplicateDaemonPolicy
 }
 
 // DaemonConn wraps a daemon's WebSocket connection with metadata.
@@ -48,6 +50,11 @@ type phoneOutbound struct {
 	done          chan struct{}
 	closed        bool
 	reservedBytes int64
+}
+
+type phonePrincipal struct {
+	PhoneID     string
+	AdminBypass bool
 }
 
 const (
@@ -127,18 +134,38 @@ func (out *phoneOutbound) isClosed() bool {
 }
 
 // NewConnectionManager creates a new connection manager.
-func NewConnectionManager(database *db.DB) *ConnectionManager {
+func NewConnectionManager(database db.Store) *ConnectionManager {
+	return NewConnectionManagerWithPolicy(database, ReplaceExisting)
+}
+
+func NewConnectionManagerWithPolicy(database db.Store, policy DuplicateDaemonPolicy) *ConnectionManager {
 	return &ConnectionManager{
-		daemonConns:    make(map[string]*DaemonConn),
-		phoneConns:     make(map[string][]*websocket.Conn),
-		phoneOutbounds: make(map[*websocket.Conn]*phoneOutbound),
-		database:       database,
+		daemonConns:     make(map[string]*DaemonConn),
+		phoneConns:      make(map[string][]*websocket.Conn),
+		phoneOutbounds:  make(map[*websocket.Conn]*phoneOutbound),
+		phonePrincipals: make(map[*websocket.Conn]phonePrincipal),
+		database:        database,
+		duplicatePolicy: policy,
 	}
 }
 
 // OnDeviceUp sets the callback for when a device comes online.
 func (cm *ConnectionManager) OnDeviceUp(fn func(string, string)) {
 	cm.onDeviceUp = fn
+}
+
+// WatchDeviceUp appends a listener without replacing the existing online hook.
+func (cm *ConnectionManager) WatchDeviceUp(fn func(string, string)) {
+	if cm == nil || fn == nil {
+		return
+	}
+	previous := cm.onDeviceUp
+	cm.onDeviceUp = func(deviceID, appVersion string) {
+		if previous != nil {
+			previous(deviceID, appVersion)
+		}
+		fn(deviceID, appVersion)
+	}
 }
 
 // OnDeviceDown sets the callback for when a device goes offline.
@@ -156,13 +183,22 @@ func (cm *ConnectionManager) OnDeviceVersionChange(fn func(string, string)) {
 // If a previous connection exists for the same device, it is closed and replaced.
 // onDeviceUp only fires when the device was previously offline.
 func (cm *ConnectionManager) AddDaemon(deviceID string, conn *websocket.Conn) *DaemonConn {
-	return cm.AddDaemonVersioned(deviceID, conn, "")
+	dc, _ := cm.TryAddDaemonVersioned(deviceID, conn, "")
+	return dc
 }
 
 // AddDaemonVersioned registers a daemon and keeps its reported application
 // release with the live connection. It is intentionally not persisted: an
 // offline daemon cannot prove which binary will start next.
 func (cm *ConnectionManager) AddDaemonVersioned(deviceID string, conn *websocket.Conn, appVersion string) *DaemonConn {
+	dc, _ := cm.TryAddDaemonVersioned(deviceID, conn, appVersion)
+	return dc
+}
+
+// TryAddDaemonVersioned atomically enforces the configured duplicate policy.
+// RejectNew is intended for shared relays: copied credentials remain one
+// device identity and cannot create two simultaneous connections.
+func (cm *ConnectionManager) TryAddDaemonVersioned(deviceID string, conn *websocket.Conn, appVersion string) (*DaemonConn, error) {
 	dc := &DaemonConn{
 		Conn:       conn,
 		DeviceID:   deviceID,
@@ -194,6 +230,11 @@ func (cm *ConnectionManager) AddDaemonVersioned(deviceID string, conn *websocket
 				old.mu.Unlock()
 			}
 			continue
+		}
+		if cm.duplicatePolicy == RejectNew && old != nil && !old.closed {
+			cm.mu.Unlock()
+			old.mu.Unlock()
+			return nil, ErrDeviceAlreadyConnected
 		}
 		wasOnline = old != nil && !old.closed
 		if old != nil {
@@ -237,7 +278,7 @@ func (cm *ConnectionManager) AddDaemonVersioned(deviceID string, conn *websocket
 			cm.onDeviceVersionChange(deviceID, appVersion)
 		}
 	}
-	return dc
+	return dc, nil
 }
 
 // GetDaemonVersion returns the application release reported by the current
@@ -250,6 +291,37 @@ func (cm *ConnectionManager) GetDaemonVersion(deviceID string) string {
 		return ""
 	}
 	return dc.AppVersion
+}
+
+func (cm *ConnectionManager) currentDaemon(deviceID string) *DaemonConn {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.daemonConns[deviceID]
+}
+
+// Close disconnects every current generation without holding the registry
+// lock across network close calls.
+func (cm *ConnectionManager) Close() {
+	cm.mu.Lock()
+	daemons := make([]*DaemonConn, 0, len(cm.daemonConns))
+	for _, dc := range cm.daemonConns {
+		dc.closed = true
+		daemons = append(daemons, dc)
+	}
+	phones := make([]*websocket.Conn, 0, len(cm.phoneOutbounds))
+	for conn := range cm.phoneOutbounds {
+		phones = append(phones, conn)
+	}
+	cm.daemonConns = make(map[string]*DaemonConn)
+	cm.mu.Unlock()
+	for _, dc := range daemons {
+		if dc.Conn != nil {
+			_ = dc.Conn.Close()
+		}
+	}
+	for _, conn := range phones {
+		cm.dropPhone(conn)
+	}
 }
 
 // RemoveDaemon removes a daemon connection only if conn is still the registered one.
@@ -287,8 +359,15 @@ func (cm *ConnectionManager) RemoveDaemon(deviceID string, conn *websocket.Conn)
 
 // AddPhone adds a phone WebSocket connection subscribed to a device.
 func (cm *ConnectionManager) AddPhone(deviceID string, conn *websocket.Conn) {
+	cm.AddPhoneAuthenticated(deviceID, conn, "", true)
+}
+
+// AddPhoneAuthenticated records the independently revocable phone identity.
+// Admin/dev bypass sockets are deliberately not associated with a phone ID.
+func (cm *ConnectionManager) AddPhoneAuthenticated(deviceID string, conn *websocket.Conn, phoneID string, adminBypass bool) {
 	cm.mu.Lock()
 	cm.phoneConns[deviceID] = append(cm.phoneConns[deviceID], conn)
+	cm.phonePrincipals[conn] = phonePrincipal{PhoneID: phoneID, AdminBypass: adminBypass}
 	out, exists := cm.phoneOutbounds[conn]
 	if !exists {
 		out = newPhoneOutbound()
@@ -327,6 +406,7 @@ func (cm *ConnectionManager) RemovePhone(deviceID string, conn *websocket.Conn) 
 	if !stillUsed {
 		stopped = cm.phoneOutbounds[conn]
 		delete(cm.phoneOutbounds, conn)
+		delete(cm.phonePrincipals, conn)
 	}
 	cm.mu.Unlock()
 	stopped.close()
@@ -354,6 +434,26 @@ func (cm *ConnectionManager) ResubscribePhone(deviceID string, conn *websocket.C
 	if !exists {
 		go cm.phoneWriter(conn, out)
 	}
+}
+
+// ClosePhonesByPrincipal disconnects only live sockets authenticated as the
+// selected phone. Admin bypass and unrelated phone sockets remain connected.
+func (cm *ConnectionManager) ClosePhonesByPrincipal(phoneID string) int {
+	if phoneID == "" {
+		return 0
+	}
+	cm.mu.RLock()
+	conns := make([]*websocket.Conn, 0)
+	for conn, principal := range cm.phonePrincipals {
+		if !principal.AdminBypass && principal.PhoneID == phoneID {
+			conns = append(conns, conn)
+		}
+	}
+	cm.mu.RUnlock()
+	for _, conn := range conns {
+		cm.dropPhone(conn)
+	}
+	return len(conns)
 }
 
 func withoutPhoneConn(conns []*websocket.Conn, target *websocket.Conn) []*websocket.Conn {
@@ -564,10 +664,21 @@ func (cm *ConnectionManager) dropPhone(conn *websocket.Conn) {
 	}
 	out := cm.phoneOutbounds[conn]
 	delete(cm.phoneOutbounds, conn)
+	delete(cm.phonePrincipals, conn)
 	cm.mu.Unlock()
 
 	out.close()
 	_ = conn.Close()
+}
+
+// PhoneSubscriptionCounts reports live phone sockets and outbound writers.
+func (cm *ConnectionManager) PhoneSubscriptionCounts(deviceID string) (phones, outbounds int) {
+	if cm == nil {
+		return 0, 0
+	}
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return len(cm.phoneConns[deviceID]), len(cm.phoneOutbounds)
 }
 
 // IsDaemonOnline checks if a daemon is currently connected.

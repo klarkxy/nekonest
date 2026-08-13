@@ -1,4 +1,4 @@
-package ws
+package relaycore
 
 import (
 	"crypto/rand"
@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/klarkxy/nekonest/relaycore/protocol"
 )
 
 const (
@@ -136,20 +138,6 @@ func (s *Server) handleAttachmentUpload(w http.ResponseWriter, r *http.Request) 
 		safeName = "file" + ext
 	}
 
-	dir := s.attachmentsDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	// Prune old attachments opportunistically (quota / disk safety).
-	go pruneAttachments(dir, 7*24*time.Hour, 2000)
-
-	diskPath := filepath.Join(dir, id+ext)
-	if err := os.WriteFile(diskPath, data, 0o600); err != nil {
-		http.Error(w, "write failed", http.StatusInternalServerError)
-		return
-	}
-
 	meta := attachmentMeta{
 		ID:        id,
 		Key:       key,
@@ -158,8 +146,32 @@ func (s *Server) handleAttachmentUpload(w http.ResponseWriter, r *http.Request) 
 		Size:      int64(len(data)),
 		DeviceID:  r.FormValue("device_id"),
 		SessionID: r.FormValue("session_id"),
-		Created:   time.Now().Unix(),
+		Created:   s.clock.Now().Unix(),
 		Ext:       ext,
+	}
+	if s.attachments != nil {
+		if err := s.attachments.Put(r.Context(), Attachment{
+			ID: id, Key: key, Name: safeName, MIME: mime, Size: int64(len(data)),
+			DeviceID: meta.DeviceID, SessionID: meta.SessionID, Created: meta.Created,
+		}, data); err != nil {
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		urlPath := s.attachmentURL(id, key)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "url": urlPath, "name": safeName, "mime": mime, "size": len(data), "key": key})
+		return
+	}
+	dir := s.attachmentsDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	go pruneAttachments(dir, 7*24*time.Hour, 2000)
+	diskPath := filepath.Join(dir, id+ext)
+	if err := os.WriteFile(diskPath, data, 0o600); err != nil {
+		http.Error(w, "write failed", http.StatusInternalServerError)
+		return
 	}
 	mb, _ := json.Marshal(meta)
 	// Meta must not collide with JSON attachment bodies (id.json).
@@ -169,7 +181,7 @@ func (s *Server) handleAttachmentUpload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	urlPath := fmt.Sprintf("/api/attachments/%s?k=%s", id, key)
+	urlPath := s.attachmentURL(id, key)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":   id,
@@ -181,12 +193,35 @@ func (s *Server) handleAttachmentUpload(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (s *Engine) attachmentURL(id, capabilityKey string) string {
+	if s.attachmentURLs != nil {
+		return s.attachmentURLs.BuildAttachmentURL(id, capabilityKey)
+	}
+	return fmt.Sprintf("/api/attachments/%s?k=%s", id, capabilityKey)
+}
+
 func (s *Server) handleAttachmentGet(w http.ResponseWriter, r *http.Request, id string) {
 	if id == "" || strings.Contains(id, "/") || strings.Contains(id, "..") {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	key := r.URL.Query().Get("k")
+	if s.attachments != nil {
+		meta, body, err := s.attachments.Get(r.Context(), id)
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		defer body.Close()
+		if !s.attachmentGetAuthorized(r, key, meta.Key, meta.DeviceID) {
+			WriteAPIError(w, stableError(protocol.ServiceErrorPhoneCredentialInvalid, "attachment credential invalid", false, http.StatusUnauthorized))
+			return
+		}
+		w.Header().Set("Content-Type", meta.MIME)
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		_, _ = io.Copy(w, body)
+		return
+	}
 	dir := s.attachmentsDir()
 	mb, err := os.ReadFile(filepath.Join(dir, id+".meta.json"))
 	if err != nil {
@@ -203,24 +238,8 @@ func (s *Server) handleAttachmentGet(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	authed := false
-	if s.phoneSecret == "" {
-		authed = true
-	} else if key != "" && subtleConstEq(key, meta.Key) {
-		authed = true // capability URL for daemon download
-	} else {
-		cred := phoneSecretFromRequest(r)
-		if secureEqual(cred, s.phoneSecret) {
-			authed = true
-		} else if auth, err := s.db.ValidatePhoneToken(cred); err == nil {
-			// Phone token: require grant when attachment is device-scoped.
-			if meta.DeviceID == "" || s.phoneMayAccessDevice(auth, meta.DeviceID) {
-				authed = true
-			}
-		}
-	}
-	if !authed {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if !s.attachmentGetAuthorized(r, key, meta.Key, meta.DeviceID) {
+		WriteAPIError(w, stableError(protocol.ServiceErrorPhoneCredentialInvalid, "attachment credential invalid", false, http.StatusUnauthorized))
 		return
 	}
 
@@ -252,6 +271,27 @@ func (s *Server) handleAttachmentGet(w http.ResponseWriter, r *http.Request, id 
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, dispName))
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	http.ServeContent(w, r, meta.Name, time.Unix(meta.Created, 0), f)
+}
+
+func (s *Engine) attachmentGetAuthorized(r *http.Request, presentedKey, capabilityKey, deviceID string) bool {
+	if s.phoneSecret == "" {
+		return true
+	}
+	if presentedKey != "" && subtleConstEq(presentedKey, capabilityKey) {
+		return true
+	}
+	cred := phoneSecretFromRequest(r)
+	if cred == "" {
+		return false
+	}
+	if secureEqual(cred, s.phoneSecret) {
+		return true
+	}
+	auth, err := s.db.ValidatePhoneToken(cred)
+	if err != nil {
+		return false
+	}
+	return deviceID == "" || s.phoneMayAccessDevice(auth, deviceID)
 }
 
 func randomHex(n int) (string, error) {

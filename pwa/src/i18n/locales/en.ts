@@ -26,6 +26,7 @@ export default {
     session: 'Thread',
     pair: 'Pair PC',
     setup: 'Phone key',
+    handoffError: 'Cloud link',
     sep: ' · '
   },
   common: {
@@ -55,6 +56,13 @@ export default {
     enter: 'Enter nest',
     hint: 'Your phone key was set at deploy.'
   },
+  handoff: {
+    eyebrow: 'Cloud handoff',
+    title: 'This link could not be used',
+    fallback: 'Return to NekoNest Cloud and request a fresh link.',
+    returnCloud: 'Return to Cloud',
+    openSetup: 'Open self-hosted setup'
+  },
   deviceList: {
     eyebrow: 'Agents on watch',
     intro: 'Return to familiar workspaces and continue threads already open at home.',
@@ -64,6 +72,7 @@ export default {
     authBody: 'Reset the phone key and confirm it matches the one saved at deploy.',
     transportTitle: 'Transport mode mismatch.',
     confirmOpenTransport: 'Allow open relay',
+    serviceAction: 'Open service account page',
     sectionKicker: 'Your nest',
     sectionTitle: 'Choose a PC',
     deviceCount: '{n}',

@@ -4,34 +4,22 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	corestore "github.com/klarkxy/nekonest/relaycore/store"
 )
 
 const (
-	PromptRegistered    = "registered"
-	PromptPending       = "pending"
-	PromptAccepted      = "accepted"
-	PromptFailed        = "failed"
-	PromptIndeterminate = "indeterminate"
+	PromptRegistered    = corestore.PromptRegistered
+	PromptPending       = corestore.PromptPending
+	PromptAccepted      = corestore.PromptAccepted
+	PromptFailed        = corestore.PromptFailed
+	PromptIndeterminate = corestore.PromptIndeterminate
 )
 
-var ErrPromptCommandConflict = errors.New("client_msg_id already belongs to a different prompt")
+var ErrPromptCommandConflict = corestore.ErrPromptCommandConflict
 
 // PromptCommand is the durable idempotency record for one phone prompt.
-type PromptCommand struct {
-	DeviceID           string
-	ClientMsgID        string
-	SessionID          string
-	Prompt             string
-	AttachmentsJSON    string
-	SealedEnvelopeJSON string
-	Status             string
-	Error              string
-	Outcome            string
-	RetryAllowed       bool
-	CommitSent         bool
-	CreatedAt          int64
-	UpdatedAt          int64
-}
+type PromptCommand = corestore.PromptCommand
 
 // RegisterPromptCommand inserts a new registered command. When retryFailed is
 // explicitly true, a terminal failed command with the exact same immutable

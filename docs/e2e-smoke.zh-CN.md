@@ -14,10 +14,10 @@ GitHub Release。
 
 | 模式 | 环境变量 | 何时用 |
 |---|---|---|
-| **密封（新窝默认）** | 新 DB 的 Server 不设模式；Daemon 注册时持久化返回值；PWA 读取 `/health` | QR 配对 + key package 后的正常新安装 |
-| **开放（管理员选择 / 旧窝）** | 只在首次创建 open DB 时设 `NEKONEST_TRANSPORT_MODE=open`，或保留现有 open DB/config | 接受 VPS 可见明文的可信中继环境 |
+| **密封（新乐园默认）** | 新 DB 的 Server 不设模式；Daemon 注册时持久化返回值；PWA 读取 `/health` | QR 配对 + key package 后的正常新安装 |
+| **开放（管理员选择 / 旧乐园）** | 只在首次创建 open DB 时设 `NEKONEST_TRANSPORT_MODE=open`，或保留现有 open DB/config | 接受 VPS 可见明文的可信中继环境 |
 
-一窝一种持久化模式。初始化后环境/构建覆盖只作为断言；不匹配则拒绝启动/连接（禁止 sealed→open 自动降级）。
+每个乐园只有一种持久化模式。初始化后环境/构建覆盖只作为断言；不匹配则拒绝启动/连接（禁止 sealed→open 自动降级）。
 
 ## 前置条件（开放模式）
 
@@ -34,7 +34,7 @@ GitHub Release。
 
 ## A. 开放模式核心路径
 
-1. 打开 PWA，输入窝 admin 密钥。  
+1. 打开 PWA，输入乐园 admin 密钥。
 2. 配对：主机 `nekonest-daemon -pair gen`；粘贴 **QR JSON**（推荐）或 6 位码；与 PC 屏幕核对 **指纹**。  
 3. 设备列表显示主机 **在线**；页面顶部的网页 / Server 版本一致，每张设备卡片显示该机器自己的 Daemon 版本。故意使用旧 PWA 时显示“立即刷新”，只有旧 Daemon 所在机器提示更新。
 4. 主机侧打开/使用 agent，确保有近期线程。  
@@ -89,7 +89,7 @@ GitHub Release。
 2. 对隔离的 1.1 fixture 确认旧版发送/中断仍可用；移除生产者版本，或使用缺字段的 1.2，控件必须保持关闭。
 3. 在每条可靠且已安装路径排入两条提示词：成功按 FIFO 自动前进；失败/中断暂停后续；重启把未确认 running 项变成 `blocked_indeterminate`；显式跳过后继续且不重放该 `client_msg_id`。
 4. 原生开线程分别覆盖首提示词成功/失败 × 所有权有/无四象限；只有双正向可成为 `thread_owned`，长首轮不得被 PWA 计时器终止。
-5. 维护中的生产窝保持其已持久传输模式；sealed 验收只使用隔离的新数据目录，并扫描 Server 数据库/日志，确认无提示词、响应、路径、审批或附件明文。
+5. 维护中的生产乐园保持其已持久传输模式；sealed 验收只使用隔离的新数据目录，并扫描 Server 数据库/日志，确认无提示词、响应、路径、审批或附件明文。
 
 ## 相关
 

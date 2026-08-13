@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	corestore "github.com/klarkxy/nekonest/relaycore/store"
 	"github.com/nekonest/server/internal/protocol"
 	_ "modernc.org/sqlite"
 )
@@ -455,11 +456,7 @@ func (db *DB) SetDevicePublicKeys(deviceID, ed25519Pub, x25519Pub, fingerprint s
 }
 
 // DevicePublicKeys is the public E2E material for a host daemon.
-type DevicePublicKeys struct {
-	Ed25519Public string
-	X25519Public  string
-	Fingerprint   string
-}
+type DevicePublicKeys = corestore.DevicePublicKeys
 
 // GetDevicePublicKeys returns stored daemon public keys (may be empty).
 func (db *DB) GetDevicePublicKeys(deviceID string) (*DevicePublicKeys, error) {

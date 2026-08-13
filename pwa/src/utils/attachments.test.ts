@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isImageMime, pickAndUpload, prepareFile, uploadAttachment } from './attachments'
+import { setPhoneToken, setRouteHandle } from '@/api/http'
+import { setRuntimeConfigForTests } from '@/config/runtimeEndpoint'
 
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  setRuntimeConfigForTests(undefined)
   localStorage.clear()
 })
 
@@ -59,15 +62,39 @@ describe('uploadAttachment', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/attachments')
-    expect(init.headers).toMatchObject({
-      Authorization: 'Bearer test-secret',
-      'X-Neko-Secret': 'test-secret'
-    })
+    const headers = new Headers(init.headers)
+    expect(headers.get('Authorization')).toBe('Bearer test-secret')
+    expect(headers.get('X-Neko-Secret')).toBe('test-secret')
+    expect(headers.has('Content-Type')).toBe(false)
     expect(init.body).toBeInstanceOf(FormData)
     const body = init.body as FormData
     expect(body.get('device_id')).toBe('device-1')
     expect(body.get('session_id')).toBe('session-1')
     expect(body.get('file')).toBeInstanceOf(File)
+  })
+
+  it('uses the independent phone token and route handle for managed multipart uploads', async () => {
+    setRuntimeConfigForTests({ api_base: 'https://connect.example.cn', managed: true })
+    setPhoneToken('phone-token')
+    setRouteHandle('route-handle')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: 'managed',
+      url: '/api/attachments/managed',
+      name: 'note.txt',
+      mime: 'text/plain',
+      size: 4
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await uploadAttachment(new File(['note'], 'note.txt', { type: 'text/plain' }))
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://connect.example.cn/api/attachments')
+    const headers = new Headers(init.headers)
+    expect(headers.get('Authorization')).toBe('Bearer phone-token')
+    expect(headers.get('X-Neko-Phone-Token')).toBe('phone-token')
+    expect(headers.get('X-Neko-Route-Handle')).toBe('route-handle')
+    expect(headers.has('X-Neko-Secret')).toBe(false)
   })
 
   it.each([

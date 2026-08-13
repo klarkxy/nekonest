@@ -143,6 +143,7 @@ Wire types include `approve`, `deny`, and `interrupt`. Real behavior depends on 
 
 ```text
 protocol/     JSON schema (manual)
+relaycore/    reusable single-nest data-plane Engine and public ports
 server/       VPS service module (github.com/nekonest/server)
 daemon/       Windows daemon module (github.com/nekonest/daemon)
   internal/adapters/   per-agent native store + normalize
@@ -151,9 +152,9 @@ pwa/          Vue 3 + TS + Pinia
 docs/         operator and maintainer docs
 ```
 
-Go module paths are `github.com/nekonest/server` and `github.com/nekonest/daemon` (stable; do not “fix” solely because the GitHub repo is `klarkxy/nekonest`).
+Go module paths are `github.com/klarkxy/nekonest/relaycore`, `github.com/nekonest/server`, and `github.com/nekonest/daemon`. The two legacy application module paths remain stable; do not “fix” them solely because the GitHub repo is `klarkxy/nekonest`.
 
-## Protocol 1.2 control plane
+## Protocol 1.2+ control plane
 
 - The daemon is the capability producer. The Server preserves that producer protocol version in live forwarding and rebuilt open-mode snapshots instead of restamping the catalog as its own release.
 - A turn is bound to one control generation, public session id, `client_msg_id`, and native request id. Accepted/success/failure/interrupted/indeterminate events from an older generation are rejected, and interrupt must echo the current advertised generation plus `client_msg_id` under the same per-session dispatch lock.

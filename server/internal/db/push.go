@@ -1,18 +1,15 @@
 package db
 
-import "time"
+import (
+	"time"
+
+	corestore "github.com/klarkxy/nekonest/relaycore/store"
+)
 
 const maxPushSubscriptionsPerDevice = 32
 
 // PushSubscription represents a Web Push subscription.
-type PushSubscription struct {
-	ID       int64  `json:"id"`
-	DeviceID string `json:"device_id"`
-	PhoneID  string `json:"phone_id,omitempty"`
-	Endpoint string `json:"endpoint"`
-	P256DH   string `json:"p256dh"`
-	Auth     string `json:"auth"`
-}
+type PushSubscription = corestore.PushSubscription
 
 // SavePushSubscription stores one endpoint mapping per device. A browser reuses
 // the same endpoint while the user subscribes to multiple devices.

@@ -1,6 +1,7 @@
-package ws
+package relaycore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,11 +15,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/nekonest/server/internal/buildinfo"
-	"github.com/nekonest/server/internal/db"
-	"github.com/nekonest/server/internal/opslog"
-	"github.com/nekonest/server/internal/protocol"
-	pushsub "github.com/nekonest/server/internal/push"
+	"github.com/klarkxy/nekonest/relaycore/internal/opslog"
+	"github.com/klarkxy/nekonest/relaycore/protocol"
+	db "github.com/klarkxy/nekonest/relaycore/store"
+	pushsub "github.com/klarkxy/nekonest/relaycore/webpush"
 )
 
 var upgrader = websocket.Upgrader{
@@ -112,12 +112,14 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 	// P2-F: Rate limiting (per IP host, not host:ephemeral-port)
 	clientIP := clientIPKey(r)
 	if !wsRateLimiter.allow(clientIP) {
+		s.auditEvent("relay.ws", "daemon_rate_limited", "daemon websocket rate limit exceeded", nil)
 		opslog.Warn("server.ws", "daemon_rate_limited", "daemon websocket rate limit exceeded")
-		http.Error(w, "too many connections", http.StatusTooManyRequests)
+		WriteAPIError(w, stableError(protocol.ServiceErrorRegistrationRateLimited, "too many connections", true, http.StatusTooManyRequests))
 		return
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	u := s.websocketUpgrader()
+	conn, err := u.Upgrade(w, r, nil)
 	if err != nil {
 		opslog.Error("server.ws", "daemon_upgrade_failed", "daemon websocket upgrade failed", err)
 		return
@@ -142,34 +144,64 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
+	s.ServeDaemonConn(conn, &authMsg)
+}
 
-	if hs := s.negotiateFirstFrame(&authMsg); hs.ErrorCode != "" {
+// ServeDaemonConn accepts a trusted shell's already-upgraded connection and
+// its already-read first frame. The frame is authenticated exactly once; the
+// subsequent loop starts at the next WebSocket frame.
+func (s *Engine) ServeDaemonConn(conn *websocket.Conn, authMsg *protocol.NekoMessage) {
+	if conn == nil || authMsg == nil || authMsg.Type != protocol.MsgRegisterDevice {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return
+	}
+
+	if hs := s.negotiateFirstFrame(authMsg); hs.ErrorCode != "" {
 		s.writeHandshakeError(conn, hs)
 		return
 	}
 
+	if authMsg.Payload == nil {
+		authMsg.Payload = map[string]any{}
+	}
 	deviceID, _ := authMsg.Payload["device_id"].(string)
 	token, _ := authMsg.Payload["token"].(string)
 	daemonVersion := reportedComponentVersion(authMsg.Payload, "daemon_version")
 
 	if !s.db.ValidateDeviceToken(deviceID, token) {
-		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
-			Type:      protocol.MsgError,
-			Timestamp: time.Now().Unix(),
-			Payload:   map[string]any{"message": "invalid token"},
-		}))
+		s.auditEvent("relay.auth", "device_auth_rejected", "device credential rejected", nil)
+		s.writeWSAPIError(conn, stableError(protocol.ServiceErrorDeviceCredentialInvalid, "invalid device token", false, http.StatusUnauthorized))
 		conn.Close()
 		return
 	}
 	conn.SetReadLimit(authenticatedReadLimit)
 
-	// Send auth success with negotiated protocol metadata.
+	// Reserve the live identity before acknowledging authentication. Shared
+	// relays reject a copied credential while standalone keeps replacement.
 	hs := protocol.NegotiateHandshake(
 		authMsg.ProtocolVersion,
 		string(authMsg.TransportMode),
 		s.TransportMode(),
 		protocol.CurrentProtocolMinor,
 	)
+	dc, addErr := s.connMgr.TryAddDaemonVersioned(deviceID, conn, daemonVersion)
+	if addErr != nil {
+		s.auditEvent("relay.auth", "duplicate_device_rejected", "duplicate device connection rejected", addErr)
+		s.writeWSAPIError(conn, APIError{
+			ServiceErrorPayload: protocol.ServiceErrorPayload{
+				ErrorCode:         protocol.ServiceErrorDeviceAlreadyConnected,
+				Message:           "device identity is already connected",
+				Retryable:         true,
+				RetryAfterSeconds: 15,
+			},
+			HTTPStatus: http.StatusConflict,
+		})
+		_ = conn.Close()
+		return
+	}
+
 	_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 		ProtocolVersion: hs.NegotiatedVersion,
 		Type:            protocol.MsgAuthResponse,
@@ -179,9 +211,9 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 			"status":           "authenticated",
 			"protocol_version": hs.NegotiatedVersion,
 			"transport_mode":   string(hs.TransportMode),
-			"server_version":   buildinfo.Version,
+			"server_version":   s.AppVersion(),
 			"daemon_version":   daemonVersion,
-			"update_required":  daemonVersion != "" && daemonVersion != buildinfo.Version,
+			"update_required":  daemonVersion != "" && daemonVersion != s.AppVersion(),
 		},
 	}))
 
@@ -192,7 +224,6 @@ func (s *Server) HandleDaemonWS(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	dc := s.connMgr.AddDaemonVersioned(deviceID, conn, daemonVersion)
 	dc.ProtocolVersion = hs.NegotiatedVersion
 	s.replayPromptCommits(dc)
 
@@ -529,8 +560,9 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 	// P2-F: Rate limiting (per IP host, not host:ephemeral-port)
 	clientIP := clientIPKey(r)
 	if !wsRateLimiter.allow(clientIP) {
+		s.auditEvent("relay.ws", "phone_rate_limited", "phone websocket rate limit exceeded", nil)
 		opslog.Warn("server.ws", "phone_rate_limited", "phone websocket rate limit exceeded")
-		http.Error(w, "too many connections", http.StatusTooManyRequests)
+		WriteAPIError(w, stableError(protocol.ServiceErrorRegistrationRateLimited, "too many connections", true, http.StatusTooManyRequests))
 		return
 	}
 
@@ -541,7 +573,8 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	u := s.websocketUpgrader()
+	conn, err := u.Upgrade(w, r, nil)
 	if err != nil {
 		opslog.Error("server.ws", "phone_upgrade_failed", "phone websocket upgrade failed", err)
 		return
@@ -567,6 +600,19 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
+	s.ServePhoneConn(conn, r, &subscribeMsg)
+}
+
+// ServePhoneConn is the trusted-shell equivalent of HandlePhoneWS. The request
+// carries header/query credentials while first is the already-consumed
+// subscribe frame used by stable ingress to select the Engine.
+func (s *Engine) ServePhoneConn(conn *websocket.Conn, r *http.Request, subscribeMsg *protocol.NekoMessage) {
+	if conn == nil || r == nil || subscribeMsg == nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return
+	}
 	if subscribeMsg.Type != protocol.MsgSubscribe {
 		_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
 			Type:      protocol.MsgError,
@@ -576,7 +622,7 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hs := s.negotiateFirstFrame(&subscribeMsg)
+	hs := s.negotiateFirstFrame(subscribeMsg)
 	if hs.ErrorCode != "" {
 		s.writeHandshakeError(conn, hs)
 		return
@@ -598,14 +644,12 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		}
 		if secureEqual(secret, s.phoneSecret) {
 			phoneAuth = &db.PhoneAuth{AdminBypass: true, Name: "admin"}
+
 		} else if auth, err := s.db.ValidatePhoneToken(secret); err == nil {
 			phoneAuth = auth
 		} else {
-			_ = conn.WriteJSON(s.stampEnvelope(&protocol.NekoMessage{
-				Type:      protocol.MsgError,
-				Timestamp: time.Now().Unix(),
-				Payload:   map[string]any{"message": "unauthorized"},
-			}))
+			s.auditEvent("relay.auth", "phone_auth_rejected", "phone credential rejected", nil)
+			s.writeWSAPIError(conn, stableError(protocol.ServiceErrorPhoneCredentialInvalid, "phone credential invalid", false, http.StatusUnauthorized))
 			conn.Close()
 			return
 		}
@@ -663,7 +707,12 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(authenticatedReadLimit)
 
-	s.connMgr.AddPhone(deviceID, conn)
+	phoneID := ""
+	adminBypass := phoneAuth == nil || phoneAuth.AdminBypass
+	if phoneAuth != nil {
+		phoneID = phoneAuth.PhoneID
+	}
+	s.connMgr.AddPhoneAuthenticated(deviceID, conn, phoneID, adminBypass)
 	currentDevice := deviceID
 	defer func() {
 		s.connMgr.RemovePhone(currentDevice, conn)
@@ -689,7 +738,7 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Read loop for phone commands
-	currentDevice = s.phoneReadLoop(conn, currentDevice, hs.NegotiatedVersion)
+	_ = s.phoneReadLoop(conn, currentDevice, hs.NegotiatedVersion)
 }
 
 // pushPhoneSnapshot sends session_list + device_list for the subscribed device.
@@ -898,6 +947,7 @@ func subscribeRequestID(payload map[string]any) (string, bool) {
 		return "", false
 	}
 	return value, true
+
 }
 
 func subscribeRequestsFreshSessionCatalog(payload map[string]any) bool {
@@ -918,11 +968,18 @@ func (s *Server) writeSubscribeAck(
 		"protocol_version": protocolVersion,
 		"transport_mode":   string(s.TransportMode()),
 		"pwa_version":      pwaVersion,
-		"server_version":   buildinfo.Version,
+		"server_version":   s.AppVersion(),
 		"daemon_version":   s.connMgr.GetDaemonVersion(deviceID),
-		"refresh_required": pwaVersion != "" && pwaVersion != buildinfo.Version,
+		"refresh_required": pwaVersion != "" && pwaVersion != s.AppVersion(),
 	}
 	s.connMgr.SafeWritePhone(conn, ack)
+}
+
+// DeliverPhoneMessage injects an already-authenticated phone frame. Trusted
+// shells and integration tests use it after the first subscribe has been
+// consumed, so sealed retries keep the exact stored envelope.
+func (s *Engine) DeliverPhoneMessage(deviceID string, msg *protocol.NekoMessage) {
+	s.handlePhoneMessage(deviceID, msg)
 }
 
 func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) {
@@ -1198,6 +1255,7 @@ func (s *Server) handleSealedPrompt(deviceID string, msg *protocol.NekoMessage) 
 	}
 	rawClientMsgID := strings.TrimSpace(msg.ClientMsgID)
 	clientMsgID := sanitizeClientMsgID(rawClientMsgID)
+
 	if clientMsgID == "" {
 		s.broadcastPromptFailure(deviceID, msg.SessionID, rawClientMsgID, "valid top-level client_msg_id required for sealed prompt")
 		return
@@ -1282,7 +1340,7 @@ func (s *Server) acceptAttentionEvent(deviceID string, msg *protocol.NekoMessage
 	if eventID == "" || len(eventID) > 256 {
 		return false
 	}
-	accepted, err := s.db.AcceptAttentionEvent(deviceID, eventID, time.Now())
+	accepted, err := s.db.AcceptAttentionEvent(deviceID, eventID, s.clock.Now())
 	if err != nil {
 		opslog.Error("server.ws", "attention_event_persist_failed", "attention event persistence failed", err)
 		return false
@@ -1498,6 +1556,7 @@ func promptCommittedMessage(cmd *db.PromptCommand) *protocol.NekoMessage {
 	)
 	msg.ClientMsgID = cmd.ClientMsgID
 	msg.Payload = map[string]any{"client_msg_id": cmd.ClientMsgID}
+
 	return msg
 }
 
@@ -1615,6 +1674,14 @@ func (s *Server) sendPushNotification(deviceID, sessionID, title, body string) {
 			Auth:     sub.Auth,
 		})
 	}
+	if s.pushSink != nil {
+		coreSubs := make([]db.PushSubscription, 0, len(subs))
+		for _, sub := range subs {
+			coreSubs = append(coreSubs, *sub)
+		}
+		s.pushSink.Send(context.Background(), coreSubs, PushMessage{DeviceID: deviceID, SessionID: sessionID, Title: title, Body: body, URL: url}, func(endpoint string) { _ = s.db.DeletePushSubscription(endpoint) })
+		return
+	}
 	opslog.Info("server.push", "delivery_requested", "push delivery requested", "subscription_count", len(payload))
 	pushsub.Send(payload, title, body, url, deviceID, sessionID, func(endpoint string) {
 		if err := s.db.DeletePushSubscription(endpoint); err != nil {
@@ -1622,36 +1689,6 @@ func (s *Server) sendPushNotification(deviceID, sessionID, title, body string) {
 			return
 		}
 		opslog.Info("server.push", "expired_subscription_deleted", "expired push subscription deleted")
-	})
-}
-
-// CORSMiddleware adds CORS headers.
-// When NEKONEST_ALLOWED_ORIGINS is set, only listed origins are accepted.
-func CORSMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-
-		if origin != "" {
-			if !isAllowedOrigin(r, origin) {
-				opslog.Warn("server.http", "cors_origin_rejected", "CORS origin rejected")
-				http.Error(w, "origin not allowed", http.StatusForbidden)
-				return
-			}
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		}
-
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Neko-Secret")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
 	})
 }
 
@@ -1798,6 +1835,7 @@ func sanitizeAttachmentURL(raw string) string {
 		// key is hex from our uploader
 		for _, c := range k {
 			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+
 				return ""
 			}
 		}

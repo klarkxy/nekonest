@@ -32,11 +32,21 @@
 |---|---|
 | Daemon 进程 | 在跑；日志显示已鉴权 device id |
 | 第二实例 | 被 `.daemon.lock` 拒绝——同一配置只能一个进程 |
-| `config.json` | 有效的 `server_url`、`device_id`、`token` |
+| `config.json` | 应有稳定的 `server_url`、`device_id`、`token`。若残留尚未发布的 `control_plane_url`、`activation_poll_path`、`relay_generation` 或 `relay_url`，请重新注册，不要手改配置。 |
 | 网络 | PC 可出站 WSS 到 VPS |
 | Server | 在线；未崩溃重启循环 |
 
 Daemon 启动后，手机列表应在短重连窗口内变为 online。
+
+托管 Cloud 返回 `service_provisioning`，表示稳定 Connect 服务仍在准备该租户。
+保持 Daemon 运行；它会按服务端建议的间隔，在同一服务地址重试 `/ws/daemon`，
+不会轮询控制面 URL，也不会接受新的 Relay URL。凭据无效或其他不可重试响应需要
+走设备恢复流程，不会自动重新注册。
+
+托管 Cloud 轮换设备凭据或注册响应丢失时，先在 Cloud 控制台撤销主机。若
+`identity.json` 仍在，保留它、删除已失效的 `config.json`、升级到会发送
+`registration_proof` 的 Daemon，再使用新的一次性凭证注册。Cloud 只有在验证
+原 Ed25519 私钥持有证明后才恢复同一 host ID；身份文件已丢失时应注册为新主机。
 
 ## 配对码被拒
 
@@ -45,7 +55,7 @@ Daemon 启动后，手机列表应在短重连窗口内变为 online。
 | 新码 | 约 5 分钟过期——运行 `-pair gen` |
 | 位数 | 6 位；PWA 会规范化输入——避免多余空格/字母 |
 | 手机鉴权 | 已用正确手机密钥登录 |
-| 同一窝 | 码由注册到**本** Server 的 daemon 签发 |
+| 同一乐园 | 码由注册到**本** Server 的 daemon 签发 |
 
 ## 无会话 / 目录树为空
 

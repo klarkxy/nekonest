@@ -3,11 +3,16 @@ module github.com/nekonest/server
 go 1.22
 
 require (
+	github.com/klarkxy/nekonest/relaycore v0.1.0
 	github.com/SherClockHolmes/webpush-go v1.3.0
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.9.0
 	modernc.org/sqlite v1.29.0
 )
+
+// First-party in-repo consumer. Isolated server builds (Docker, GOWORK=off)
+// must compile against the sibling module rather than a published proxy copy.
+replace github.com/klarkxy/nekonest/relaycore => ../relaycore
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

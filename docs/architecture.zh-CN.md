@@ -58,7 +58,7 @@ NekoNest 三个运行时如何协作，使手机能够续写编码智能体线�
 5. 手机目录仅含最近 7 天有活动的线程，以及有正向信号的运行/等待线程。旧原生记录不删除；只有旧线程的项目会离开当前目录并集，主机端再次活动后恢复。
 6. 发现结果经 server 以 session list/update 等形式推到手机。文件型适配器按路径/大小/mtime 复用小型元数据，只重解析变化文件；发现缓存不保存 transcript 正文。
 
-原生存储仍是权威；VPS 缓存用于中转与窝侧消息持久化，不能替代 agent 数据库。
+原生存储仍是权威；VPS 缓存用于中转与乐园侧消息持久化，不能替代 agent 数据库。
 
 ## 提示词投递路径
 
@@ -95,7 +95,7 @@ PWA 输入框
 
 1. 客户端可能 `fetch_history` / 收到 `session_history`。
 2. Daemon 从**原生**适配器拉历史（默认窗口约 40 条，内容常截断约 4k rune）。
-3. Server 持久化的窝侧消息与实时 `session_message` 在 PWA 用**稳定消息 id** 合并。
+3. Server 持久化的乐园侧消息与实时 `session_message` 在 PWA 用**稳定消息 id** 合并。
 4. 合并只丢弃应丢的 pending outbox / 乐观本地消息，避免重放重复。
 5. CLI **stderr 仅诊断**，不进助手气泡。
 
@@ -143,6 +143,7 @@ subscribe → subscribe_ack → 会话流量 / 提示词
 
 ```text
 protocol/     JSON schema（手动）
+relaycore/    可复用的单 Nest 数据面 Engine 与公开端口
 server/       VPS 模块（github.com/nekonest/server）
 daemon/       Windows daemon 模块（github.com/nekonest/daemon）
   internal/adapters/   各 agent 原生存储 + 归一化
@@ -151,9 +152,9 @@ pwa/          Vue 3 + TS + Pinia
 docs/         运维与贡献者文档
 ```
 
-Go module 路径为 `github.com/nekonest/server` 与 `github.com/nekonest/daemon`（稳定；勿仅因 GitHub 仓库为 `klarkxy/nekonest` 而“修正”）。
+Go module 路径为 `github.com/klarkxy/nekonest/relaycore`、`github.com/nekonest/server` 与 `github.com/nekonest/daemon`。后两个应用 module 路径保持稳定；勿仅因 GitHub 仓库为 `klarkxy/nekonest` 而“修正”。
 
-## 协议 1.2 控制面
+## 协议 1.2+ 控制面
 
 - Daemon 是能力表生产者。Server 在实时转发与 open 模式重建快照中保留生产者协议版本，不把目录重盖章成 Server 自身版本。
 - 每个回合绑定唯一控制 generation、公开 session id、`client_msg_id` 与原生 request id；旧 generation 的 accepted/success/failure/interrupted/indeterminate 事件全部拒绝；中断还必须在同一 session 派发锁内回传当前广告的 generation 与 `client_msg_id`。

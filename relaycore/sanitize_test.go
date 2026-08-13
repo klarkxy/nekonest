@@ -1,4 +1,4 @@
-package ws
+package relaycore
 
 import (
 	"net/http"
@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nekonest/server/internal/protocol"
+	"github.com/klarkxy/nekonest/relaycore/protocol"
 )
 
 func TestSanitizeAttachmentURL(t *testing.T) {
@@ -103,8 +103,8 @@ func TestNormalizeAttachments(t *testing.T) {
 		map[string]any{"url": "/api/attachments/a6"}, // over max 5
 	}
 	out := normalizeAttachments(raw)
-	// max 5 items inspected; bad URLs dropped → 3 kept (a1,a2,a3); a4/a5 not reached after i>=5 break on 6th map...
-	// Loop: 0 a1, 1 bad, 2 a2, 3 skip, 4 a3, 5 a4 break before process → 3 good
+	// max 5 items inspected; bad URLs dropped 鈫?3 kept (a1,a2,a3); a4/a5 not reached after i>=5 break on 6th map...
+	// Loop: 0 a1, 1 bad, 2 a2, 3 skip, 4 a3, 5 a4 break before process 鈫?3 good
 	if len(out) != 3 {
 		t.Fatalf("len=%d want 3", len(out))
 	}
@@ -220,7 +220,7 @@ func TestIsAllowedOrigin(t *testing.T) {
 	}
 }
 
-func TestSameOriginOnlyTrustsForwardedProtoFromTrustedProxy(t *testing.T) {
+func TestAllowedOriginOnlyTrustsForwardedProtoFromTrustedProxy(t *testing.T) {
 	t.Setenv("NEKONEST_ALLOWED_ORIGINS", "")
 	t.Setenv("NEKONEST_TRUST_PROXY", "1")
 	t.Setenv("NEKONEST_TRUSTED_PROXY_CIDRS", "")

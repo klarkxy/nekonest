@@ -20,6 +20,7 @@ export const useDeviceStore = defineStore('devices', () => {
   const connected = ref(false)
   const authError = ref(false)
   const transportError = ref('')
+  const serviceActionURL = ref('')
   const needsOpenTransportConsent = ref(false)
   const serverVersion = ref('')
 
@@ -65,6 +66,9 @@ export const useDeviceStore = defineStore('devices', () => {
       connected.value = status === 'connected'
       authError.value = status === 'auth_error'
       transportError.value = status === 'transport_error' ? ws.getTransportError() : ''
+      serviceActionURL.value = status === 'auth_error' || status === 'transport_error'
+        ? ws.getServiceActionURL()
+        : ''
       needsOpenTransportConsent.value = status === 'transport_error' && openTransportConsentRequired()
     })
 
@@ -81,6 +85,7 @@ export const useDeviceStore = defineStore('devices', () => {
   function confirmOpenTransport() {
     acknowledgeOpenTransport()
     transportError.value = ''
+    serviceActionURL.value = ''
     needsOpenTransportConsent.value = false
     nekoWS().connect()
   }
@@ -90,6 +95,7 @@ export const useDeviceStore = defineStore('devices', () => {
     loadError.value = ''
     authError.value = false
     transportError.value = ''
+    serviceActionURL.value = ''
     try {
       const res = await apiFetch('/api/devices')
       if (res.status === 401) {
@@ -134,6 +140,7 @@ export const useDeviceStore = defineStore('devices', () => {
     connected,
     authError,
     transportError,
+    serviceActionURL,
     needsOpenTransportConsent,
     frontendVersion: APP_VERSION,
     serverVersion,

@@ -1,0 +1,9 @@
+go 1.22
+
+use (
+	./daemon
+	./relaycore
+	./server
+)
+
+replace github.com/klarkxy/nekonest/relaycore v0.1.0 => ./relaycore

@@ -19,10 +19,15 @@ FROM --platform=$BUILDPLATFORM golang:1.22-alpine@sha256:1699c10032ca2582ec89a24
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG VERSION=0.0.0-dev
+WORKDIR /src
+COPY relaycore/go.mod relaycore/go.sum ./relaycore/
+COPY server/go.mod server/go.sum ./server/
+ENV GOWORK=off
+RUN --mount=type=cache,target=/go/pkg/mod \
+    cd /src/server && go mod download
+COPY relaycore/ ./relaycore/
+COPY server/ ./server/
 WORKDIR /src/server
-COPY server/go.mod server/go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY server/ ./
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -trimpath \

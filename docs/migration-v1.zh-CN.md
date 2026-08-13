@@ -11,7 +11,7 @@
 
 ## 前置条件
 
-1. 停止窝服务器及所有会写入该库的 daemon。
+1. 停止乐园服务器及所有会写入该库的 daemon。
 2. 记录 `NEKONEST_ADMIN_SECRET` / 旧名 `NEKONEST_PHONE_SECRET` 与 bootstrap token。
 3. 为 `data/` 全量拷贝预留磁盘。
 
@@ -38,11 +38,11 @@ export NEKONEST_ADMIN_SECRET=...   # 原 NEKONEST_PHONE_SECRET
 export NEKONEST_BOOTSTRAP_TOKEN=...
 ```
 
-启动 Server；让每个 Daemon 注册/更新，使 `config.json` 持久化 sealed 模式；运行 `nekonest-daemon -doctor`，生成新配对码并让手机重配。未执行本迁移的已有 open 窝仍保持 open；只改环境变量会被明确拒绝。
+启动 Server；让每个 Daemon 注册/更新，使 `config.json` 持久化 sealed 模式；运行 `nekonest-daemon -doctor`，生成新配对码并让手机重配。未执行本迁移的已有 open 乐园仍保持 open；只改环境变量会被明确拒绝。
 
 ## 回滚
 
-仅在仍使用 **v0.1** 二进制时，可将备份树覆盖回 `data/`。v1 客户端无法使用旧协议。已清除的窝侧明文不会自动导入密封历史；对话内容应从主机 **原生 agent store** 恢复。
+仅在仍使用 **v0.1** 二进制时，可将备份树覆盖回 `data/`。v1 客户端无法使用旧协议。已清除的乐园侧明文不会自动导入密封历史；对话内容应从主机 **原生 agent store** 恢复。
 
 ## 威胁模型摘要（迁移后）
 

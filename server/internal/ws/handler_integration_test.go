@@ -13,28 +13,80 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/klarkxy/nekonest/relaycore"
 	"github.com/nekonest/server/internal/buildinfo"
 	"github.com/nekonest/server/internal/db"
 	"github.com/nekonest/server/internal/protocol"
 )
 
-func newWebSocketTestServer(t *testing.T, phoneSecret string) (*Server, *httptest.Server, string) {
+func stringPayload(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	value, _ := payload[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func readDaemonPromptFrame(t *testing.T, conn *websocket.Conn, clientMsgID string) protocol.NekoMessage {
 	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		var frame protocol.NekoMessage
+		if err := conn.ReadJSON(&frame); err != nil {
+			continue
+		}
+		if frame.Type == protocol.MsgRefreshSessions {
+			continue
+		}
+		if frame.Type == protocol.MsgSendPrompt && frame.ClientMsgID == clientMsgID {
+			return frame
+		}
+		t.Fatalf("unexpected daemon frame while waiting for %s: %#v", clientMsgID, frame)
+	}
+	t.Fatalf("timed out waiting for daemon prompt %s", clientMsgID)
+	return protocol.NekoMessage{}
+}
+
+func promptClientMsgID(msg *protocol.NekoMessage) string {
+	if msg == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(msg.ClientMsgID); id != "" {
+		return id
+	}
+	return stringPayload(msg.Payload, "client_msg_id")
+}
+
+func testDB(t *testing.T) *db.DB {
+	t.Helper()
+	database, err := db.New(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+func newWebSocketTestServer(t *testing.T, phoneSecret string) (*relaycore.Engine, *httptest.Server, string, *db.DB) {
+	t.Helper()
+	restore := relaycore.OverrideWSRateLimiter(100, time.Minute)
+	t.Cleanup(restore)
 	database := testDB(t)
 	token, err := database.RegisterDevice("dev1", "PC")
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewWithSecret(database, phoneSecret)
+	server := NewCore(database, phoneSecret)
 	// Integration tests exercise plaintext application frames under open mode.
 	if err := server.SetTransportMode(protocol.TransportOpen); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
-	httpServer := httptest.NewServer(CORSMiddleware(mux))
+	httpServer := httptest.NewServer(server.CORSMiddleware(mux))
 	t.Cleanup(httpServer.Close)
-	return server, httpServer, token
+	return server, httpServer, token, database
 }
 
 // v1Envelope stamps protocol negotiation fields for open-mode test clients.
@@ -134,17 +186,13 @@ func connectDaemonForDevice(t *testing.T, httpServer *httptest.Server, token, de
 
 func connectDaemonReady(
 	t *testing.T,
-	server *Server,
+	server *relaycore.Engine,
 	httpServer *httptest.Server,
 	token string,
 ) *websocket.Conn {
 	t.Helper()
 	online := make(chan string, 1)
-	previous := server.connMgr.onDeviceUp
-	server.connMgr.OnDeviceUp(func(deviceID, appVersion string) {
-		if previous != nil {
-			previous(deviceID, appVersion)
-		}
+	server.Connections().WatchDeviceUp(func(deviceID, appVersion string) {
 		online <- deviceID
 	})
 	conn := connectDaemon(t, httpServer, token)
@@ -200,11 +248,7 @@ func connectPhone(t *testing.T, httpServer *httptest.Server, secret string, refr
 }
 
 func TestPhoneSubscriptionRequestsFreshDaemonSessionCatalog(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	server, httpServer, token, _ := newWebSocketTestServer(t, "phone-secret")
 	daemon := connectDaemonReady(t, server, httpServer, token)
 	_ = connectPhone(t, httpServer, "phone-secret", true)
 
@@ -221,11 +265,7 @@ func TestPhoneSubscriptionRequestsFreshDaemonSessionCatalog(t *testing.T) {
 }
 
 func TestPhoneResubscriptionRequestsFreshDaemonSessionCatalog(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	server, httpServer, token, _ := newWebSocketTestServer(t, "phone-secret")
 	daemon := connectDaemonReady(t, server, httpServer, token)
 	phone := connectPhone(t, httpServer, "phone-secret")
 
@@ -256,19 +296,15 @@ func TestPhoneResubscriptionRequestsFreshDaemonSessionCatalog(t *testing.T) {
 }
 
 func TestPhoneDeviceSwitchRequestsFreshDaemonSessionCatalog(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	server, httpServer, token, database := newWebSocketTestServer(t, "phone-secret")
 	_ = connectDaemonReady(t, server, httpServer, token)
-	token2, err := server.db.RegisterDevice("dev2", "PC 2")
+	token2, err := database.RegisterDevice("dev2", "PC 2")
 	if err != nil {
 		t.Fatal(err)
 	}
 	daemon2 := connectDaemonForDevice(t, httpServer, token2, "dev2")
 	deadline := time.Now().Add(2 * time.Second)
-	for !server.connMgr.IsDaemonOnline("dev2") {
+	for !server.Connections().IsDaemonOnline("dev2") {
 		if time.Now().After(deadline) {
 			t.Fatal("second daemon did not finish its online transition")
 		}
@@ -303,7 +339,7 @@ func TestPhoneDeviceSwitchRequestsFreshDaemonSessionCatalog(t *testing.T) {
 
 func connectSealedDaemonAndPhone(
 	t *testing.T,
-	server *Server,
+	server *relaycore.Engine,
 	httpServer *httptest.Server,
 	token, secret string,
 ) (*websocket.Conn, *websocket.Conn) {
@@ -323,7 +359,7 @@ func connectSealedDaemonAndPhone(
 		t.Fatalf("sealed daemon auth: %#v err=%v", auth, err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for !server.connMgr.IsDaemonOnline("dev1") {
+	for !server.Connections().IsDaemonOnline("dev1") {
 		if time.Now().After(deadline) {
 			t.Fatal("sealed daemon did not finish its online transition")
 		}
@@ -336,7 +372,7 @@ func connectSealedDaemonAndPhone(
 		t.Fatal(err)
 	}
 	catalogDeadline := time.Now().Add(2 * time.Second)
-	for server.connMgr.GetSealedCatalogSnapshot("dev1") == nil {
+	for server.Connections().GetSealedCatalogSnapshot("dev1") == nil {
 		if time.Now().After(catalogDeadline) {
 			t.Fatal("sealed catalog was not cached")
 		}
@@ -367,11 +403,7 @@ func connectSealedDaemonAndPhone(
 }
 
 func TestComponentVersionsReportRefreshAndDaemonUpdateState(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	server, httpServer, token, _ := newWebSocketTestServer(t, "phone-secret")
 	daemon := connectDaemonReadyWithVersion(t, server, httpServer, token, "0.1.0")
 	defer daemon.Close()
 
@@ -474,17 +506,13 @@ func TestComponentVersionsReportRefreshAndDaemonUpdateState(t *testing.T) {
 
 func connectDaemonReadyWithVersion(
 	t *testing.T,
-	server *Server,
+	server *relaycore.Engine,
 	httpServer *httptest.Server,
 	token, daemonVersion string,
 ) *websocket.Conn {
 	t.Helper()
 	online := make(chan string, 1)
-	previous := server.connMgr.onDeviceUp
-	server.connMgr.OnDeviceUp(func(deviceID, appVersion string) {
-		if previous != nil {
-			previous(deviceID, appVersion)
-		}
+	server.Connections().WatchDeviceUp(func(deviceID, appVersion string) {
 		online <- deviceID
 	})
 	conn, _, err := websocket.DefaultDialer.Dial(websocketURL(httpServer.URL, "/ws/daemon"), nil)
@@ -523,12 +551,8 @@ func expectMessageTooBigClose(t *testing.T, conn *websocket.Conn) {
 }
 
 func TestUnauthenticatedFirstFrameReadLimit(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
-	padding := strings.Repeat("x", unauthenticatedReadLimit)
+	server, httpServer, token, _ := newWebSocketTestServer(t, "phone-secret")
+	padding := strings.Repeat("x", relaycore.UnauthenticatedReadLimit)
 
 	t.Run("daemon", func(t *testing.T) {
 		conn, _, err := websocket.DefaultDialer.Dial(
@@ -552,7 +576,7 @@ func TestUnauthenticatedFirstFrameReadLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 		expectMessageTooBigClose(t, conn)
-		if server.connMgr.IsDaemonOnline("dev1") {
+		if server.Connections().IsDaemonOnline("dev1") {
 			t.Fatal("oversized unauthenticated daemon frame registered a connection")
 		}
 	})
@@ -580,10 +604,7 @@ func TestUnauthenticatedFirstFrameReadLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 		expectMessageTooBigClose(t, conn)
-		server.connMgr.mu.RLock()
-		phoneCount := len(server.connMgr.phoneConns["dev1"])
-		outboundCount := len(server.connMgr.phoneOutbounds)
-		server.connMgr.mu.RUnlock()
+		phoneCount, outboundCount := server.Connections().PhoneSubscriptionCounts("dev1")
 		if phoneCount != 0 || outboundCount != 0 {
 			t.Fatalf("oversized phone frame registered state: phones=%d outbounds=%d", phoneCount, outboundCount)
 		}
@@ -591,11 +612,7 @@ func TestUnauthenticatedFirstFrameReadLimit(t *testing.T) {
 }
 
 func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	server, httpServer, token, database := newWebSocketTestServer(t, "phone-secret")
 	daemon := connectDaemonReady(t, server, httpServer, token)
 	phone := connectPhone(t, httpServer, "phone-secret")
 
@@ -790,18 +807,14 @@ func TestPromptAckWaitsForDaemonAndAcceptedReplayIsIdempotent(t *testing.T) {
 		t.Fatalf("daemon identity was not normalized: %#v", normalized)
 	}
 
-	messages, err := server.db.GetMessages("dev1", "session-1", 10)
+	messages, err := database.GetMessages("dev1", "session-1", 10)
 	if err != nil || len(messages) != 1 || messages[0].ID != "local_prompt_1" {
 		t.Fatalf("persisted messages: %#v err=%v", messages, err)
 	}
 }
 
 func TestQueuedPromptAdmissionStaysPendingUntilNativeAcceptance(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	server, httpServer, token, database := newWebSocketTestServer(t, "phone-secret")
 	daemon := connectDaemonReady(t, server, httpServer, token)
 	phone := connectPhone(t, httpServer, "phone-secret")
 	prompt := v1Envelope(protocol.MsgSendPrompt, "dev1", map[string]any{
@@ -835,7 +848,7 @@ func TestQueuedPromptAdmissionStaysPendingUntilNativeAcceptance(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		cmd, err := server.db.GetPromptCommand("dev1", "msg_queue_prompt_1")
+		cmd, err := database.GetPromptCommand("dev1", "msg_queue_prompt_1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -847,7 +860,7 @@ func TestQueuedPromptAdmissionStaysPendingUntilNativeAcceptance(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if count, err := server.db.GetMessageCount("dev1", "session-queue"); err != nil || count != 0 {
+	if count, err := database.GetMessageCount("dev1", "session-queue"); err != nil || count != 0 {
 		t.Fatalf("queued command persisted history count=%d err=%v", count, err)
 	}
 
@@ -877,7 +890,7 @@ func TestQueuedPromptAdmissionStaysPendingUntilNativeAcceptance(t *testing.T) {
 	if sent.Type != protocol.MsgPromptSent {
 		t.Fatalf("final legacy phone ack: %#v", sent)
 	}
-	if count, err := server.db.GetMessageCount("dev1", "session-queue"); err != nil || count != 1 {
+	if count, err := database.GetMessageCount("dev1", "session-queue"); err != nil || count != 1 {
 		t.Fatalf("accepted command history count=%d err=%v", count, err)
 	}
 
@@ -900,10 +913,7 @@ func TestQueuedPromptAdmissionStaysPendingUntilNativeAcceptance(t *testing.T) {
 }
 
 func TestAcceptedPromptPersistenceFailureDefersCommitUntilReconnectHealing(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
+	t.Cleanup(relaycore.OverrideWSRateLimiter(100, time.Minute))
 	dbPath := filepath.Join(t.TempDir(), "persistence-failure.db")
 	database, err := db.New(dbPath)
 	if err != nil {
@@ -914,13 +924,13 @@ func TestAcceptedPromptPersistenceFailureDefersCommitUntilReconnectHealing(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewWithSecret(database, "phone-secret")
+	server := NewCore(database, "phone-secret")
 	if err := server.SetTransportMode(protocol.TransportOpen); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
-	httpServer := httptest.NewServer(CORSMiddleware(mux))
+	httpServer := httptest.NewServer(server.CORSMiddleware(mux))
 	t.Cleanup(httpServer.Close)
 
 	// Inject a deterministic history-write failure without preventing the
@@ -1043,11 +1053,7 @@ func TestAcceptedPromptPersistenceFailureDefersCommitUntilReconnectHealing(t *te
 }
 
 func TestPhoneRESTAndWebSocketOriginAndAuth(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	_, httpServer, _ := newWebSocketTestServer(t, "phone-secret")
+	_, httpServer, _, _ := newWebSocketTestServer(t, "phone-secret")
 
 	req, _ := http.NewRequest(http.MethodGet, httpServer.URL+"/api/devices", nil)
 	req.Header.Set("Origin", "https://evil.example")
@@ -1110,13 +1116,13 @@ func TestPhoneRESTAndWebSocketOriginAndAuth(t *testing.T) {
 	if err := conn.ReadJSON(&unauthorized); err != nil {
 		t.Fatal(err)
 	}
-	if unauthorized.Type != protocol.MsgError || stringPayload(unauthorized.Payload, "message") != "unauthorized" {
+	if unauthorized.Type != protocol.MsgError || stringPayload(unauthorized.Payload, "error_code") != "phone_credential_invalid" {
 		t.Fatalf("unauthorized WS response: %#v", unauthorized)
 	}
 }
 
 func TestPushSubscribeValidation(t *testing.T) {
-	_, httpServer, _ := newWebSocketTestServer(t, "phone-secret")
+	_, httpServer, _, _ := newWebSocketTestServer(t, "phone-secret")
 	post := func(payload map[string]any) int {
 		t.Helper()
 		body, err := json.Marshal(payload)
@@ -1185,9 +1191,9 @@ func TestPushSubscribeValidation(t *testing.T) {
 }
 
 func TestMessagesRESTReportsTruncation(t *testing.T) {
-	server, httpServer, _ := newWebSocketTestServer(t, "phone-secret")
+	_, httpServer, _, database := newWebSocketTestServer(t, "phone-secret")
 	for i := 1; i <= 3; i++ {
-		if err := server.db.SaveMessage("dev1", "session-history", &protocol.SessionMessage{
+		if err := database.SaveMessage("dev1", "session-history", &protocol.SessionMessage{
 			ID:        "m" + string(rune('0'+i)),
 			Role:      "assistant",
 			Content:   "message",
@@ -1227,11 +1233,7 @@ func TestMessagesRESTReportsTruncation(t *testing.T) {
 }
 
 func TestFailedResubscribeCannotRouteCommandsToOldDevice(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	server, httpServer, token, _ := newWebSocketTestServer(t, "phone-secret")
 	daemon := connectDaemonReady(t, server, httpServer, token)
 	phone := connectPhone(t, httpServer, "phone-secret")
 
@@ -1298,11 +1300,7 @@ func TestFailedResubscribeCannotRouteCommandsToOldDevice(t *testing.T) {
 }
 
 func TestSessionSnapshotIncludesAgentStartCapabilitiesAndRelaysStartAgent(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
-	server, httpServer, token := newWebSocketTestServer(t, "phone-secret")
+	server, httpServer, token, _ := newWebSocketTestServer(t, "phone-secret")
 	daemon := connectDaemonReady(t, server, httpServer, token)
 	if err := daemon.WriteJSON(v1Envelope(protocol.MsgSessionList, "dev1", map[string]any{
 		"sessions": []any{map[string]any{
@@ -1320,7 +1318,7 @@ func TestSessionSnapshotIncludesAgentStartCapabilitiesAndRelaysStartAgent(t *tes
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		sessions, capabilities := server.connMgr.GetDeviceSessionSnapshot("dev1")
+		sessions, capabilities := server.Connections().GetDeviceSessionSnapshot("dev1")
 		if len(sessions) == 1 && len(capabilities) == 2 {
 			break
 		}
@@ -1400,22 +1398,19 @@ func TestSessionSnapshotIncludesAgentStartCapabilitiesAndRelaysStartAgent(t *tes
 }
 
 func TestSealedPromptIsOpaqueDurableAndReplaysSameEnvelope(t *testing.T) {
-	oldLimiter := wsRateLimiter
-	wsRateLimiter = newRateLimiter(100, time.Minute)
-	t.Cleanup(func() { wsRateLimiter = oldLimiter })
-
+	t.Cleanup(relaycore.OverrideWSRateLimiter(100, time.Minute))
 	database := testDB(t)
 	token, err := database.RegisterDevice("dev1", "PC")
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewWithSecret(database, "phone-secret")
+	server := NewCore(database, "phone-secret")
 	if err := server.SetTransportMode(protocol.TransportSealed); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
-	httpServer := httptest.NewServer(CORSMiddleware(mux))
+	httpServer := httptest.NewServer(server.CORSMiddleware(mux))
 	t.Cleanup(httpServer.Close)
 	daemon, phone := connectSealedDaemonAndPhone(t, server, httpServer, token, "phone-secret")
 
@@ -1433,7 +1428,7 @@ func TestSealedPromptIsOpaqueDurableAndReplaysSameEnvelope(t *testing.T) {
 			Nonce: "stable-nonce", Ciphertext: "opaque-ciphertext-a",
 		},
 	}
-	server.handlePhoneMessage("dev1", original)
+	server.DeliverPhoneMessage("dev1", original)
 	registeredDeadline := time.Now().Add(2 * time.Second)
 	for {
 		if stored, lookupErr := database.GetPromptCommand("dev1", original.ClientMsgID); lookupErr == nil {
@@ -1447,12 +1442,8 @@ func TestSealedPromptIsOpaqueDurableAndReplaysSameEnvelope(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	_ = daemon.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var forwarded protocol.NekoMessage
-	if err := daemon.ReadJSON(&forwarded); err != nil {
-		t.Fatal(err)
-	}
-	if forwarded.ClientMsgID != original.ClientMsgID || forwarded.Timestamp != original.Timestamp ||
+	forwarded := readDaemonPromptFrame(t, daemon, original.ClientMsgID)
+	if forwarded.Timestamp != original.Timestamp ||
 		forwarded.SealedPayload == nil || forwarded.SealedPayload.Nonce != original.SealedPayload.Nonce ||
 		forwarded.SealedPayload.Ciphertext != original.SealedPayload.Ciphertext {
 		t.Fatalf("forwarded sealed prompt changed: %#v", forwarded)
@@ -1463,11 +1454,8 @@ func TestSealedPromptIsOpaqueDurableAndReplaysSameEnvelope(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	var replay protocol.NekoMessage
-	if err := daemon.ReadJSON(&replay); err != nil {
-		t.Fatal(err)
-	}
-	if replay.ClientMsgID != original.ClientMsgID || replay.Timestamp != original.Timestamp ||
+	replay := readDaemonPromptFrame(t, daemon, original.ClientMsgID)
+	if replay.Timestamp != original.Timestamp ||
 		replay.SealedPayload == nil || replay.SealedPayload.Nonce != original.SealedPayload.Nonce ||
 		replay.SealedPayload.Ciphertext != original.SealedPayload.Ciphertext {
 		t.Fatalf("replayed sealed prompt changed: %#v", replay)
@@ -1532,7 +1520,7 @@ func TestSealedPromptIsOpaqueDurableAndReplaysSameEnvelope(t *testing.T) {
 		Epoch: 3, SenderID: "phone-1", RecipientID: "dev1", Sequence: 10,
 		Nonce: "different-nonce", Ciphertext: "opaque-ciphertext-b",
 	}
-	server.handlePhoneMessage("dev1", &conflict)
+	server.DeliverPhoneMessage("dev1", &conflict)
 	for i := 0; i < 4; i++ {
 		var got protocol.NekoMessage
 		if err := phone.ReadJSON(&got); err != nil {

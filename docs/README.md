@@ -28,6 +28,7 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 | [security.md](./security.md) | Trust model, secrets, hardening |
 | [agent-capability-matrix.md](./agent-capability-matrix.md) | **Per-harness live capability matrix** (Codex / Claude / Kimi / Grok) |
 | [architecture.md](./architecture.md) | Components, discovery, prompt path |
+| [relay-core.md](./relay-core.md) | Shared Relay Core, stable endpoint, and managed-service boundary |
 | [protocol.md](./protocol.md) | Wire envelope, message types, REST |
 | [development.md](./development.md) | Local dev and tests |
 | [release.md](./release.md) | Maintainer release cut |
@@ -50,6 +51,7 @@ English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use
 | [security.md](./security.md) | [security.zh-CN.md](./security.zh-CN.md) |
 | [agent-capability-matrix.md](./agent-capability-matrix.md) | [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md) |
 | [architecture.md](./architecture.md) | [architecture.zh-CN.md](./architecture.zh-CN.md) |
+| [relay-core.md](./relay-core.md) | [relay-core.zh-CN.md](./relay-core.zh-CN.md) |
 | [protocol.md](./protocol.md) | [protocol.zh-CN.md](./protocol.zh-CN.md) |
 | [development.md](./development.md) | [development.zh-CN.md](./development.zh-CN.md) |
 | [troubleshooting.md](./troubleshooting.md) | [troubleshooting.zh-CN.md](./troubleshooting.zh-CN.md) |

@@ -45,6 +45,7 @@ Thumbs.db
 # Env
 .env
 .env.*
+*.private.md
 
 # Stale root scaffolding (kept locally only)
 _archive/

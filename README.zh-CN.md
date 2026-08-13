@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./pwa/public/brand/nekonest-duo.webp" width="360" alt="NekoNest">
 
-  <h1>NekoNest · 猫娘窝</h1>
+  <h1>NekoNest · 猫娘乐园</h1>
 
   <p><strong>在手机上，安全续写 Windows 或 Linux 主机中的编码智能体线程。</strong></p>
   <p>自托管 · 主机仅出站连接 · 原生会话存储 · 移动端 PWA</p>
@@ -54,7 +54,7 @@ NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、�
 - **历史与流式输出**：合并原生历史、服务端持久化与实时输出，并保持稳定消息标识；CLI 标准错误只作本机诊断，不进入对话正文。
 - **图片与文档附件**：手机上传后由 Daemon 下载到本次任务临时目录，再按各 CLI 能力传入（最多 5 个、单个 ≤ 4 MB）。
 - **按能力控制 Agent**：Codex 仍是唯一全控制 Agent。每条可靠且已安装的发送路径都可使用 NekoNest 持久 FIFO（不是 Agent 原生队列）；审批、用户提问、新建、中断与附件均独立探测，缺失即关闭。
-- **持久传输模式**：每个窝只能固定为 `open` 或 `sealed`。新数据库默认 sealed；缺少模式元数据的旧数据库一次性认定并持久化为 open；不匹配时失败关闭。
+- **持久传输模式**：每个乐园只能固定为 `open` 或 `sealed`。新数据库默认 sealed；缺少模式元数据的旧数据库一次性认定并持久化为 open；不匹配时失败关闭。
 - **手机端降级防护**：PWA 按来源钉扎模式；sealed 来源不能静默变成 open，首次使用管理员明确选择的开放中继必须显式确认。
 - **手机端新鲜目录**：PWA 先显示缓存目录，再要求在线 Daemon 重新扫描原生存储。只有存在线程的智能体显示为分组；已启用但尚无线程的智能体保留在项目级「**新建**」菜单中。
 - **移动端体验**：可安装 PWA、会话草稿、线程级或整项目的手机本地收起、经清理的 Markdown、断线恢复与可选 Web Push。
@@ -158,7 +158,7 @@ export NEKONEST_BOOTSTRAP_TOKEN='换成另一段足够长的随机串'
 ./nekonest-server -port 8080 -data ./data -pwa ../pwa/dist
 ```
 
-全新数据目录会初始化为 `sealed`。只有在首次启动时明确要创建管理员选定的 open 窝，才设置 `NEKONEST_TRANSPORT_MODE=open`；后续该变量只是断言，必须与持久化模式一致。
+全新数据目录会初始化为 `sealed`。只有在首次启动时明确要创建管理员选定的 open 乐园，才设置 `NEKONEST_TRANSPORT_MODE=open`；后续该变量只是断言，必须与持久化模式一致。
 
 用 Caddy 或 Nginx 把公网 HTTPS/WSS 反向代理到 `127.0.0.1:8080`。完整示例见 [docs/deploy-vps.zh-CN.md](docs/deploy-vps.zh-CN.md)。
 
@@ -213,10 +213,21 @@ export NEKONEST_BOOTSTRAP_TOKEN='与 VPS 相同的注册令牌'
 若要从源码构建，请克隆仓库，在 `daemon/` 下运行
 `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-daemon ./cmd/daemon`。
 
-注册成功后会写入主机配置并打印 6 位配对码。需要新码时，Windows 运行
+注册成功后只会把一个稳定服务地址写入主机配置。自部署时该地址是 Standalone
+Server；托管服务即使仍在准备 placement，也继续使用同一个地址。Daemon 不再
+轮询第二个控制面，也不会接受替换用中继地址。需要新码时，Windows 运行
 `.\nekonest-daemon.exe -pair gen`，Linux 运行
 `./nekonest-daemon -pair gen`。常驻运行见
 [Windows](docs/deploy-windows.zh-CN.md) · [Linux](docs/deploy-linux.zh-CN.md)。
+
+Daemon 还会使用长期 Ed25519 身份为每次注册请求签名。托管 Cloud 只在恢复
+已撤销主机记录时强制验证该证明：保留 `identity.json`、删除已失效的
+`config.json`，再使用新的 Cloud 一次性凭证注册。若 `identity.json` 丢失，
+系统会建立新的主机身份，不会静默接管旧记录。
+
+开放的 Standalone Server 对 Cloud 完全无感知，不读取账号、订阅、席位、
+placement 或租户清单状态。托管部署在自己的授权与 placement 层之后组合相同的
+开放 Relay Core；详见 [Relay Core 边界](docs/relay-core.zh-CN.md)。
 
 ### 3. 在手机上配对
 
@@ -232,6 +243,7 @@ export NEKONEST_BOOTSTRAP_TOKEN='与 VPS 相同的注册令牌'
 | 变量 | 用途 |
 |---|---|
 | `NEKONEST_ADMIN_SECRET` | 管理员引导与签发手机令牌；**公网必须设置** |
+| `NEKONEST_ADMIN_SECRET_FILE` | Cloud 托管环境替代内联管理员密钥的私有文件路径 |
 | `NEKONEST_PHONE_SECRET` | 管理员密钥的弃用兼容别名 |
 | `NEKONEST_BOOTSTRAP_TOKEN` | 保护 Daemon 注册；**公网必须设置**，且应与手机密钥不同 |
 | `NEKONEST_TRANSPORT_MODE` | 可选的首次模式选择 / 后续断言；新 DB 默认 `sealed`，旧 DB 固定为 `open` |
@@ -248,7 +260,7 @@ export NEKONEST_BOOTSTRAP_TOKEN='与 VPS 相同的注册令牌'
 
 完整 flags、`config.json`、路由与限额见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md)。信任模型见 [docs/security.zh-CN.md](docs/security.zh-CN.md)。
 
-Server 会把模式持久化到 SQLite，并通过 `/health` 暴露；PWA 在建立 WebSocket 前读取这个运行时值。已有 open 窝继续 open。迁移到 sealed 必须执行离线备份与明文清理并重新配对；仅修改环境变量不能静默转换。
+Server 会把模式持久化到 SQLite，并通过 `/health` 暴露；PWA 在建立 WebSocket 前读取这个运行时值。已有 open 乐园继续 open。迁移到 sealed 必须执行离线备份与明文清理并重新配对；仅修改环境变量不能静默转换。
 
 ## 文档
 
@@ -289,7 +301,7 @@ nekonest/
 └── tools/      # 可复现的品牌资源构建工具
 ```
 
-两个独立 Go module（`server/`、`daemon/`）和一个 pnpm 项目（`pwa/`），没有根 Go module。协议类型手动维护——见 [docs/protocol.zh-CN.md](docs/protocol.zh-CN.md)。
+三个独立 Go module（`relaycore/`、`server/`、`daemon/`）通过根目录 Go workspace 联调，另有一个 pnpm 项目（`pwa/`）；没有根 Go module。协议类型手动维护——见 [docs/protocol.zh-CN.md](docs/protocol.zh-CN.md)。
 
 ## 开发与验证
 
@@ -330,7 +342,7 @@ pwa:     pnpm dev
 
 - 手机主要续写原生线程。任何受支持 agent 都只有在其原生 starter 已安装/探测通过时才可提供 agent 范围的 `start_thread`；手机在首条提示词创建原生线程前仅保留本地草稿，目标只能是 daemon 当前已发现项目目录并集。
 - Codex 是唯一全控制智能体（发送、批准/拒绝、中断、转向与完整原生附件）；其余三种即使宣告原生新建能力，也仍是兼容续写适配器。
-- 新窝默认 sealed；缺少模式元数据的旧数据库/配置一次性认定为 open。一个窝只有一种持久化模式，禁止自动降级。
+- 新乐园默认 sealed；缺少模式元数据的旧数据库/配置一次性认定为 open。每个乐园只有一种持久化模式，禁止自动降级。
 - Kimi CLI 与 Grok Build 当前只接收附件的本地路径，读取能力取决于对应 CLI 的文件权限。
 - Web Push 需要额外配置 VAPID；未配置时不发送真实推送。
 - Daemon 支持 **Windows 与 Linux**；macOS 后续再做。

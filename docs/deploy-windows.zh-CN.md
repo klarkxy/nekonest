@@ -10,7 +10,7 @@
 
 - 已在使用至少一个受支持 agent CLI 的 Windows PC
 - 至少已有一个原生线程，用于构成 daemon 的已发现项目集合；已安装且探测通过的 starter 之后也只能在该集合内新建线程
-- 可达的窝地址（`https://…`）以及与 VPS 相同的 `NEKONEST_BOOTSTRAP_TOKEN`
+- 可达的乐园地址（`https://…`）以及与 VPS 相同的 `NEKONEST_BOOTSTRAP_TOKEN`
 - 从源码构建时需要 Go 1.22+
 
 支持的智能体（摘要）：

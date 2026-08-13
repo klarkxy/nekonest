@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sign daemon registration requests with the long-term Ed25519 identity so a
+  managed Cloud can require private-key proof before restoring a revoked host
+  ID, while first-time and direct/self-hosted registration remain compatible.
+
+### Fixed
+
+- Treat `device_already_connected` as a same-endpoint retry so a stale live
+  lease cannot permanently stop the daemon read loop.
+- Restore Relay Core / standalone Server regression coverage for prompt
+  acknowledgement, sealed replay, first-frame limits, attachments, and
+  connection-manager generation ordering.
+
+## [0.2.6] - 2026-08-11
+
+### Changed
+
+- Complete the Chinese terminology transition to “乐园” across product copy,
+  metadata, tests, and active documentation.
+
 ## [0.2.5] - 2026-08-11
 
 ### Added
@@ -26,8 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Rename Chinese setup and device copy to “猫娘乐园” while retaining the
-  existing NekoNest / 猫娘窝 product brand.
+- Rename Chinese setup, device, and product copy to “猫娘乐园”.
 
 ### Fixed
 
@@ -228,7 +248,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-07-30
 
-First public release of NekoNest (猫娘窝): a self-hosted bridge for resuming
+First public release of NekoNest (猫娘乐园): a self-hosted bridge for resuming
 existing coding-agent threads on a home Windows PC from a phone PWA.
 
 ### Added
@@ -266,7 +286,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/klarkxy/nekonest/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/klarkxy/nekonest/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/klarkxy/nekonest/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/klarkxy/nekonest/compare/v0.2.2...v0.2.3

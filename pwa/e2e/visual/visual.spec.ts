@@ -24,7 +24,7 @@ test.beforeEach(async ({ page }) => {
 test.describe('390px primary visual matrix', () => {
   test('setup fresh', async ({ page, request }) => {
     await openScenario(page, request, 'setup-fresh', '/setup', { authenticated: false })
-    await expect(page.getByRole('heading', { name: '猫娘窝' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '猫娘乐园' })).toBeVisible()
     await expect(page.getByRole('button', { name: '进入猫娘乐园' })).toBeDisabled()
     await capture(page, 'setup-fresh.png')
   })
@@ -100,19 +100,24 @@ test.describe('390px primary visual matrix', () => {
     await capture(page, 'device-full-tree.png')
   })
 
-  test('only populated harness groups render while the project menu starts a missing harness', async ({ page, request }) => {
+  test('uses one project-level picker for every startable harness', async ({ page, request }) => {
     await openScenario(page, request, 'device-full', devicePath)
     const project = page.locator('.project-group').filter({ hasText: 'nekonest' }).first()
     const projectHeader = project.locator('.project-header')
-    const codexStart = project.getByRole('button', { name: '使用 Codex 在“nekonest”里新建线团' })
     const startMenu = project.locator('.project-start-menu')
 
-    await expect(codexStart).toBeVisible()
+    await expect(project.getByRole('button', { name: '使用 Codex 在“nekonest”里新建线团' })).toHaveCount(0)
     await expect(project.locator('.agent-group').filter({ hasText: 'Claude Code' }).locator('.agent-header')).toBeVisible()
     await expect(project.locator('.agent-group').filter({ hasText: 'Kimi CLI' })).toHaveCount(0)
     await expect(startMenu).toBeVisible()
+    await expect(startMenu.locator('summary')).toHaveAccessibleName('在 nekonest 新建线团')
     await startMenu.locator('summary').click()
+    await expect(startMenu.getByRole('button', { name: 'Codex' })).toBeVisible()
+    await expect(startMenu.getByRole('button', { name: 'Claude Code' })).toBeVisible()
     await expect(startMenu.getByRole('button', { name: 'Kimi CLI' })).toBeVisible()
+    await expect(startMenu.getByRole('button', { name: 'Grok Build' })).toHaveCount(0)
+    await capture(page, 'device-start-menu.png')
+    await startMenu.locator('summary').click()
 
     await page.getByLabel('猫娘', { exact: true }).selectOption('kimi_cli')
     await expect(page.locator('.project-group')).toHaveCount(1)
@@ -122,7 +127,7 @@ test.describe('390px primary visual matrix', () => {
 
     await projectHeader.click()
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'false')
-    await expect(codexStart).toBeHidden()
+    await expect(startMenu).toBeVisible()
     await startMenu.locator('summary').click()
     const kimiOption = startMenu.getByRole('button', { name: 'Kimi CLI' })
     await expect(kimiOption).toBeVisible()
@@ -135,9 +140,8 @@ test.describe('390px primary visual matrix', () => {
     })).toBe(true)
     await projectHeader.click()
     await expect(projectHeader).toHaveAttribute('aria-expanded', 'true')
-    await expect(codexStart).toBeVisible()
 
-    await codexStart.click()
+    await startMenu.getByRole('button', { name: 'Codex' }).click()
     await expect(page).toHaveURL(/\/session\/local_draft_/)
   })
 

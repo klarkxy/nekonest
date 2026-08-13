@@ -101,16 +101,18 @@
           <span class="sr-only">{{ isProjectArchived(project) ? t('threadList.unarchive') : t('threadList.archive') }}</span>
         </button>
         <details
-          v-if="missingStartOptions(project).length"
+          v-if="enabledProjectStartOptions(project).length"
           class="project-start-menu"
         >
-          <summary class="agent-add-btn project-start-menu__toggle">
-            <span aria-hidden="true">＋</span>
-            {{ t('threadList.newThreadAction') }}
+          <summary
+            class="project-start-menu__toggle"
+            :aria-label="t('threadList.newThreadPickerAria', { project: project.label })"
+          >
+            {{ t('threadList.newThreadPicker') }}
           </summary>
           <div class="project-start-menu__options">
             <button
-              v-for="option in missingStartOptions(project)"
+              v-for="option in enabledProjectStartOptions(project)"
               :key="option.agentType"
               type="button"
               :disabled="!deviceOnline"
@@ -156,26 +158,11 @@
               />
               <span class="agent-copy">
                 <span class="agent-title">{{ agent.label }}</span>
-                <span
-                  class="agent-subtitle"
-                  :class="{ 'agent-subtitle--unavailable': agentStartUnavailable(project, agent) }"
-                >{{ agentSubtitle(project, agent) }}</span>
+                <span class="agent-subtitle">{{ t('threadList.agentThreads', { n: agent.sessions.length }) }}</span>
               </span>
               <span v-if="agent.sessions.length" class="agent-chevron" aria-hidden="true">
                 {{ prefs.isCollapsed(agentNodeKey(project.key, agent.type)) ? '▸' : '▾' }}
               </span>
-            </button>
-            <button
-              v-if="agentStartOption(project, agent)"
-              type="button"
-              class="agent-add-btn"
-              :disabled="!deviceOnline"
-              :title="agentStartTitle(project, agent)"
-              :aria-label="agentStartAria(project, agent)"
-              @click.stop="onNewThread(project, agent.type)"
-            >
-              <span aria-hidden="true">＋</span>
-              {{ t('threadList.newThreadAction') }}
             </button>
           </div>
 
@@ -256,10 +243,7 @@
 import { computed, ref, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink, useRouter } from 'vue-router'
-import {
-  KNOWN_AGENT_TYPES,
-  UNKNOWN_AGENT_META
-} from '@/config/agents'
+import { UNKNOWN_AGENT_META } from '@/config/agents'
 import { sessionDetailLocation } from '@/router/navigation'
 import { useSessionPrefsStore } from '@/stores/sessionPrefs'
 import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
@@ -355,9 +339,10 @@ function projectStartOptions(project: SessionTreeProject): ProjectStartOption[] 
     .map(option => ({ ...option, label: agentLabel(option.agentType) }))
 }
 
-function missingStartOptions(project: SessionTreeProject): ProjectStartOption[] {
-  const existing = new Set(project.agents.map(agent => agent.type))
-  return projectStartOptions(project).filter(option => option.enabled && !existing.has(option.agentType))
+function enabledProjectStartOptions(project: SessionTreeProject): ProjectStartOption[] {
+  // Creation is a directory-level action. Keep one picker containing every
+  // advertised starter, whether or not that agent already has threads here.
+  return projectStartOptions(project).filter(option => option.enabled)
 }
 
 function projectStartTitle(project: SessionTreeProject, option: ProjectStartOption): string {
@@ -367,49 +352,6 @@ function projectStartTitle(project: SessionTreeProject, option: ProjectStartOpti
         agent: option.label,
         reason: t('threadList.startOffline')
       })
-}
-
-function agentStartOption(
-  project: SessionTreeProject,
-  agent: SessionTreeAgent
-): ProjectStartOption | null {
-  if (!KNOWN_AGENT_TYPES.some(agentType => agentType === agent.type)) return null
-  const advertised = projectStartOptions(project)
-    .find(option => option.agentType === agent.type)
-  return advertised?.enabled ? advertised : null
-}
-
-function agentStartReason(project: SessionTreeProject, agent: SessionTreeAgent): string {
-  if (!deviceOnline.value) return t('threadList.startOffline')
-  return agentStartOption(project, agent)?.reason || ''
-}
-
-function agentStartUnavailable(project: SessionTreeProject, agent: SessionTreeAgent): boolean {
-  const option = agentStartOption(project, agent)
-  return Boolean(option && !deviceOnline.value)
-}
-
-function agentSubtitle(project: SessionTreeProject, agent: SessionTreeAgent): string {
-  return agentStartUnavailable(project, agent)
-    ? agentStartReason(project, agent)
-    : t('threadList.agentThreads', { n: agent.sessions.length })
-}
-
-function agentStartTitle(project: SessionTreeProject, agent: SessionTreeAgent): string {
-  const option = agentStartOption(project, agent)
-  return option?.enabled && deviceOnline.value
-    ? t('threadList.newThreadTitle', { agent: agent.label, project: project.label })
-    : t('threadList.newThreadUnavailable', {
-        agent: agent.label,
-        reason: agentStartReason(project, agent)
-      })
-}
-
-function agentStartAria(project: SessionTreeProject, agent: SessionTreeAgent): string {
-  const option = agentStartOption(project, agent)
-  return option?.enabled && deviceOnline.value
-    ? t('threadList.newThreadAria', { agent: agent.label, project: project.label })
-    : agentStartTitle(project, agent)
 }
 
 function onNewThread(project: SessionTreeProject, agentType: AgentType) {
@@ -618,8 +560,24 @@ function onAvatarError(event: Event) {
 }
 
 .project-start-menu__toggle {
+  display: inline-flex;
+  min-width: 66px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px solid var(--neko-line);
+  border-radius: 12px 12px 15px 9px;
+  color: var(--neko-primary-deep);
+  background: var(--neko-primary-soft);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--neko-primary) 12%, transparent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
   list-style: none;
+  white-space: nowrap;
   cursor: pointer;
+  transition: transform 160ms ease, filter 180ms ease;
 }
 
 .project-start-menu__toggle::-webkit-details-marker {
@@ -671,7 +629,7 @@ function onAvatarError(event: Event) {
 
 .project-header:focus-visible,
 .agent-header:focus-visible,
-.agent-add-btn:focus-visible,
+.project-start-menu__toggle:focus-visible,
 .session-main:focus-visible,
 .archive-btn:focus-visible {
   outline: 2px solid var(--neko-primary);
@@ -766,8 +724,7 @@ function onAvatarError(event: Event) {
 }
 
 .agent-header-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: block;
   align-items: center;
   gap: 8px;
   min-height: 58px;
@@ -844,48 +801,6 @@ function onAvatarError(event: Event) {
   font-size: 10px;
   font-weight: 560;
   line-height: 1.35;
-}
-
-.agent-subtitle--unavailable {
-  overflow: hidden;
-  max-width: 11rem;
-  color: var(--neko-danger-ink);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-add-btn {
-  display: inline-flex;
-  min-width: 66px;
-  min-height: 44px;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--agent-color) 40%, var(--neko-line));
-  border-radius: 12px 12px 15px 9px;
-  color: color-mix(in srgb, var(--agent-color) 76%, var(--neko-ink));
-  background: color-mix(in srgb, var(--agent-soft-color) 72%, var(--neko-surface-solid));
-  box-shadow: 0 4px 10px color-mix(in srgb, var(--agent-color) 12%, transparent);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: transform 160ms ease, filter 180ms ease, opacity 180ms ease;
-}
-
-.agent-add-btn > span {
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1;
-}
-
-.agent-add-btn:disabled {
-  border-style: dashed;
-  box-shadow: none;
-  opacity: 0.48;
-  cursor: not-allowed;
 }
 
 .agent-body {
@@ -1026,14 +941,14 @@ function onAvatarError(event: Event) {
     background: color-mix(in srgb, var(--agent-color) 12%, transparent);
   }
 
-  .agent-add-btn:not(:disabled):hover {
+  .project-start-menu__toggle:hover {
     filter: saturate(1.08) brightness(0.98);
   }
 }
 
 .project-header:active,
 .agent-header:active,
-.agent-add-btn:not(:disabled):active,
+.project-start-menu__toggle:active,
 .session-main:active,
 .archive-btn:active {
   transform: scale(0.985);
@@ -1041,7 +956,7 @@ function onAvatarError(event: Event) {
 
 @media (prefers-reduced-motion: reduce) {
   .project-header,
-  .agent-add-btn,
+  .project-start-menu__toggle,
   .archive-btn,
   .chevron {
     transition: none;
@@ -1049,7 +964,7 @@ function onAvatarError(event: Event) {
 
   .project-header:active,
   .agent-header:active,
-  .agent-add-btn:not(:disabled):active,
+  .project-start-menu__toggle:active,
   .session-main:active,
   .archive-btn:active {
     transform: none;

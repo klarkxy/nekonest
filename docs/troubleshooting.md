@@ -32,11 +32,25 @@ Symptom-oriented checks for self-hosted NekoNest. Configuration details: [config
 |---|---|
 | Daemon process | Running; log shows authenticated device id |
 | Second instance | Refused by `.daemon.lock`—only one process per config |
-| `config.json` | Valid `server_url`, `device_id`, `token` |
+| `config.json` | Valid stable `server_url`, `device_id`, and `token`. If an unreleased `control_plane_url`, `activation_poll_path`, `relay_generation`, or `relay_url` key remains, re-register instead of editing the file. |
 | Network | PC can open outbound WSS to VPS |
 | Server | Up; not crash-looping |
 
 Phone list should flip online within a short reconnect window after daemon start.
+
+For managed Cloud, `service_provisioning` means the stable Connect service is
+still preparing this tenant. Keep the daemon running: it retries `/ws/daemon`
+on the same service address after the advertised delay. It never polls a
+control-plane URL or accepts a replacement Relay URL. A credential-invalid or
+other non-retryable response requires device recovery instead of automatic
+re-registration.
+
+For managed Cloud credential rotation or a lost registration response, revoke
+the host in the Cloud console first. If `identity.json` still exists, keep it,
+remove the obsolete `config.json`, update to a daemon that sends
+`registration_proof`, and register with a fresh one-time credential. Cloud
+restores the same host ID only after verifying the original Ed25519 private-key
+proof. If the identity file is gone, register as a new host.
 
 ## Pair code rejected
 

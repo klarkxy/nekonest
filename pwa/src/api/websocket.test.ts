@@ -234,4 +234,55 @@ describe('NekoWebSocket lifecycle', () => {
     acknowledge(socket, 'device-a', second.subscriptionId)
     expect(client.isConnected()).toBe(true)
   })
+
+  it('honors bounded retry hints only for approved retryable service errors', () => {
+    const client = new NekoWebSocket()
+    client.subscribe('device-a')
+    const socket = FakeWebSocket.instances[0]
+    socket.open()
+    socket.message({
+      type: 'error',
+      device_id: 'device-a',
+      timestamp: 1,
+      payload: {
+        error_code: 'route_unavailable',
+        message: '正在切换区域',
+        retryable: true,
+        retry_after_seconds: 7
+      }
+    })
+    socket.serverClose()
+
+    expect(client.getStatus()).toBe('disconnected')
+    expect(client.getTransportError()).toBe('正在切换区域')
+    vi.advanceTimersByTime(6999)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+  })
+
+  it('fails closed on unknown structured errors and exposes only HTTPS action URLs', () => {
+    const client = new NekoWebSocket()
+    client.subscribe('device-a')
+    const socket = FakeWebSocket.instances[0]
+    socket.open()
+    socket.message({
+      type: 'error',
+      device_id: 'device-a',
+      timestamp: 1,
+      payload: {
+        error_code: 'future_policy',
+        message: '请检查账户',
+        retryable: true,
+        action_url: 'https://cloud.example/account'
+      }
+    })
+    socket.serverClose()
+
+    expect(client.getStatus()).toBe('transport_error')
+    expect(client.getTransportError()).toBe('请检查账户')
+    expect(client.getServiceActionURL()).toBe('https://cloud.example/account')
+    vi.advanceTimersByTime(60_000)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
 })

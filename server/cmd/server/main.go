@@ -61,14 +61,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer database.Close()
-
-	// Admin nest secret: prefer NEKONEST_ADMIN_SECRET; one-release alias PHONE_SECRET.
-	phoneSecret := strings.TrimSpace(os.Getenv("NEKONEST_ADMIN_SECRET"))
-	if phoneSecret == "" {
-		phoneSecret = strings.TrimSpace(os.Getenv("NEKONEST_PHONE_SECRET"))
-		if phoneSecret != "" {
-			opslog.Warn("server.main", "deprecated_phone_secret", "deprecated phone secret environment variable is in use")
-		}
+	// Admin nest secret may be provided inline or through a private file.
+	phoneSecret, deprecatedPhoneSecret, secretErr := loadAdminSecret()
+	if secretErr != nil {
+		opslog.Error("server.main", "admin_secret_load_failed", "failed to load admin authentication secret", secretErr)
+		os.Exit(1)
+	}
+	if deprecatedPhoneSecret {
+		opslog.Warn("server.main", "deprecated_phone_secret", "deprecated phone secret environment variable is in use")
 	}
 	if phoneSecret == "" {
 		opslog.Warn("server.main", "local_only_mode", "admin authentication is not configured")
@@ -91,7 +91,7 @@ func main() {
 		opslog.Info("server.main", "trusted_proxy_enabled", "trusted proxy rate-limit mode enabled")
 	}
 
-	server := ws.NewWithSecret(database, phoneSecret)
+	server := ws.NewCore(database, phoneSecret)
 	server.SetDataDir(*dataDir)
 	persistedMode, err := database.TransportMode()
 	if err != nil {
@@ -124,7 +124,7 @@ func main() {
 	}
 
 	// Apply middleware
-	handler := ws.LoggingMiddleware(ws.CORSMiddleware(mux))
+	handler := ws.LoggingMiddleware(server.CORSMiddleware(mux))
 
 	addr := listenAddress(*port, phoneSecret) // empty admin secret → loopback only
 

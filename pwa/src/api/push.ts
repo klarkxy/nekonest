@@ -1,4 +1,13 @@
-import { apiFetch } from './http'
+import { pushURL } from '@/config/runtimeEndpoint'
+import { authHeaders } from './http'
+
+async function pushFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(pushURL(path), {
+    ...init,
+    cache: 'no-store',
+    headers: authHeaders(init.headers)
+  })
+}
 
 /** Request notification permission and subscribe if VAPID is configured. */
 export async function ensurePushSubscription(deviceId: string): Promise<boolean> {
@@ -6,7 +15,7 @@ export async function ensurePushSubscription(deviceId: string): Promise<boolean>
     return false
   }
   try {
-    const res = await apiFetch('/api/push/vapid-public-key')
+    const res = await pushFetch('/api/push/vapid-public-key')
     if (!res.ok) return false
     const data = (await res.json()) as { enabled?: boolean; public_key?: string }
     if (!data.enabled || !data.public_key) return false
@@ -28,7 +37,7 @@ export async function ensurePushSubscription(deviceId: string): Promise<boolean>
     const auth = json.keys?.auth
     if (!endpoint || !p256dh || !auth) return false
 
-    const post = await apiFetch('/api/push/subscribe', {
+    const post = await pushFetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

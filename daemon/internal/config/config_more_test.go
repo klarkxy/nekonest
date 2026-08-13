@@ -25,6 +25,34 @@ func TestSaveAndDefaultPath(t *testing.T) {
 	}
 }
 
+func TestSaveToAtomicallyReplacesStableEndpointConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"server_url":"wss://old.example"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{
+		ServerURL:     "wss://connect.example.cn",
+		DeviceID:      "host_abc",
+		Token:         "token",
+		TransportMode: TransportSealed,
+	}
+	if err := cfg.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ServerURL != cfg.ServerURL || loaded.DeviceID != cfg.DeviceID || loaded.Token != cfg.Token {
+		t.Fatalf("saved config mismatch: %#v", loaded)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".nekonest-config-*.tmp"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary config leaked: %v, %v", matches, err)
+	}
+}
+
 func TestHTTPBaseURLRoundTrip(t *testing.T) {
 	ws := NormalizeServerURL("https://nest.example/path/")
 	if ws != "wss://nest.example/path" {

@@ -24,7 +24,7 @@ NekoNest 如何信任各组件、哪些密钥保护哪些接口，以及运维�
 | **sealed** | 显式预览 | 密文正文；路由元数据（设备 ID、session ID、时间戳、大小、连接状态）。全密封时**不含** prompt/回复/工具明文。 |
 | **open** | v0.2 默认 | 应用明文——视 VPS 为敏感 |
 
-一窝一种固定模式；客户端必须匹配；**禁止** sealed→open 自动降级。待密封验收门槛完成后，v1.0.0 合同会把新窝默认值切换为 sealed。
+每个乐园只有一种固定模式；客户端必须匹配；**禁止** sealed→open 自动降级。待密封验收门槛完成后，v1.0.0 合同会把新乐园默认值切换为 sealed。
 
 配对信任：QR 携带 daemon 公钥指纹；仅 6 位码为低保证 fallback（须对照 PC 屏幕指纹）。
 
@@ -46,6 +46,10 @@ NekoNest 如何信任各组件、哪些密钥保护哪些接口，以及运维�
 | Daemon `identity.json` / sealed keys | 仅家用机 | E2E 长期密钥与内容密钥 |
 | 配对码 + QR 指纹 | 短时 | 将手机绑定到已注册设备 |
 | VAPID 密钥 | 运维 | 可选 Web Push |
+
+Cloud 的账号、权益、placement 与区域路由策略位于公开 Server 和 Relay Core 之外。
+托管 Relay 先把经过认证的凭据解析为内部租户，再选择 Engine；客户端不能自行提交
+原始租户 ID。Standalone 注册仍由本地 bootstrap token 保护，并且完全不访问 Cloud。
 
 ### 规则
 
@@ -77,6 +81,7 @@ NekoNest 如何信任各组件、哪些密钥保护哪些接口，以及运维�
 
 - `POST /api/devices/register`，JSON `{"name":"…"}`，公网需 `X-Neko-Bootstrap`
 - 响应得到 `device_id` + 设备令牌，写入 `%USERPROFILE%\.nekonest\config.json`
+- Daemon 使用长期 Ed25519 密钥签署域分离的注册 transcript。托管 Cloud 复用已撤销 host ID 前必须验证该证明；只有公开指纹或旧 bearer 令牌不足以恢复。
 
 ### Daemon 运行时
 

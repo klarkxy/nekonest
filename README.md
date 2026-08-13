@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./pwa/public/brand/nekonest-duo.webp" width="360" alt="NekoNest">
 
-  <h1>NekoNest · 猫娘窝</h1>
+  <h1>NekoNest · 猫娘乐园</h1>
 
   <p><strong>Safely continue coding-agent threads on your Windows or Linux host — from your phone.</strong></p>
   <p>Self-hosted · Host outbound-only · Native session stores · Mobile PWA</p>
@@ -215,10 +215,24 @@ For a source build, clone the repository and run
 `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-daemon ./cmd/daemon`
 from `daemon/`.
 
-Registration writes the host config and prints a 6-digit pair code. Generate a
-new code with `.\nekonest-daemon.exe -pair gen` on Windows or
+Registration writes one stable service endpoint to the host config. For
+self-hosting that endpoint is the standalone Server; a managed service may use
+the same origin while placement is still provisioning. The daemon never polls
+a second control plane or accepts a replacement Relay URL. Generate a new code with
+`.\nekonest-daemon.exe -pair gen` on Windows or
 `./nekonest-daemon -pair gen` on Linux. Autostart:
 [Windows](docs/deploy-windows.md) · [Linux](docs/deploy-linux.md).
+
+The daemon also signs each registration request with its long-term Ed25519
+identity. Managed Cloud uses that proof only when restoring a previously
+revoked host record: keep `identity.json`, remove the obsolete `config.json`,
+and register with a fresh one-time Cloud credential. Losing `identity.json`
+creates a new host identity instead of silently taking over the old record.
+
+The open standalone Server is Cloud-unaware and does not read account,
+subscription, slot, placement, or tenant-manifest state. Managed deployments
+compose the same open Relay Core behind their own authorization and placement
+layer; see [Relay Core boundary](docs/relay-core.md).
 
 ### 3. Pair the phone
 
@@ -234,6 +248,7 @@ Acceptance checklist: [docs/e2e-smoke.md](docs/e2e-smoke.md).
 | Variable | Role |
 |---|---|
 | `NEKONEST_ADMIN_SECRET` | Admin bootstrap and phone-token minting (**required** on public VPS) |
+| `NEKONEST_ADMIN_SECRET_FILE` | Cloud-managed private-file alternative to the inline admin secret |
 | `NEKONEST_PHONE_SECRET` | Deprecated compatibility alias for the admin secret |
 | `NEKONEST_BOOTSTRAP_TOKEN` | Daemon register gate (**required** on public VPS; ≠ phone secret) |
 | `NEKONEST_TRANSPORT_MODE` | Optional first-start choice / later assertion; new DB defaults `sealed`, legacy DB is fixed `open` |
@@ -291,7 +306,7 @@ nekonest/
 └── tools/      # reproducible brand asset build
 ```
 
-Two Go modules (`server/`, `daemon/`) and one pnpm app (`pwa/`); no root Go module. Protocol types are manual—see [docs/protocol.md](docs/protocol.md).
+Three Go modules (`relaycore/`, `server/`, `daemon/`) share a root Go workspace, alongside one pnpm app (`pwa/`); there is no root Go module. Protocol types are manual—see [docs/protocol.md](docs/protocol.md).
 
 ## Development and verification
 

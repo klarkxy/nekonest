@@ -1,12 +1,31 @@
-import type { NekoMessage } from '@/types/protocol'
+import type { NekoMessage, ServiceErrorPayload } from '@/types/protocol'
 import { nestTransportMode, PROTOCOL_VERSION } from '@/types/protocol'
 import { ensureTransportMode, runtimeTransportMode, transportModeError } from './transport'
 import { APP_VERSION } from '@/config/version'
-import { getAuthCredential, getPhoneSecret, getPhoneToken } from './http'
+import { getAuthCredential, getPhoneSecret, getPhoneToken, getRouteHandle } from './http'
+import { websocketURL } from '@/config/runtimeEndpoint'
 
 type MessageHandler = (msg: NekoMessage) => void
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'auth_error' | 'transport_error'
 type StatusHandler = (status: ConnectionStatus) => void
+
+const RETRYABLE_SERVICE_ERRORS = new Set([
+  'registration_rate_limited',
+  'service_provisioning',
+  'route_unavailable',
+  'region_unavailable'
+])
+
+const TERMINAL_SERVICE_ERRORS = new Set([
+  'device_credential_invalid',
+  'phone_credential_invalid',
+  'access_suspended',
+  'registration_disabled',
+  'device_capacity_exceeded',
+  'device_identity_conflict',
+  'device_already_connected',
+  'protocol_upgrade_required'
+])
 
 /**
  * NekoNest WebSocket 客户端
@@ -26,6 +45,10 @@ export class NekoWebSocket {
   private sessionReady = false
   private protocolVersion: string = PROTOCOL_VERSION
   private onReady: Array<() => void> = []
+  private serviceError = ''
+  private serviceActionURL = ''
+  private retryDelayOverride = 0
+  private terminalServiceError = false
   /** Invalidates callbacks from sockets that have already been replaced. */
   private generation = 0
   private subscriptionSequence = 0
@@ -38,8 +61,7 @@ export class NekoWebSocket {
   connect(serverUrl?: string) {
     if (serverUrl) this.url = serverUrl
     if (!this.url) {
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-      this.url = `${protocol}//${location.host}/ws/phone`
+      this.url = websocketURL('/ws/phone')
     }
 
     if (this.reconnectTimer !== null) {
@@ -53,6 +75,10 @@ export class NekoWebSocket {
     }
 
     this.intentionalClose = false
+    this.serviceError = ''
+    this.serviceActionURL = ''
+    this.retryDelayOverride = 0
+    this.terminalServiceError = false
     this.sessionReady = false
     this.protocolVersion = PROTOCOL_VERSION
     this.pendingSubscription = null
@@ -109,12 +135,46 @@ export class NekoWebSocket {
             return
           }
           if (msg.type === 'error') {
-            const m = (msg.payload as { message?: string })?.message || ''
-            if (m.includes('unauthorized')) {
+            const payload = msg.payload as Partial<ServiceErrorPayload> | undefined
+            const code = payload?.error_code || ''
+            const m = payload?.message || ''
+            if (code === 'phone_credential_invalid' || code === 'device_credential_invalid' || m.includes('unauthorized')) {
+              this.serviceError = m
+              this.serviceActionURL = safeActionURL(payload?.action_url)
+              this.terminalServiceError = true
               this.sessionReady = false
               this.pendingSubscription = null
               this.setStatus('auth_error')
               this.handlers.forEach(h => h(msg))
+              return
+            }
+            if (code && (RETRYABLE_SERVICE_ERRORS.has(code) || TERMINAL_SERVICE_ERRORS.has(code))) {
+              const retryable = RETRYABLE_SERVICE_ERRORS.has(code) && payload?.retryable === true
+              this.serviceError = m || code
+              this.serviceActionURL = safeActionURL(payload?.action_url)
+              this.terminalServiceError = !retryable
+              this.retryDelayOverride = retryable
+                ? boundedRetryDelay(payload?.retry_after_seconds)
+                : 0
+              this.sessionReady = false
+              this.pendingSubscription = null
+              this.setStatus(retryable ? 'disconnected' : 'transport_error')
+              this.handlers.forEach(h => h(msg))
+              socket.close()
+              return
+            }
+            if (code) {
+              // Unknown structured errors are terminal even if a remote peer
+              // claims they are retryable. A newer policy must be reviewed by
+              // this client before it can cause an automatic retry loop.
+              this.serviceError = m || code
+              this.serviceActionURL = safeActionURL(payload?.action_url)
+              this.terminalServiceError = true
+              this.sessionReady = false
+              this.pendingSubscription = null
+              this.setStatus('transport_error')
+              this.handlers.forEach(h => h(msg))
+              socket.close()
               return
             }
             // Surface handshake errors without treating them as a successful subscribe.
@@ -139,7 +199,7 @@ export class NekoWebSocket {
         if (!this.isCurrentSocket(socket, generation)) return
         this.ws = null
         this.sessionReady = false
-        if (this.status !== 'auth_error') {
+        if (this.status !== 'auth_error' && !(this.status === 'transport_error' && this.terminalServiceError)) {
           this.setStatus('disconnected')
         }
         if (!this.intentionalClose) this.scheduleReconnect()
@@ -213,6 +273,7 @@ export class NekoWebSocket {
     const phoneToken = getPhoneToken()
     const adminSecret = getPhoneSecret()
     const cred = getAuthCredential()
+    const routeHandle = getRouteHandle()
     this.trySend({
       protocol_version: PROTOCOL_VERSION,
       transport_mode: nestTransportMode(),
@@ -228,6 +289,7 @@ export class NekoWebSocket {
               ? { secret: cred }
               : {}),
         subscription_id: subscriptionId,
+        ...(routeHandle ? { route_handle: routeHandle } : {}),
         pwa_version: APP_VERSION,
         // The server returns its cached catalog immediately, then forwards a
         // routing-only rescan request to an online daemon for fresh native
@@ -364,7 +426,11 @@ export class NekoWebSocket {
   }
 
   getTransportError(): string {
-    return transportModeError()
+    return this.serviceError || transportModeError()
+  }
+
+  getServiceActionURL(): string {
+    return this.serviceActionURL
   }
 
   private setStatus(status: ConnectionStatus) {
@@ -375,13 +441,29 @@ export class NekoWebSocket {
   private scheduleReconnect() {
     if (this.reconnectTimer || this.intentionalClose) return
     if (!this.subscribedDevice) return
-    if (this.status === 'auth_error') return
+    if (this.status === 'auth_error' || this.terminalServiceError) return
     this.reconnectAttempts++
-    const delay = Math.min(this.reconnectAttempts * 2000, 30000)
+    const delay = this.retryDelayOverride || Math.min(this.reconnectAttempts * 2000, 30000)
+    this.retryDelayOverride = 0
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null
       this.connect()
     }, delay)
+  }
+}
+
+function boundedRetryDelay(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 2000
+  return Math.min(Math.max(Math.floor(value), 1), 300) * 1000
+}
+
+function safeActionURL(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) return ''
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'https:' ? parsed.toString() : ''
+  } catch {
+    return ''
   }
 }
 

@@ -1,15 +1,13 @@
-package ws
+package relaycore
 
 import (
 	"errors"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/nekonest/server/internal/db"
-	"github.com/nekonest/server/internal/protocol"
+	"github.com/klarkxy/nekonest/relaycore/protocol"
 )
 
 func TestThreadStartRelayFailureIsFailClosedAfterWriteAttempt(t *testing.T) {
@@ -21,20 +19,8 @@ func TestThreadStartRelayFailureIsFailClosedAfterWriteAttempt(t *testing.T) {
 	}
 }
 
-func testDB(t *testing.T) *db.DB {
-	t.Helper()
-	d, err := db.New(filepath.Join(t.TempDir(), "m.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	return d
-}
-
 func TestConnectionManagerDaemonIdentity(t *testing.T) {
-	d := testDB(t)
-	_, _ = d.RegisterDevice("dev1", "PC")
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 
 	var up, down int
 	cm.OnDeviceUp(func(id, _ string) {
@@ -94,7 +80,7 @@ func TestConnectionManagerDaemonIdentity(t *testing.T) {
 	}
 
 	// Identity-aware remove: wrong conn pointer is a no-op (already covered above).
-	// Full replace path closes the old websocket — covered by integration, not empty Conn stubs.
+	// Full replace path closes the old websocket 鈥?covered by integration, not empty Conn stubs.
 
 	cm.RemoveDaemon("dev1", c1)
 	if down != 1 || cm.IsDaemonOnline("dev1") {
@@ -104,9 +90,7 @@ func TestConnectionManagerDaemonIdentity(t *testing.T) {
 }
 
 func TestInitialDaemonVersionNotificationPrecedesReplacement(t *testing.T) {
-	d := testDB(t)
-	_, _ = d.RegisterDevice("dev1", "PC")
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 
 	initialEntered := make(chan struct{})
 	releaseInitial := make(chan struct{})
@@ -166,9 +150,7 @@ func TestInitialDaemonVersionNotificationPrecedesReplacement(t *testing.T) {
 }
 
 func TestSameVersionReplacementCannotSkipInitialNotification(t *testing.T) {
-	d := testDB(t)
-	_, _ = d.RegisterDevice("dev1", "PC")
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 
 	initialPublished := make(chan struct{})
 	releaseInitial := make(chan struct{})
@@ -235,9 +217,7 @@ func TestSameVersionReplacementCannotSkipInitialNotification(t *testing.T) {
 }
 
 func TestDaemonVersionReplacementNotificationsStayGenerationOrdered(t *testing.T) {
-	d := testDB(t)
-	_, _ = d.RegisterDevice("dev1", "PC")
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 	cm.AddDaemonVersioned("dev1", nil, "0.2.0")
 
 	firstEntered := make(chan struct{})
@@ -296,8 +276,7 @@ func TestDaemonVersionReplacementNotificationsStayGenerationOrdered(t *testing.T
 }
 
 func TestConnectionManagerPhoneSubscribe(t *testing.T) {
-	d := testDB(t)
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 	p1 := &websocket.Conn{}
 	p2 := &websocket.Conn{}
 
@@ -322,9 +301,7 @@ func TestConnectionManagerPhoneSubscribe(t *testing.T) {
 }
 
 func TestUpdateSessionsConvenience(t *testing.T) {
-	d := testDB(t)
-	_, _ = d.RegisterDevice("d", "n")
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 	c := &websocket.Conn{}
 	cm.AddDaemon("d", c)
 	cm.UpdateSessions("d", []*protocol.AgentSession{{ID: "a"}})
@@ -336,9 +313,7 @@ func TestUpdateSessionsConvenience(t *testing.T) {
 }
 
 func TestAgentStartCapabilitiesStayWithLiveDaemonGeneration(t *testing.T) {
-	d := testDB(t)
-	_, _ = d.RegisterDevice("dev1", "PC")
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 	first := cm.AddDaemonVersioned("dev1", nil, "0.2.3")
 
 	cm.UpdateSessionListFrom(first, []*protocol.AgentSession{{ID: "session-1"}}, []protocol.AgentStartCapability{
@@ -375,9 +350,7 @@ func TestAgentStartCapabilitiesStayWithLiveDaemonGeneration(t *testing.T) {
 }
 
 func TestRetiredKiloSessionsAreNotCachedOrBroadcast(t *testing.T) {
-	d := testDB(t)
-	_, _ = d.RegisterDevice("dev1", "PC")
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 	dc := cm.AddDaemonVersioned("dev1", nil, "0.2.3")
 
 	cm.UpdateSessionListFrom(dc, []*protocol.AgentSession{
@@ -398,9 +371,7 @@ func TestRetiredKiloSessionsAreNotCachedOrBroadcast(t *testing.T) {
 }
 
 func TestAgentStartCapabilitiesPreserveExplicitEmptyCatalog(t *testing.T) {
-	d := testDB(t)
-	_, _ = d.RegisterDevice("dev1", "PC")
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 	dc := cm.AddDaemonVersioned("dev1", nil, "0.2.3")
 
 	cm.UpdateSessionListFrom(dc, nil, []protocol.AgentStartCapability{})
@@ -533,8 +504,7 @@ func TestPhoneOutboundConcurrentCloseAndEnqueue(t *testing.T) {
 }
 
 func TestDaemonReplacementDoesNotBlockOtherDevices(t *testing.T) {
-	d := testDB(t)
-	cm := NewConnectionManager(d)
+	cm := NewConnectionManager(stubStore{})
 	first := cm.AddDaemon("dev-a", nil)
 
 	first.mu.Lock()

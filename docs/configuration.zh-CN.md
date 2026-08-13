@@ -36,6 +36,7 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 | 变量 | 公网是否必需 | 说明 |
 |---|---|---|
 | `NEKONEST_ADMIN_SECRET` | **是** | 首选管理员引导密钥；可直接鉴权并签发独立手机身份/令牌。 |
+| `NEKONEST_ADMIN_SECRET_FILE` | 托管运行时 | 包含管理员密钥的私有普通文件路径。不得与任何内联管理员密钥变量同时设置；非 Windows 主机会拒绝 group/other 权限。 |
 | `NEKONEST_PHONE_SECRET` | 兼容 | `NEKONEST_ADMIN_SECRET` 的单版本弃用别名。 |
 | `NEKONEST_BOOTSTRAP_TOKEN` | **是** | 保护 `POST /api/devices/register`（头 `X-Neko-Bootstrap`）。必须与管理员密钥不同。 |
 | `NEKONEST_TRANSPORT_MODE` | 否 | 首次启动可选 `open` \| `sealed`（新 DB 默认 sealed）；后续仅作为断言且必须匹配 SQLite 不可变值。无元数据旧库会持久化为 open，不能靠环境变量切换。 |
@@ -109,11 +110,16 @@ NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额�
 
 | 变量 | 何时 | 说明 |
 |---|---|---|
-| `NEKONEST_SERVER` | `-register` | VPS 地址，如 `https://nekonest.example.com`（http(s) 会规范为 ws(s)） |
+| `NEKONEST_SERVER` | `-register` | 稳定服务地址，如 `https://nekonest.example.com`；注册与 `/ws/daemon` 始终使用同一 origin。 |
 | `NEKONEST_BOOTSTRAP_TOKEN` | 公网 `-register` | 与 Server 相同；以 `X-Neko-Bootstrap` 发送 |
 | `NEKONEST_TRANSPORT_MODE` | 注册 / 可选断言 | 注册时读取并持久化 Server 模式；若显式提供则必须一致。缺少字段的旧 Daemon 配置认定为 open。 |
 | `NEKONEST_LOG_FORMAT` | 每次运行 | `text`（默认）或每行一个对象的 `json`。 |
 | `NEKONEST_LOG_LEVEL` | 每次运行 | `debug`、`info`（默认）、`warn`、`error`。 |
+
+注册请求包含 `registration_proof`：Daemon 使用 Ed25519 对域分离、长度前缀的
+一次性 bootstrap 凭证、OS、两把公钥、身份指纹和传输模式 transcript 签名。
+直连/自托管 Server 会安全忽略这个额外字段；托管 Cloud 在新配对凭证尝试恢复
+已撤销主机记录时强制验证，首次注册仍兼容旧版 Daemon。
 
 常驻运行从配置文件读凭据，不依赖上述环境变量。
 
@@ -127,11 +133,15 @@ Server/Daemon 只向 stdout/stderr 输出运维日志；Docker 或 journald 负�
 
 | 字段 | JSON 键 | 说明 |
 |---|---|---|
-| 服务器 URL | `server_url` | `wss://…` / `ws://…`（也接受 http(s)） |
+| 服务 URL | `server_url` | Daemon WebSocket 使用的稳定服务地址（`wss://…` / `ws://…`） |
 | 设备 ID | `device_id` | 注册时分配 |
 | 令牌 | `token` | 设备鉴权令牌；**机密** |
 | 工作目录 | `work_dir` | 可选会话目录提示 |
 | 传输模式 | `transport_mode` | 注册时从 Server 得到的不可变模式；旧配置缺省表示 open |
+
+尚未发布的 `control_plane_url`、`activation_poll_path`、`relay_generation`
+配置格式不再支持；加载时会明确提示重新注册。普通 v0.2.5 自部署
+`server_url` 配置保持兼容。
 
 ### 实例锁与日志
 
@@ -168,6 +178,25 @@ REST 使用由 ws(s) 推导的 http(s)。部署见 [deploy-windows.zh-CN.md](./d
 | 构建变量 | 默认 | 说明 |
 |---|---|---|
 | `VITE_NEKONEST_TRANSPORT_MODE` | 未设置 | 仅用于开发/构建断言。PWA 在 WebSocket 前读取 `/health.transport_mode`；若覆盖值不同，会显示错误并停止连接。 |
+| `VITE_NEKONEST_MANAGED` | 未设置 | 只有官方托管构建设为 `true`；此类构建强制要求部署期运行配置，并拒绝 open Relay。 |
+
+PWA 启动时以 `no-store` 从自身静态来源读取 `/runtime-config.json`。自部署
+文件为 `{}`，保持全部请求同源。托管部署提供：
+
+```json
+{
+  "api_base": "https://connect.example.com",
+  "ws_base": "wss://connect.example.com",
+  "attachment_base": "https://connect.example.com",
+  "push_base": "https://connect.example.com",
+  "managed": true,
+  "handoff_exchange_path": "/api/pwa/handoff/exchange"
+}
+```
+
+`api_base`、`ws_base`、`attachment_base` 与 `push_base` 必须是没有凭据、路径、
+query 或 fragment 的精确 origin；后三项可省略并回退到 `api_base`。该文件不进入
+PWA 预缓存，所以 placement 变化既不会向客户端暴露后端 URL，也不要求重构 PWA。
 
 ---
 
