@@ -13,6 +13,9 @@ RUN --mount=type=cache,target=/pnpm/store \
       --fetch-retry-mintimeout=10000 \
       --fetch-retry-maxtimeout=60000
 COPY pwa/ ./
+# protocol.contract.test.ts is type-checked by `pnpm build` and lives one
+# directory above the PWA module.
+COPY protocol/protocol.json /src/protocol/protocol.json
 RUN pnpm build
 
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine@sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052 AS server-build
