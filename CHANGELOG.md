@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-14
+
+### Added
+
+- Sign daemon registration requests with the long-term Ed25519 identity so a
+  managed Cloud can require private-key proof before restoring a revoked host
+  ID, while first-time and direct/self-hosted registration remain compatible.
+
 ### Changed
 
+- Complete the Chinese terminology transition to “乐园” across product copy,
+  metadata, tests, and active documentation.
 - Probe the phone key against `GET /api/devices` before entering the nest, and
   require a stored credential on private routes instead of `setup_done`.
 - Treat first-use open relay as an explicit Chinese consent, not a transport
@@ -18,12 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show thread summaries, relative activity, and honest empty/offline counts on
   the device tree; hide Grok-style opaque ids as titles.
 
-### Added
-
-- Sign daemon registration requests with the long-term Ed25519 identity so a
-  managed Cloud can require private-key proof before restoring a revoked host
-  ID, while first-time and direct/self-hosted registration remain compatible.
-
 ### Fixed
 
 - Treat `device_already_connected` as a same-endpoint retry so a stale live
@@ -31,13 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore Relay Core / standalone Server regression coverage for prompt
   acknowledgement, sealed replay, first-frame limits, attachments, and
   connection-manager generation ordering.
-
-## [0.2.6] - 2026-08-11
-
-### Changed
-
-- Complete the Chinese terminology transition to “乐园” across product copy,
-  metadata, tests, and active documentation.
 
 ## [0.2.5] - 2026-08-11
 
