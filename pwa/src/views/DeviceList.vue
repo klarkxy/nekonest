@@ -241,6 +241,9 @@ const connection = computed(() => {
   if (deviceStore.authError) {
     return { tone: 'error', dot: 'offline', label: t('deviceList.connAuth') } as const
   }
+  if (deviceStore.needsOpenTransportConsent) {
+    return { tone: 'waiting', dot: 'waiting', label: t('deviceList.transportConsentTitle') } as const
+  }
   if (deviceStore.transportError) {
     return { tone: 'error', dot: 'offline', label: t('deviceList.connTransportError') } as const
   }
