@@ -15,8 +15,15 @@ describe('formatRelativeActivity', () => {
     expect(formatRelativeActivity(sec - 20, NOW, 'en')).toBe('just now')
     expect(formatRelativeActivity(sec - 5 * 60, NOW, 'zh-CN')).toBe('5 分钟前')
     expect(formatRelativeActivity(sec - 3 * 3600, NOW, 'en')).toBe('3h ago')
-    expect(formatRelativeActivity(sec - 26 * 3600, NOW, 'zh-CN')).toBe('昨天')
-    expect(formatRelativeActivity(sec - 3 * 86400, NOW, 'en')).toBe('3d ago')
-    expect(formatRelativeActivity(sec - 20 * 86400, NOW, 'zh-CN')).toMatch(/7/)
+
+    const shiftDays = (days: number) => {
+      const d = new Date(NOW)
+      d.setDate(d.getDate() - days)
+      d.setHours(0, 0, 0, 0)
+      return Math.floor(d.getTime() / 1000)
+    }
+    expect(formatRelativeActivity(shiftDays(1), NOW, 'zh-CN')).toBe('昨天')
+    expect(formatRelativeActivity(shiftDays(3), NOW, 'en')).toBe('3d ago')
+    expect(formatRelativeActivity(shiftDays(20), NOW, 'zh-CN')).toMatch(/7/)
   })
 })
