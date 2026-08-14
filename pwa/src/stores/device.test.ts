@@ -18,6 +18,12 @@ vi.mock('@/api/websocket', () => {
     subscribe(deviceId: string) {
       harness.subscribedDevice = deviceId
     },
+    getSubscribedDevice() {
+      return harness.subscribedDevice
+    },
+    isConnected() {
+      return harness.status === 'connected'
+    },
     addHandler(id: string, handler: (msg: NekoMessage) => void) {
       harness.handlers.set(id, handler)
     },
@@ -32,7 +38,9 @@ vi.mock('@/api/websocket', () => {
       handler(harness.status)
     }
     ,
-    getTransportError() { return 'Transport mode mismatch: web app expects open, nest server is sealed' }
+    getTransportError() { return 'Transport mode mismatch: web app expects open, nest server is sealed' },
+    getTransportKind() { return 'mismatch' as const },
+    getServiceActionURL() { return '' }
   }
   return { nekoWS: () => socket }
 })

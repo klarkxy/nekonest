@@ -1,5 +1,6 @@
 <template>
   <div class="thread-list">
+    <p class="list-hint">{{ t('threadList.hint') }}</p>
     <div class="list-controls">
       <label class="control-field control-field--search">
         <span class="sr-only">{{ t('threadList.searchPlaceholder') }}</span>
@@ -40,7 +41,7 @@
       <template v-else-if="agentFilter && mergedSessions.length > 0">{{ t('threadList.emptyFilter') }}</template>
       <template v-else-if="prefs.showArchived">{{ t('threadList.emptyNone') }}</template>
       <template v-else-if="mergedSessions.length === 0">
-        {{ t('threadList.emptyCreateOnPc') }}
+        {{ deviceOnline ? t('threadList.emptyCreateOnPc') : t('deviceDetail.welcomeOfflineEmptyBody') }}
       </template>
       <template v-else>{{ t('threadList.emptyAllArchived') }}</template>
     </div>
@@ -107,8 +108,9 @@
           <summary
             class="project-start-menu__toggle"
             :aria-label="t('threadList.newThreadPickerAria', { project: project.label })"
+            @click="closeOtherStartMenus"
           >
-            {{ t('threadList.newThreadPicker') }}
+            ＋
           </summary>
           <div class="project-start-menu__options">
             <button
@@ -152,8 +154,8 @@
                 class="agent-avatar"
                 :src="agent.avatar"
                 alt=""
-                width="42"
-                height="42"
+                width="32"
+                height="32"
                 @error="onAvatarError"
               />
               <span class="agent-copy">
@@ -189,12 +191,15 @@
                   detail: sessionActivityPresentation(session.status).detail
                 })"
               >
-                <span class="session-summary">
-                  <span
-                    v-if="isLocalDraftSessionId(session.id)"
-                    class="draft-badge"
-                  >{{ t('threadList.draftBadge') }}</span>
-                  {{ shortSummary(session.summary) || (isLocalDraftSessionId(session.id) ? t('threadList.draftSummary') : '') }}
+                <span class="session-copy">
+                  <span class="session-summary">
+                    <span
+                      v-if="isLocalDraftSessionId(session.id)"
+                      class="draft-badge"
+                    >{{ t('threadList.draftBadge') }}</span>
+                    {{ threadRowTitle(session) }}
+                  </span>
+                  <span v-if="threadRowTime(session)" class="session-time">{{ threadRowTime(session) }}</span>
                 </span>
                 <span
                   class="session-status"
@@ -248,7 +253,8 @@ import { sessionDetailLocation } from '@/router/navigation'
 import { useSessionPrefsStore } from '@/stores/sessionPrefs'
 import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
 import type { AgentSession, AgentStartCapability, AgentType } from '@/types/protocol'
-import { agentLabel, sessionActivityPresentation, shortSummary } from '@/utils/agent'
+import { agentLabel, sessionActivityPresentation, sessionSearchHaystack, shortSummary, threadDisplayTitle } from '@/utils/agent'
+import { formatRelativeActivity } from '@/utils/time'
 import { projectStartOptions as startOptionsForProject } from '@/utils/startCapabilities'
 import {
   buildSessionTree,
@@ -266,7 +272,7 @@ const props = defineProps<{
   startCapabilities?: AgentStartCapability[] | null
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const router = useRouter()
 const prefs = useSessionPrefsStore()
 const localThreads = useLocalThreadsStore()
@@ -275,6 +281,27 @@ const searchQuery = ref('')
 const agentFilter = ref('')
 /** Stable id for archive semantics describedby. */
 const deviceOnline = computed(() => props.deviceOnline !== false)
+
+function threadRowTime(session: AgentSession): string {
+  return formatRelativeActivity(session.last_activity, Date.now(), String(locale.value))
+}
+
+function threadRowTitle(session: AgentSession): string {
+  if (isLocalDraftSessionId(session.id) && !session.summary) {
+    return t('threadList.draftSummary')
+  }
+  return threadDisplayTitle(
+    session.summary,
+    [session.project || projectLabel(session), threadRowTime(session)],
+    48
+  )
+}
+
+function projectLabel(session: AgentSession): string {
+  const path = (session.project_dir || '').replace(/\\/g, '/')
+  const parts = path.split('/').filter(Boolean)
+  return session.project || parts[parts.length - 1] || ''
+}
 
 const mergedSessions = computed(() => {
   const remote = props.sessions
@@ -306,15 +333,11 @@ const visibleProjects = computed(() => {
     if (!prefs.showArchived && prefs.isArchived(session.id)) return false
     if (!q) return true
     // Agent filtering is the top select; search is for thread/folder text only.
-    const hay = [
-      session.summary,
-      session.project,
-      session.project_dir,
-      session.id
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
+    const hay = sessionSearchHaystack(session, [
+      agentLabel(session.agent_type),
+      t('agent.untitledThread'),
+      t('threadList.draftSummary')
+    ])
     return hay.includes(q)
   })
   const filtered = visibleSessions.filter(session => {
@@ -352,6 +375,13 @@ function projectStartTitle(project: SessionTreeProject, option: ProjectStartOpti
         agent: option.label,
         reason: t('threadList.startOffline')
       })
+}
+
+function closeOtherStartMenus(event: Event) {
+  const current = (event.currentTarget as HTMLElement).closest('details')
+  document.querySelectorAll('.project-start-menu[open]').forEach(node => {
+    if (node !== current) (node as HTMLDetailsElement).open = false
+  })
 }
 
 function onNewThread(project: SessionTreeProject, agentType: AgentType) {
@@ -431,6 +461,13 @@ function onAvatarError(event: Event) {
 </script>
 
 <style scoped>
+.list-hint {
+  margin: 0 0 8px;
+  color: var(--neko-ink-faint);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .list-controls {
   display: grid;
   gap: 8px;
@@ -561,11 +598,12 @@ function onAvatarError(event: Event) {
 
 .project-start-menu__toggle {
   display: inline-flex;
-  min-width: 66px;
+  min-width: 44px;
+  width: 44px;
   min-height: 44px;
   align-items: center;
   justify-content: center;
-  padding: 0 10px;
+  padding: 0;
   border: 1px solid var(--neko-line);
   border-radius: 12px 12px 15px 9px;
   color: var(--neko-primary-deep);
@@ -772,9 +810,9 @@ function onAvatarError(event: Event) {
 
 .agent-avatar {
   display: block;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   border: 2px solid color-mix(in srgb, var(--agent-color) 52%, var(--neko-surface-solid));
   border-radius: 14px 14px 17px 10px;
   background: var(--agent-soft-color);
@@ -843,12 +881,27 @@ function onAvatarError(event: Event) {
   text-decoration: none;
 }
 
+.session-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
 .session-summary {
   overflow: hidden;
-  flex: 1;
   color: var(--neko-ink);
   font-size: 13px;
   line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-time {
+  overflow: hidden;
+  color: var(--neko-ink-faint);
+  font-size: 11px;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

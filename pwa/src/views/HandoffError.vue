@@ -32,5 +32,5 @@ onUnmounted(clearHandoffFailure)
 .eyebrow { margin: 22px 0 8px; color: var(--neko-ink-soft); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
 h1 { margin: 0; color: var(--neko-ink); font-family: var(--neko-display); font-size: 28px; }
 .message { margin: 16px auto 24px; color: var(--neko-ink-soft); line-height: 1.65; }
-.action { display: inline-flex; min-height: 44px; align-items: center; padding: 0 20px; border-radius: 999px; color: white; background: var(--neko-accent); text-decoration: none; font-weight: 700; }
+.action { display: inline-flex; min-height: 44px; align-items: center; padding: 0 20px; border-radius: 999px; color: white; background: var(--neko-primary); text-decoration: none; font-weight: 700; }
 </style>

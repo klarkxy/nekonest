@@ -163,6 +163,22 @@ describe('NekoWebSocket lifecycle', () => {
     expect(FakeWebSocket.instances).toHaveLength(2)
   })
 
+  it('does not mint a second subscribe while the same device handshake is still pending', () => {
+    const client = new NekoWebSocket()
+    client.subscribe('device-a')
+    const socket = FakeWebSocket.instances[0]
+    socket.open()
+    expect(socket.sent).toHaveLength(1)
+    client.subscribe('device-a')
+    expect(socket.sent).toHaveLength(1)
+    const first = latestSubscription(socket)
+    acknowledge(socket, 'device-a', first.subscriptionId)
+    expect(client.isConnected()).toBe(true)
+    client.subscribe('device-a', { force: true })
+    expect(socket.sent).toHaveLength(2)
+    expect(client.isConnected()).toBe(false)
+  })
+
   it('accepts only the latest device and subscription id during a switch', () => {
     const client = new NekoWebSocket()
     client.subscribe('device-a')

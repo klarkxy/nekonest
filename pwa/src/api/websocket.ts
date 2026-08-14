@@ -1,6 +1,12 @@
 import type { NekoMessage, ServiceErrorPayload } from '@/types/protocol'
 import { nestTransportMode, PROTOCOL_VERSION } from '@/types/protocol'
-import { ensureTransportMode, runtimeTransportMode, transportModeError } from './transport'
+import {
+  ensureTransportMode,
+  runtimeTransportMode,
+  transportModeError,
+  transportModeKind,
+  type TransportFailureKind
+} from './transport'
 import { APP_VERSION } from '@/config/version'
 import { getAuthCredential, getPhoneSecret, getPhoneToken, getRouteHandle } from './http'
 import { websocketURL } from '@/config/runtimeEndpoint'
@@ -241,12 +247,14 @@ export class NekoWebSocket {
     else this.onReady.push(cb)
   }
 
-  subscribe(deviceId: string) {
+  subscribe(deviceId: string, opts?: { force?: boolean }) {
     const changed = this.subscribedDevice !== deviceId
     this.subscribedDevice = deviceId
 
     if (this.ws?.readyState === WebSocket.OPEN) {
-      if (changed || !this.sessionReady) {
+      const resendReady = opts?.force === true && this.sessionReady
+      const firstAttempt = !this.sessionReady && !this.pendingSubscription
+      if (changed || resendReady || firstAttempt) {
         this.sessionReady = false
         this.pendingSubscription = null
         this.setStatus('connecting')
@@ -427,6 +435,11 @@ export class NekoWebSocket {
 
   getTransportError(): string {
     return this.serviceError || transportModeError()
+  }
+
+  getTransportKind(): TransportFailureKind | '' {
+    if (this.serviceError && !transportModeKind()) return 'unknown'
+    return transportModeKind()
   }
 
   getServiceActionURL(): string {

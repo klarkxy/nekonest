@@ -642,8 +642,6 @@ export const useSessionStore = defineStore('sessions', () => {
       setCurrentSession(null)
       activeDeviceId = deviceId
     }
-    ws.subscribe(deviceId)
-
     ws.onStatusChange(HANDLER_ID, (s) => {
       wsStatus.value = s
       if (s === 'connected') {
@@ -1067,6 +1065,10 @@ export const useSessionStore = defineStore('sessions', () => {
         }
       }
     })
+
+    const forceRefresh = catalogStatus.value === 'loading' && ws.isConnected() &&
+      ws.getSubscribedDevice() === deviceId
+    ws.subscribe(deviceId, forceRefresh ? { force: true } : undefined)
   }
 
   function applySessionList(payload: SessionListPayload, deviceId: string, producerVersion?: string) {
@@ -1076,10 +1078,12 @@ export const useSessionStore = defineStore('sessions', () => {
     ).filter(
       (s): s is AgentSession => !!s && s.agent_type !== 'kilo' && (!s.device_id || s.device_id === deviceId)
     )
-    // Keep absent (legacy) distinct from an explicit empty catalog.
-    startCapabilities.value = Array.isArray(payload.start_capabilities)
-      ? payload.start_capabilities.filter(capability => capability.agent_type !== 'kilo')
-      : null
+    // REST snapshots omit this field. Do not wipe a WS-probed spawn catalog.
+    if (Array.isArray(payload.start_capabilities)) {
+      startCapabilities.value = payload.start_capabilities.filter(
+        capability => capability.agent_type !== 'kilo'
+      )
+    }
   }
 
   function normalizeSessionCapabilities(session: AgentSession | undefined, producerVersion?: string): AgentSession | undefined {

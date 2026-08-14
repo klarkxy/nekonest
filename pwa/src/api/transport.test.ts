@@ -5,7 +5,8 @@ import {
   openTransportConsentRequired,
   resetTransportModeForTests,
   runtimeTransportMode,
-  transportModeError
+  transportModeError,
+  transportModeKind
 } from './transport'
 import { setRuntimeConfigForTests } from '@/config/runtimeEndpoint'
 
@@ -48,6 +49,7 @@ describe('runtime transport mode', () => {
     vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ transport_mode: 'open' }), { status: 200 }))
 
     await expect(ensureTransportMode()).rejects.toThrow('Confirm that prompts and responses')
+    expect(transportModeKind()).toBe('consent_required')
     expect(openTransportConsentRequired()).toBe(true)
     expect(runtimeTransportMode()).toBeNull()
 

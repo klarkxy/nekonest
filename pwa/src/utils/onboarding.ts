@@ -1,7 +1,16 @@
-export const WINDOWS_PAIR_COMMANDS = {
-  register: '.\\nekonest-daemon.exe -register -name "书房电脑"',
-  pair: '.\\nekonest-daemon.exe -pair gen'
+export const PAIR_COMMANDS = {
+  windows: {
+    register: '.\\nekonest-daemon.exe -register -name "家里电脑"',
+    pair: '.\\nekonest-daemon.exe -pair gen'
+  },
+  linux: {
+    register: './nekonest-daemon -register -name "家里电脑"',
+    pair: './nekonest-daemon -pair gen'
+  }
 } as const
+
+/** @deprecated use PAIR_COMMANDS.windows */
+export const WINDOWS_PAIR_COMMANDS = PAIR_COMMANDS.windows
 
 export function normalizePhoneSecret(value: string): string | null {
   const normalized = value.trim()

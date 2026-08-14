@@ -21,7 +21,7 @@ export type SessionActivityPresentation = {
 }
 
 const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function activityFromKeys(
   prefix:
@@ -135,10 +135,40 @@ function looksLikeOpaqueId(text: string): boolean {
 
 export function shortSummary(text: string | undefined, max = 48): string {
   if (!text || looksLikeOpaqueId(text)) return tGlobal('agent.untitledThread')
-  const t = text.replace(/\s+/g, ' ').trim()
+  const firstLine = (text.trim().split(/\r?\n/)[0] || text).trim()
+  const sentence = firstLine.split(/(?<=[。！？.!?])\s+/)[0] || firstLine
+  const t = sentence.replace(/\s+/g, ' ').trim()
   if (looksLikeOpaqueId(t)) return tGlobal('agent.untitledThread')
   if (t.length <= max) return t
   return t.slice(0, max) + '…'
+}
+
+export function threadDisplayTitle(
+  summary: string | undefined,
+  fallbacks: Array<string | undefined>,
+  max = 48
+): string {
+  const title = shortSummary(summary, max)
+  if (title !== tGlobal('agent.untitledThread')) return title
+  const joined = fallbacks.map(part => (part || '').trim()).filter(Boolean).join(' · ')
+  return joined || title
+}
+
+export function sessionSearchHaystack(
+  session: Pick<AgentSession, 'summary' | 'project' | 'project_dir' | 'id' | 'agent_type'>,
+  extraLabels: string[]
+): string {
+  return [
+    session.summary,
+    session.project,
+    session.project_dir,
+    session.id,
+    session.agent_type,
+    ...extraLabels
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
 }
 
 /** Display project name + optional shortened path. */

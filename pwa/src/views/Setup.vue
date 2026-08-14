@@ -24,14 +24,17 @@
       :input-props="{ id: 'phone-secret' }"
     />
 
+    <p v-if="fieldError" class="field-error" role="alert">{{ fieldError }}</p>
+
     <n-button
       type="primary"
       attr-type="submit"
       block
       size="large"
-      :disabled="!secret.trim()"
+      :disabled="!secret.trim() || probing"
+      :loading="probing"
     >
-      {{ t('setup.enter') }}
+      {{ probing ? t('setup.probing') : t('setup.enter') }}
     </n-button>
 
     <p id="secret-hint" class="hint">
@@ -47,7 +50,7 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { NButton, NInput } from 'naive-ui'
-import { setPhoneSecret, getPhoneSecret } from '@/api/http'
+import { getPhoneSecret, completeSetupWithSecret } from '@/api/http'
 import LocaleThemeBar from '@/components/LocaleThemeBar.vue'
 import { devicesLocation } from '@/router/navigation'
 import { normalizePhoneSecret } from '@/utils/onboarding'
@@ -55,13 +58,26 @@ import { normalizePhoneSecret } from '@/utils/onboarding'
 const { t } = useI18n()
 const router = useRouter()
 const secret = ref(getPhoneSecret())
+const fieldError = ref('')
+const probing = ref(false)
 
-function save() {
+async function save() {
   const normalized = normalizePhoneSecret(secret.value)
-  if (!normalized) return
-  setPhoneSecret(normalized)
-  localStorage.setItem('nekonest_setup_done', '1')
-  void router.replace(devicesLocation())
+  if (!normalized || probing.value) return
+  probing.value = true
+  fieldError.value = ''
+  try {
+    const result = await completeSetupWithSecret(normalized)
+    if (result.ok) {
+      void router.replace(devicesLocation())
+      return
+    }
+    if (result.reason === 'auth') fieldError.value = t('setup.errAuth')
+    else if (result.reason === 'server') fieldError.value = t('setup.errServer', { status: result.status || 0 })
+    else fieldError.value = t('setup.errNetwork')
+  } finally {
+    probing.value = false
+  }
 }
 </script>
 
@@ -109,6 +125,13 @@ h1 {
 
 .secret-input {
   margin-bottom: 16px;
+  text-align: left;
+}
+
+.field-error {
+  margin: 0 0 12px;
+  color: var(--neko-danger-ink);
+  font-size: 13px;
   text-align: left;
 }
 

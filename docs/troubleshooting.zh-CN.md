@@ -14,7 +14,7 @@
 | Origins | `NEKONEST_ALLOWED_ORIGINS` 含浏览器来源 |
 | `/health` | 服务端返回 `{"status":"nyan~"}` |
 
-401 / 无法操作通常是密钥错误或 API 缺少鉴权头。
+401 / 无法操作通常是密钥错误或 API 缺少鉴权头。设置页用 `GET /api/devices` 探针，拒绝的钥匙不得写入。首次使用的**开放中继确认**不是传输模式不匹配。
 
 ## Daemon 无法注册
 

@@ -104,6 +104,31 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   return fetch(apiURL(path), { ...init, headers, cache: 'no-store' })
 }
 
+/** Probe a candidate admin secret without persisting it or minting a phone identity. */
+export async function probePhoneCredential(secret: string): Promise<Response> {
+  const headers = new Headers()
+  headers.set('Authorization', `Bearer ${secret}`)
+  headers.set('X-Neko-Secret', secret)
+  headers.set('Content-Type', 'application/json')
+  return fetch(apiURL('/api/devices'), { method: 'GET', headers, cache: 'no-store' })
+}
+
+export type SetupProbeResult = { ok: true } | { ok: false; reason: 'auth' | 'server' | 'network'; status?: number }
+
+/** Persist the admin secret only after GET /api/devices accepts it. */
+export async function completeSetupWithSecret(secret: string): Promise<SetupProbeResult> {
+  try {
+    const res = await probePhoneCredential(secret)
+    if (res.status === 401) return { ok: false, reason: 'auth', status: 401 }
+    if (!res.ok) return { ok: false, reason: 'server', status: res.status }
+    setPhoneSecret(secret)
+    localStorage.setItem('nekonest_setup_done', '1')
+    return { ok: true }
+  } catch {
+    return { ok: false, reason: 'network' }
+  }
+}
+
 /** Bootstrap a phone identity using the admin nest secret. */
 export async function bootstrapPhoneIdentity(name = 'Phone'): Promise<{
   phone_id: string

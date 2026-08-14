@@ -54,7 +54,7 @@
       </div>
       <div>
         <dt>{{ t('deviceDetail.statThreads') }}</dt>
-        <dd>{{ sessionStore.sessions.length || device?.active_agents || 0 }}</dd>
+        <dd>{{ threadStatCount }}</dd>
       </div>
     </dl>
 
@@ -65,7 +65,11 @@
         </div>
       </div>
 
-      <div v-if="loadError" class="load-error" role="alert">
+      <div v-if="authError" class="load-error" role="alert">
+        <p>{{ t('deviceList.authBody') }}</p>
+        <RouterLink class="retry-load" :to="setupLocation()">{{ t('deviceList.keySettings') }}</RouterLink>
+      </div>
+      <div v-else-if="loadError" class="load-error" role="alert">
         <p>{{ loadError }}</p>
         <button type="button" class="retry-load" :disabled="loadingSessions" @click="retryFetch">
           {{ loadingSessions ? t('common.retrying') : t('deviceDetail.retryOnce') }}
@@ -81,7 +85,7 @@
       </div>
 
       <SessionThreadList
-        v-if="sessionStore.sessions.length > 0 || localThreadCount > 0 || (!loadingSessions && !loadError)"
+        v-if="!authError && (sessionStore.sessions.length > 0 || localThreadCount > 0 || (!loadingSessions && !loadError))"
         :sessions="sessionStore.sessions"
         :device-id="deviceId"
         :device-online="isOnline"
@@ -103,8 +107,9 @@ import { useLocalThreadsStore } from '@/stores/localThreads'
 import { apiFetch } from '@/api/http'
 import { ensurePushSubscription } from '@/api/push'
 import { nekoWS } from '@/api/websocket'
-import { devicesLocation } from '@/router/navigation'
+import { devicesLocation, setupLocation } from '@/router/navigation'
 import SessionThreadList from '@/components/SessionThreadList.vue'
+import { deviceThreadStatCount } from '@/utils/threadCount'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -116,6 +121,7 @@ const localThreads = useLocalThreadsStore()
 const deviceId = computed(() => String(route.params.deviceId || ''))
 const device = computed(() => deviceStore.devices.find(d => d.id === deviceId.value))
 const loadError = ref('')
+const authError = ref(false)
 const loadingSessions = ref(false)
 const localThreadCount = computed(() => localThreads.listForDevice(deviceId.value).length)
 
@@ -132,9 +138,17 @@ const welcomeTitle = computed(() => {
 })
 
 const welcomeBody = computed(() => {
-  if (!isOnline.value) return t('deviceDetail.welcomeOfflineBody')
+  if (!isOnline.value) {
+    return hasThreads.value
+      ? t('deviceDetail.welcomeOfflineBody')
+      : t('deviceDetail.welcomeOfflineEmptyBody')
+  }
   return t('deviceDetail.welcomeEmptyBody')
 })
+
+const threadStatCount = computed(() =>
+  deviceThreadStatCount(sessionStore.sessions.length, localThreadCount.value)
+)
 
 watch(
   () => device.value?.name,
@@ -186,6 +200,7 @@ async function fetchSessions(want: string) {
   const controller = new AbortController()
   fetchController = controller
   loadError.value = ''
+  authError.value = false
   loadingSessions.value = true
   try {
     const res = await apiFetch(
@@ -193,6 +208,10 @@ async function fetchSessions(want: string) {
       { signal: controller.signal }
     )
     if (!isCurrentRequest(want, gen, controller)) return
+    if (res.status === 401) {
+      authError.value = true
+      return
+    }
     if (!res.ok) {
       loadError.value = t('deviceDetail.loadError')
       return
@@ -448,7 +467,9 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 }
 
 .retry-load {
+  display: inline-flex;
   min-height: 44px;
+  align-items: center;
   padding: 0 16px;
   border: 0;
   border-radius: 12px;
@@ -456,6 +477,7 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
   background: var(--neko-primary);
   font-weight: 650;
   cursor: pointer;
+  text-decoration: none;
 }
 
 html[data-theme='dark'] .retry-load {

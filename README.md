@@ -236,7 +236,7 @@ layer; see [Relay Core boundary](docs/relay-core.md).
 
 ### 3. Pair the phone
 
-1. Open `https://nekonest.example.com` and enter `NEKONEST_ADMIN_SECRET` to bootstrap the phone identity.
+1. Open `https://nekonest.example.com` and enter `NEKONEST_ADMIN_SECRET`. The PWA probes `GET /api/devices` before entering; a wrong key stays on setup. An intentional open nest asks for an explicit confirm.
 2. **Pair computer** with the 6-digit code.
 3. Confirm the device is online; open **directory → agent → thread**.
 4. Send prompts and optional images / TXT / Markdown / PDF / JSON.

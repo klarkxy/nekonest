@@ -51,7 +51,10 @@
           <code translate="no">{{ expectedFingerprint }}</code>
         </p>
 
-        <p v-if="fieldError" class="field-error" role="alert">{{ fieldError }}</p>
+        <p v-if="fieldError" class="field-error" role="alert">
+          {{ fieldError }}
+          <RouterLink v-if="showSetupLink" class="field-error-link" :to="setupLocation()">{{ t('deviceList.keySettings') }}</RouterLink>
+        </p>
 
         <n-button
           type="primary"
@@ -71,22 +74,38 @@
           <li>
             <span>{{ t('pair.help1') }}</span>
             <div class="command-row">
-              <code translate="no">{{ WINDOWS_PAIR_COMMANDS.pair }}</code>
+              <code translate="no">{{ PAIR_COMMANDS.windows.pair }}</code>
               <button
                 type="button"
-                :aria-label="t('pair.copyCmd', { cmd: WINDOWS_PAIR_COMMANDS.pair })"
-                @click="copyCommand(WINDOWS_PAIR_COMMANDS.pair)"
+                :aria-label="t('pair.copyCmd', { cmd: PAIR_COMMANDS.windows.pair })"
+                @click="copyCommand(PAIR_COMMANDS.windows.pair)"
+              >{{ t('common.copy') }}</button>
+            </div>
+            <div class="command-row">
+              <code translate="no">{{ PAIR_COMMANDS.linux.pair }}</code>
+              <button
+                type="button"
+                :aria-label="t('pair.copyCmd', { cmd: PAIR_COMMANDS.linux.pair })"
+                @click="copyCommand(PAIR_COMMANDS.linux.pair)"
               >{{ t('common.copy') }}</button>
             </div>
           </li>
           <li>
             <span>{{ t('pair.help2') }}</span>
             <div class="command-row">
-              <code translate="no">{{ WINDOWS_PAIR_COMMANDS.register }}</code>
+              <code translate="no">{{ PAIR_COMMANDS.windows.register }}</code>
               <button
                 type="button"
-                :aria-label="t('pair.copyCmd', { cmd: WINDOWS_PAIR_COMMANDS.register })"
-                @click="copyCommand(WINDOWS_PAIR_COMMANDS.register)"
+                :aria-label="t('pair.copyCmd', { cmd: PAIR_COMMANDS.windows.register })"
+                @click="copyCommand(PAIR_COMMANDS.windows.register)"
+              >{{ t('common.copy') }}</button>
+            </div>
+            <div class="command-row">
+              <code translate="no">{{ PAIR_COMMANDS.linux.register }}</code>
+              <button
+                type="button"
+                :aria-label="t('pair.copyCmd', { cmd: PAIR_COMMANDS.linux.register })"
+                @click="copyCommand(PAIR_COMMANDS.linux.register)"
               >{{ t('common.copy') }}</button>
             </div>
           </li>
@@ -112,8 +131,8 @@ import {
 } from '@/crypto/identity'
 import { completePairKeySetup } from '@/crypto/keys'
 import { useBindingStore } from '@/stores/binding'
-import { devicesLocation } from '@/router/navigation'
-import { normalizePairCode, WINDOWS_PAIR_COMMANDS } from '@/utils/onboarding'
+import { devicesLocation, setupLocation } from '@/router/navigation'
+import { normalizePairCode, PAIR_COMMANDS } from '@/utils/onboarding'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -125,17 +144,20 @@ const expectedFingerprint = ref('')
 const trustedQR = ref<PairQRPayload | null>(null)
 const pairing = ref(false)
 const fieldError = ref('')
+const showSetupLink = ref(false)
 const pairCodeModel = computed({
   get: () => pairCode.value,
   set: (value: string) => {
     pairCode.value = normalizePairCode(value)
     fieldError.value = ''
+    showSetupLink.value = false
   }
 })
 
 function onQrPaste(value: string) {
   qrPaste.value = value
   fieldError.value = ''
+  showSetupLink.value = false
   const qr = parsePairQRPayload(value)
   if (!qr) {
     trustedQR.value = null
@@ -149,6 +171,7 @@ function onQrPaste(value: string) {
 
 async function handlePair() {
   fieldError.value = ''
+  showSetupLink.value = false
   const code = normalizePairCode(pairCode.value)
   if (code.length !== 6 || pairing.value) return
   pairCode.value = code
@@ -170,6 +193,7 @@ async function handlePair() {
 
     if (res.status === 401) {
       fieldError.value = t('pair.errAuth')
+      showSetupLink.value = true
       return
     }
     if (res.status === 409) {
@@ -340,6 +364,13 @@ async function copyCommand(command: string) {
   font-size: 12px;
   line-height: 1.45;
   text-align: left;
+}
+
+.field-error-link {
+  display: inline-block;
+  margin-left: 8px;
+  color: var(--neko-primary-deep);
+  font-weight: 650;
 }
 
 .pair-help {

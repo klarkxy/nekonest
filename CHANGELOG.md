@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Probe the phone key against `GET /api/devices` before entering the nest, and
+  require a stored credential on private routes instead of `setup_done`.
+- Treat first-use open relay as an explicit Chinese consent, not a transport
+  mismatch. Pair help now lists Windows and Linux commands.
+- Open a listed thread from the cached REST catalog without waiting for a
+  WebSocket `session_list`. REST snapshots no longer wipe start capabilities.
+- Show thread summaries, relative activity, and honest empty/offline counts on
+  the device tree; hide Grok-style opaque ids as titles.
+
 ### Added
 
 - Sign daemon registration requests with the long-term Ed25519 identity so a

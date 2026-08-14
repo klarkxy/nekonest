@@ -92,13 +92,19 @@
       <a v-if="deviceStore.serviceActionURL" :href="deviceStore.serviceActionURL">{{ t('deviceList.serviceAction') }}</a>
     </div>
 
-    <div v-if="deviceStore.transportError" class="auth-banner" role="alert">
-      <strong>{{ t('deviceList.transportTitle') }}</strong>
-      <span>{{ deviceStore.transportError }}</span>
+    <div
+      v-if="deviceStore.transportError || deviceStore.needsOpenTransportConsent"
+      class="auth-banner"
+      :class="{ 'auth-banner--consent': deviceStore.needsOpenTransportConsent }"
+      role="alert"
+    >
+      <strong>{{ transportBanner.title }}</strong>
+      <span>{{ transportBanner.body }}</span>
       <a v-if="deviceStore.serviceActionURL" :href="deviceStore.serviceActionURL">{{ t('deviceList.serviceAction') }}</a>
       <button
         v-if="deviceStore.needsOpenTransportConsent"
         type="button"
+        class="auth-banner__confirm"
         @click="deviceStore.confirmOpenTransport()"
       >{{ t('deviceList.confirmOpenTransport') }}</button>
     </div>
@@ -251,6 +257,26 @@ const connection = computed(() => {
     return { tone: 'connected', dot: 'online', label: t('deviceList.connServerOk') } as const
   }
   return { tone: 'waiting', dot: 'waiting', label: t('deviceList.connWsReconnect') } as const
+})
+
+const transportBanner = computed(() => {
+  if (deviceStore.needsOpenTransportConsent) {
+    return {
+      title: t('deviceList.transportConsentTitle'),
+      body: t('deviceList.transportConsentBody')
+    }
+  }
+  const kind = deviceStore.transportKind
+  if (kind === 'downgrade_blocked') {
+    return { title: t('deviceList.transportTitle'), body: t('deviceList.transportDowngradeBody') }
+  }
+  if (kind === 'managed_requires_sealed') {
+    return { title: t('deviceList.transportTitle'), body: t('deviceList.transportManagedBody') }
+  }
+  if (kind === 'health_unavailable' || kind === 'invalid_mode') {
+    return { title: t('deviceList.transportTitle'), body: t('deviceList.transportHealthBody') }
+  }
+  return { title: t('deviceList.transportTitle'), body: t('deviceList.transportMismatchBody') }
 })
 
 const versionSummary = computed(() => {
@@ -607,6 +633,20 @@ function osLabel(os: string): string {
 
 .auth-banner strong {
   font-size: 13px;
+}
+
+.auth-banner__confirm {
+  justify-self: start;
+  min-height: 44px;
+  margin-top: 6px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  background: var(--neko-primary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .device-section {

@@ -3,9 +3,19 @@ import { apiURL, endpointOrigin, isManagedRuntime } from '@/config/runtimeEndpoi
 
 const VALID_MODES = new Set<TransportMode>(['sealed', 'open'])
 
+export type TransportFailureKind =
+  | 'consent_required'
+  | 'mismatch'
+  | 'downgrade_blocked'
+  | 'managed_requires_sealed'
+  | 'health_unavailable'
+  | 'invalid_mode'
+  | 'unknown'
+
 let resolvedMode: TransportMode | null = null
 let resolvePromise: Promise<TransportMode> | null = null
 let transportError = ''
+let transportKind: TransportFailureKind | '' = ''
 let consentRequired = false
 
 const PIN_KEY_PREFIX = 'nekonest_transport_pin:'
@@ -49,23 +59,35 @@ export async function ensureTransportMode(force = false): Promise<TransportMode>
     try {
       const override = configuredOverride()
       const response = await fetch(apiURL('/health'), { cache: 'no-store' })
-      if (!response.ok) throw new Error(`Could not read nest transport mode (HTTP ${response.status})`)
+      if (!response.ok) {
+        const err = new Error(`Could not read nest transport mode (HTTP ${response.status})`)
+        ;(err as Error & { kind: TransportFailureKind }).kind = 'health_unavailable'
+        throw err
+      }
       const body = await response.json() as { transport_mode?: unknown }
       const mode = body.transport_mode
       if (!VALID_MODES.has(mode as TransportMode)) {
-        throw new Error('Nest server returned an invalid transport mode')
+        const err = new Error('Nest server returned an invalid transport mode')
+        ;(err as Error & { kind: TransportFailureKind }).kind = 'invalid_mode'
+        throw err
       }
       if (override && override !== mode) {
-        throw new Error(`Transport mode mismatch: web app expects ${override}, nest server is ${mode}`)
+        const err = new Error(`Transport mode mismatch: web app expects ${override}, nest server is ${mode}`)
+        ;(err as Error & { kind: TransportFailureKind }).kind = 'mismatch'
+        throw err
       }
       if (isManagedRuntime() && mode !== 'sealed') {
-        throw new Error('Managed NekoNest requires sealed transport')
+        const err = new Error('Managed NekoNest requires sealed transport')
+        ;(err as Error & { kind: TransportFailureKind }).kind = 'managed_requires_sealed'
+        throw err
       }
       const pinKey = originKey(PIN_KEY_PREFIX)
       const pinned = readLocal(pinKey)
       if (mode === 'open') {
         if (pinned === 'sealed') {
-          throw new Error('Transport downgrade blocked: this origin was previously pinned to sealed mode')
+          const err = new Error('Transport downgrade blocked: this origin was previously pinned to sealed mode')
+          ;(err as Error & { kind: TransportFailureKind }).kind = 'downgrade_blocked'
+          throw err
         }
         if (readLocal(originKey(OPEN_CONSENT_KEY_PREFIX)) !== 'confirmed') {
           consentRequired = true
@@ -75,11 +97,15 @@ export async function ensureTransportMode(force = false): Promise<TransportMode>
       writeLocal(pinKey, mode as TransportMode)
       resolvedMode = mode as TransportMode
       transportError = ''
+      transportKind = ''
       consentRequired = false
       return resolvedMode
     } catch (error) {
       resolvedMode = null
       transportError = error instanceof Error ? error.message : 'Could not determine nest transport mode'
+      const tagged = error as { kind?: TransportFailureKind; name?: string }
+      if (tagged?.name === 'OpenTransportConsentRequiredError') transportKind = 'consent_required'
+      else transportKind = tagged.kind || 'unknown'
       throw error
     } finally {
       resolvePromise = null
@@ -97,6 +123,10 @@ export function transportModeError(): string {
   return transportError
 }
 
+export function transportModeKind(): TransportFailureKind | '' {
+  return transportKind
+}
+
 export function openTransportConsentRequired(): boolean {
   return consentRequired
 }
@@ -107,6 +137,7 @@ export function acknowledgeOpenTransport() {
   resolvedMode = null
   resolvePromise = null
   transportError = ''
+  transportKind = ''
   consentRequired = false
 }
 
@@ -120,5 +151,6 @@ export function resetTransportModeForTests(mode: TransportMode | null = null) {
   resolvedMode = mode
   resolvePromise = null
   transportError = ''
+  transportKind = ''
   consentRequired = false
 }

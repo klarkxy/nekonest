@@ -9,7 +9,8 @@ import { componentVersionStatus } from '@/utils/componentVersions'
 import { useBindingStore } from './binding'
 import {
   acknowledgeOpenTransport,
-  openTransportConsentRequired
+  openTransportConsentRequired,
+  type TransportFailureKind
 } from '@/api/transport'
 
 export const useDeviceStore = defineStore('devices', () => {
@@ -20,6 +21,7 @@ export const useDeviceStore = defineStore('devices', () => {
   const connected = ref(false)
   const authError = ref(false)
   const transportError = ref('')
+  const transportKind = ref<TransportFailureKind | ''>('')
   const serviceActionURL = ref('')
   const needsOpenTransportConsent = ref(false)
   const serverVersion = ref('')
@@ -66,18 +68,19 @@ export const useDeviceStore = defineStore('devices', () => {
       connected.value = status === 'connected'
       authError.value = status === 'auth_error'
       transportError.value = status === 'transport_error' ? ws.getTransportError() : ''
+      transportKind.value = status === 'transport_error' ? ws.getTransportKind() : ''
       serviceActionURL.value = status === 'auth_error' || status === 'transport_error'
         ? ws.getServiceActionURL()
         : ''
       needsOpenTransportConsent.value = status === 'transport_error' && openTransportConsentRequired()
     })
 
-    // Connect once we have a device to subscribe to
+    // Do not steal an in-flight session/device subscribe during handshake.
     const target =
       binding.lastDeviceId ||
       binding.bound[0]?.id ||
       devices.value[0]?.id
-    if (target) {
+    if (target && !ws.getSubscribedDevice()) {
       ws.subscribe(target)
     }
   }
@@ -85,6 +88,7 @@ export const useDeviceStore = defineStore('devices', () => {
   function confirmOpenTransport() {
     acknowledgeOpenTransport()
     transportError.value = ''
+    transportKind.value = ''
     serviceActionURL.value = ''
     needsOpenTransportConsent.value = false
     nekoWS().connect()
@@ -94,8 +98,6 @@ export const useDeviceStore = defineStore('devices', () => {
     loading.value = true
     loadError.value = ''
     authError.value = false
-    transportError.value = ''
-    serviceActionURL.value = ''
     try {
       const res = await apiFetch('/api/devices')
       if (res.status === 401) {
@@ -114,14 +116,16 @@ export const useDeviceStore = defineStore('devices', () => {
       serverVersion.value = typeof data.server_version === 'string' ? data.server_version : ''
       loaded.value = true
 
-      // Auto-subscribe to last / first device for live updates
       const binding = useBindingStore()
       const target =
         binding.lastDeviceId ||
         binding.bound[0]?.id ||
         devices.value[0]?.id
-      if (target) {
-        nekoWS().subscribe(target)
+      const ws = nekoWS()
+      if (target && !ws.getSubscribedDevice()) {
+        ws.subscribe(target)
+        binding.setLastDevice(target)
+      } else if (target) {
         binding.setLastDevice(target)
       }
     } catch (err) {
@@ -140,6 +144,7 @@ export const useDeviceStore = defineStore('devices', () => {
     connected,
     authError,
     transportError,
+    transportKind,
     serviceActionURL,
     needsOpenTransportConsent,
     frontendVersion: APP_VERSION,

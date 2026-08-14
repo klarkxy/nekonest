@@ -19,11 +19,11 @@
         />
         <div class="header-mid">
           <h1>
-            {{ agentLabelText }}
+            {{ threadHeaderTitle }}
             <span v-if="isLocalDraft" class="header-draft-tag">{{ t('session.draftTag') }}</span>
           </h1>
-          <div v-if="projectLine" class="header-project" :title="projectLine.path || projectLine.name">
-            {{ projectBaseName(projectLine.name || projectLine.path) }}
+          <div class="header-project" :title="projectLine?.path || projectLine?.name || ''">
+            {{ [agentLabelText, projectLine ? projectBaseName(projectLine.name || projectLine.path) : '', threadHeaderTime].filter(Boolean).join(' · ') }}
           </div>
         </div>
         <button
@@ -70,6 +70,9 @@
     </section>
 
     <template v-else>
+    <section v-if="catalogRefreshing" class="catalog-refresh" role="status">
+      {{ t('session.catalogRefreshing') }}
+    </section>
     <section
       v-if="showActivityBanner"
       class="thread-activity"
@@ -399,7 +402,8 @@ import { deviceDetailLocation, sessionDetailLocation } from '@/router/navigation
 import { useSessionStore } from '@/stores/session'
 import { useDraftStore } from '@/stores/drafts'
 import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThreads'
-import { projectBaseName, projectDisplay, sessionActivityPresentation, shortSummary } from '@/utils/agent'
+import { projectBaseName, projectDisplay, sessionActivityPresentation, shortSummary, threadDisplayTitle } from '@/utils/agent'
+import { formatRelativeActivity } from '@/utils/time'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
 import { createApprovalDecisionGuard } from '@/utils/approvalDecision'
 import { bindStartOperationIfAllowed } from '@/utils/startCapabilities'
@@ -409,9 +413,11 @@ import {
   MAX_COUNT,
   type AttachmentRef
 } from '@/utils/attachments'
-import type { SessionMessage, AttachmentRef as ProtoAtt } from '@/types/protocol'
+import type { SessionMessage, AttachmentRef as ProtoAtt, SessionListPayload } from '@/types/protocol'
+import { apiFetch } from '@/api/http'
+import { sessionCatalogGate, sessionInDeviceCatalog } from '@/utils/sessionCatalogGate'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -425,10 +431,18 @@ const isLocalDraft = computed(() => isLocalDraftSessionId(sessionId.value))
 const catalogReady = computed(() =>
   sessionStore.catalogStatus === 'ready' && sessionStore.catalogDeviceId === deviceId.value
 )
-const catalogLoading = computed(() => !isLocalDraft.value && !catalogReady.value)
-const hiddenOrRemoved = computed(() =>
-  !isLocalDraft.value && catalogReady.value &&
-  !sessionStore.sessions.some(session => session.id === sessionId.value)
+const targetInCatalog = computed(() =>
+  sessionInDeviceCatalog(sessionStore.sessions, sessionId.value, deviceId.value)
+)
+const catalogGate = computed(() => sessionCatalogGate({
+  isLocalDraft: isLocalDraft.value,
+  catalogReady: catalogReady.value,
+  targetInCatalog: targetInCatalog.value
+}))
+const catalogLoading = computed(() => catalogGate.value.catalogLoading)
+const hiddenOrRemoved = computed(() => catalogGate.value.hiddenOrRemoved)
+const catalogRefreshing = computed(() =>
+  !isLocalDraft.value && !catalogReady.value && targetInCatalog.value
 )
 const pendingStartOpId = ref('')
 /** Terminal start_thread outcome while still on the phone draft route. */
@@ -451,6 +465,24 @@ let userInputClock: number | null = null
 const agentMeta = computed(() => getAgentMeta(sessionStore.currentSession?.agent_type))
 const agentLabelText = computed(() => {
   return sessionStore.currentSession ? agentMeta.value.label : t('session.fallbackTitle')
+})
+
+const threadHeaderTime = computed(() =>
+  formatRelativeActivity(sessionStore.currentSession?.last_activity, Date.now(), String(locale.value))
+)
+
+const threadHeaderTitle = computed(() => {
+  if (isLocalDraft.value && !sessionStore.currentSession?.summary) {
+    return t('session.draftEmptyTitle')
+  }
+  const project = projectLine.value
+    ? projectBaseName(projectLine.value.name || projectLine.value.path)
+    : ''
+  return threadDisplayTitle(
+    sessionStore.currentSession?.summary,
+    [project, threadHeaderTime.value],
+    36
+  )
 })
 
 const projectLine = computed(() => {
@@ -574,7 +606,7 @@ const composerPlaceholder = computed(() => {
   if (isStartingThread.value) return t('session.placeholderStarting')
   if (mainSendIsSteer.value) return t('session.placeholderSteer')
   if (sendBlocked.value) return t('session.placeholderBusy')
-  if (!sendSupported.value) return capabilityUnavailableText('send', 'session.sendUnavailable')
+  if (!sendSupported.value) return t('session.placeholderUnavailable')
   return t('session.placeholder')
 })
 
@@ -807,11 +839,31 @@ function bindSession() {
     startTerminalStatus.value = 'indeterminate'
   }
   // Local drafts have no native history yet.
-  if (!isLocalDraftSessionId(sid)) {
-    /* history fetch stays in setCurrentSession path */
+  if (!isLocalDraftSessionId(sid) && !sessionInDeviceCatalog(sessionStore.sessions, sid, did)) {
+    void fetchCachedSessions(did)
   }
   restoreDraft()
   boundDraftKey = { deviceId: did, sessionId: sid }
+}
+
+async function fetchCachedSessions(want: string) {
+  const generation = routeGeneration
+  try {
+    const res = await apiFetch(
+      `/api/devices/sessions?device_id=${encodeURIComponent(want)}`
+    )
+    if (generation !== routeGeneration || deviceId.value !== want) return
+    if (!res.ok) return
+    const data = await res.json() as SessionListPayload
+    if (generation !== routeGeneration || deviceId.value !== want) return
+    sessionStore.applySessionList(data, want)
+    const listed = sessionStore.sessions.find(s => s.id === sessionId.value)
+    if (listed && sessionStore.currentSession?.id !== listed.id) {
+      sessionStore.setCurrentSession(listed)
+    }
+  } catch {
+    // Stay on the loading wall until WebSocket catalog ready.
+  }
 }
 
 function onAgentAvatarLoad(event: Event) {
@@ -1461,6 +1513,16 @@ async function handleUserInputSubmit() {
 .ws-pill.auth_error,
 .ws-pill.disconnected { background: var(--neko-danger-soft); color: var(--neko-danger-ink); }
 
+.catalog-refresh {
+  flex: 0 0 auto;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--neko-line);
+  color: var(--neko-ink-soft);
+  background: var(--neko-surface-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .thread-activity {
   flex: 0 0 auto;
   padding: 8px 16px;
@@ -1778,12 +1840,12 @@ async function handleUserInputSubmit() {
 .user-input-card {
   margin: 8px 16px;
   padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--neko-accent) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--neko-primary) 40%, transparent);
   border-radius: 14px;
   background: var(--neko-surface);
 }
 .user-input-question { margin-top: 12px; }
-.user-input-header { font-size: 12px; font-weight: 700; color: var(--neko-accent); }
+.user-input-header { font-size: 12px; font-weight: 700; color: var(--neko-primary); }
 .user-input-label { display: block; margin: 4px 0 8px; line-height: 1.4; }
 .user-input-options { display: grid; gap: 8px; }
 .user-input-option { display: flex; min-height: 44px; align-items: center; gap: 10px; }

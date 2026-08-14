@@ -231,7 +231,7 @@ placement 或租户清单状态。托管部署在自己的授权与 placement �
 
 ### 3. 在手机上配对
 
-1. 打开 `https://nekonest.example.com`，输入 `NEKONEST_ADMIN_SECRET` 引导手机身份。
+1. 打开 `https://nekonest.example.com`，输入 `NEKONEST_ADMIN_SECRET`。PWA 会先用 `GET /api/devices` 探针，错钥匙停在设置页。有意使用开放中继时会要求明确确认。
 2. 进入「配对电脑」，输入 Daemon 打印的 6 位配对码。
 3. 确认设备在线，按「目录 → 智能体 → 线程」进入已有线程。
 4. 发送提示词，或选择图片、TXT、Markdown、PDF、JSON 等附件后发送。

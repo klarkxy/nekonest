@@ -14,7 +14,7 @@ Symptom-oriented checks for self-hosted NekoNest. Configuration details: [config
 | Origins | `NEKONEST_ALLOWED_ORIGINS` includes the browser origin |
 | `/health` | `{"status":"nyan~"}` on the server |
 
-401 / unable to operate usually means wrong secret or missing auth headers on API calls.
+401 / unable to operate usually means wrong secret or missing auth headers on API calls. Setup probes `GET /api/devices` and must not persist a rejected key. A first-use **open relay confirm** is not a transport-mode mismatch.
 
 ## Daemon will not register
 

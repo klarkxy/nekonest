@@ -9,16 +9,15 @@ const router = createRouter({
   scrollBehavior: () => ({ top: 0 })
 })
 
+export function privateRouteNeedsCredential(isPublic: boolean): boolean {
+  if (isPublic) return false
+  return !getPhoneToken() && !getPhoneSecret()
+}
+
 router.beforeEach((to) => {
   if (to.meta.public) return true
-  // Soft gate: if never set secret, go to setup once.
-  // Empty secret is allowed only when server also has no secret (dev).
-  if (!getPhoneSecret() && !getPhoneToken() && to.name !== 'setup') {
-    // Allow through if user already dismissed — we use a flag
-    const skipped = localStorage.getItem('nekonest_setup_done')
-    if (!skipped) {
-      return { name: 'setup' }
-    }
+  if (privateRouteNeedsCredential(false) && to.name !== 'setup') {
+    return { name: 'setup' }
   }
   return true
 })

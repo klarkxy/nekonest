@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { setPhoneSecret, setPhoneToken, clearPhoneSecret, clearPhoneIdentity } from '../api/http'
+import { privateRouteNeedsCredential } from './index'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import {
   deviceDetailLocation,
@@ -58,5 +60,24 @@ describe('named route parameter encoding', () => {
 
     expect(legacyRouter.currentRoute.value.name).toBe('device-detail')
     expect(legacyRouter.currentRoute.value.params.deviceId).toBe(deviceId)
+  })
+})
+
+describe('privateRouteNeedsCredential', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    clearPhoneSecret()
+    clearPhoneIdentity()
+  })
+
+  it('requires a stored phone token or admin secret for private routes', () => {
+    localStorage.setItem('nekonest_setup_done', '1')
+    expect(privateRouteNeedsCredential(true)).toBe(false)
+    expect(privateRouteNeedsCredential(false)).toBe(true)
+    setPhoneSecret('admin-secret')
+    expect(privateRouteNeedsCredential(false)).toBe(false)
+    clearPhoneSecret()
+    setPhoneToken('phone-token')
+    expect(privateRouteNeedsCredential(false)).toBe(false)
   })
 })

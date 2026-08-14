@@ -7,8 +7,10 @@ import {
   groupSessionsByAgent,
   projectDisplay,
   sessionActivityPresentation,
+  sessionSearchHaystack,
   shortSummary,
   statusLabel,
+  threadDisplayTitle,
   statusTagType
 } from './agent'
 import { getAgentMeta } from '@/config/agents'
@@ -64,6 +66,30 @@ describe('agent helpers', () => {
     expect(shortSummary('255d65ae-b684-44de-b181-60aacf81df0a')).toBe(
       tGlobal('agent.untitledThread')
     )
+    expect(shortSummary('019fff63-3feb-7571-be27-9a57f4a47a1d')).toBe(
+      tGlobal('agent.untitledThread')
+    )
+    expect(shortSummary('第一行标题\n后面还有很多助手输出')).toBe('第一行标题')
+  })
+
+  it('threadDisplayTitle falls back to project and time instead of a wall of untitled', () => {
+    expect(threadDisplayTitle('019fff63-3feb-7571-be27-9a57f4a47a1d', ['nekonest', '3 分钟前'])).toBe(
+      'nekonest · 3 分钟前'
+    )
+    expect(threadDisplayTitle('修好目录门闩', ['nekonest'])).toBe('修好目录门闩')
+  })
+
+  it('sessionSearchHaystack matches agent labels and untitled copy', () => {
+    const hay = sessionSearchHaystack({
+      id: 's1',
+      summary: '',
+      project: 'nekonest',
+      project_dir: 'D:/code/nekonest',
+      agent_type: 'codex'
+    }, ['Codex', tGlobal('agent.untitledThread')])
+    expect(hay).toContain('codex')
+    expect(hay).toContain(tGlobal('agent.untitledThread').toLowerCase())
+    expect(hay).toContain('nekonest')
   })
 
   it('groupSessionsByAgent order', () => {

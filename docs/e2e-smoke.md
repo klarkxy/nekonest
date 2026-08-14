@@ -36,7 +36,7 @@ One nest = one persisted mode. An environment/build override is only an assertio
 
 ## A. Open-mode core path
 
-1. Open PWA; enter the nest admin secret (setup).  
+1. Open PWA; enter the nest admin secret (setup). A wrong key stays on the setup page. An intentional open nest asks for a Chinese confirm, not a “mismatch”.
 2. Pair: run `nekonest-daemon -pair gen` on the host; paste **QR JSON** (preferred) or 6-digit code; compare **fingerprint** with the PC screen.  
 3. Device list shows the host **online**. The page-level PWA / Server releases align; each device card shows that machine's Daemon release. A deliberately stale PWA shows **Refresh now**; only the stale machine is marked for a Daemon update.
 4. On the host, open/use a supported agent so a recent thread exists.  

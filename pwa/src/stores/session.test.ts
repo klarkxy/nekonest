@@ -28,13 +28,16 @@ vi.mock('@/api/websocket', () => {
     subscribe(deviceId: string) {
       harness.subscribedDevice = deviceId
     },
+    getSubscribedDevice() {
+      return harness.subscribedDevice
+    },
+    isConnected() {
+      return harness.connected
+    },
     send(msg: Partial<NekoMessage>) {
       if (!harness.connected) return false
       harness.sent.push(structuredClone(msg))
       return true
-    },
-    isConnected() {
-      return harness.connected
     },
     getProtocolVersion() {
       return harness.protocolVersion
@@ -1375,7 +1378,41 @@ describe('session prompt outbox', () => {
       expect.objectContaining({ agent_type: 'grok_build', available: false, reason: 'CLI missing' })
     ])
     store.applySessionList({ sessions: [] }, 'device-a')
-    expect(store.startCapabilities).toBeNull()
+    expect(store.startCapabilities).toEqual([
+      expect.objectContaining({ agent_type: 'claude_code', spawn: true }),
+      expect.objectContaining({ agent_type: 'grok_build', available: false, reason: 'CLI missing' })
+    ])
+    expect(store.catalogStatus).toBe('ready')
+    store.cleanup()
+  })
+
+  it('does not mark the catalog ready from a REST list that already contains the target', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({
+      sessions: [{
+        id: 'session-a', device_id: 'device-a', agent_type: 'codex',
+        status: 'idle', summary: 'cached', last_activity: 1,
+        capabilities: { interrupt: true }
+      }]
+    }, 'device-a')
+    store.currentSession = store.sessions[0]
+
+    expect(store.catalogStatus).toBe('loading')
+    expect(store.currentSessionCatalogVisible).toBe(false)
+    expect(store.sessions[0].id).toBe('session-a')
+
+    emit({
+      protocol_version: '1.1',
+      transport_mode: 'open',
+      type: 'session_list',
+      device_id: 'device-a',
+      timestamp: 2,
+      payload: { sessions: [] }
+    })
+    expect(store.catalogStatus).toBe('ready')
+    expect(store.currentSession).toBeNull()
+    expect(store.currentSessionCatalogVisible).toBe(false)
     store.cleanup()
   })
 
