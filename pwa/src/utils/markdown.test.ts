@@ -6,6 +6,7 @@ describe('isMarkdownBubble', () => {
     expect(isMarkdownBubble({ role: 'assistant' })).toBe(true)
     expect(isMarkdownBubble({ role: 'assistant', type: 'text' })).toBe(true)
     expect(isMarkdownBubble({ role: 'assistant', type: 'tool_call' })).toBe(false)
+    expect(isMarkdownBubble({ role: 'assistant', type: 'thinking' })).toBe(false)
   })
   it('user text', () => {
     expect(isMarkdownBubble({ role: 'user', type: 'text' })).toBe(true)

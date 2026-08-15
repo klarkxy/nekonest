@@ -208,9 +208,21 @@
         class="message-bubble"
         :class="[msg.role, msg.type]"
       >
-        <div v-if="msg.type === 'thinking'" class="thinking-indicator">
-          {{ msg.content }}
-        </div>
+        <details
+          v-if="msg.type === 'thinking'"
+          class="thinking-block"
+        >
+          <summary class="thinking-summary">
+            <span class="thinking-summary-mark" aria-hidden="true" />
+            <span
+              v-if="msg.id === liveThinkingId"
+              class="thinking-live-dot"
+              aria-hidden="true"
+            />
+            <span class="thinking-summary-label">{{ thinkingLabel(msg) }}</span>
+          </summary>
+          <div class="thinking-indicator">{{ msg.content }}</div>
+        </details>
         <div v-else-if="msg.role === 'system'" class="system-msg">
           {{ msg.content }}
         </div>
@@ -405,6 +417,7 @@ import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThrea
 import { projectBaseName, projectDisplay, sessionActivityPresentation, shortSummary, threadDisplayTitle } from '@/utils/agent'
 import { formatRelativeActivity } from '@/utils/time'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
+import { liveThinkingMessageId } from '@/utils/thinking'
 import { createApprovalDecisionGuard } from '@/utils/approvalDecision'
 import { bindStartOperationIfAllowed } from '@/utils/startCapabilities'
 import {
@@ -966,6 +979,14 @@ watch(
     }
   }
 )
+
+const liveThinkingId = computed(() =>
+  liveThinkingMessageId(sessionStore.messages, sessionStore.streaming)
+)
+
+function thinkingLabel(msg: SessionMessage): string {
+  return msg.id === liveThinkingId.value ? t('session.thinkingLive') : t('session.thinking')
+}
 
 function msgAttachments(msg: SessionMessage): ProtoAtt[] {
   const a = msg.metadata?.attachments
@@ -1640,12 +1661,65 @@ async function handleUserInputSubmit() {
   padding: 4px 8px;
   max-width: 100%;
 }
-.message-bubble.tool_call,
-.message-bubble.thinking {
+.message-bubble.tool_call {
   background: var(--neko-surface-muted);
   border: 1px solid var(--neko-line);
   color: var(--neko-ink-soft);
   font-size: 12px;
+}
+.message-bubble.thinking {
+  padding: 0;
+  font-style: normal;
+  font-size: 13px;
+  background: var(--neko-surface-muted);
+  border: 1px solid var(--neko-line);
+  color: var(--neko-ink-soft);
+}
+.thinking-block {
+  width: 100%;
+  min-width: 0;
+}
+.thinking-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--neko-ink-soft);
+}
+.thinking-summary::-webkit-details-marker,
+.thinking-summary::marker {
+  display: none;
+  content: '';
+}
+.thinking-summary-mark {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+.thinking-block[open] .thinking-summary-mark {
+  transform: rotate(45deg);
+}
+.thinking-live-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--neko-primary);
+  animation: thinking-pulse 1.2s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
 }
 .message-bubble .system-msg { color: var(--neko-ink-faint); font-size: 12px; }
 .message-bubble .tool-call-info,
@@ -1654,6 +1728,12 @@ async function handleUserInputSubmit() {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.thinking-indicator {
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  padding: 0 12px 12px;
+  line-height: 1.55;
 }
 .msg-body { white-space: pre-wrap; word-break: break-word; }
 

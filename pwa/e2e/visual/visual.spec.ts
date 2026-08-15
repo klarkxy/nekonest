@@ -198,6 +198,11 @@ test.describe('390px primary visual matrix', () => {
     await openScenario(page, request, 'session-rich', sessionPath)
     await waitForConnected(page)
     await expect(page.getByText('390 × 844')).toBeVisible()
+    const thinking = page.locator('.thinking-block')
+    await expect(thinking.getByText('思考', { exact: true })).toBeVisible()
+    await expect(page.getByText('正在检查路由、状态和响应式断点')).toBeHidden()
+    const thinkingBox = await thinking.locator('summary').boundingBox()
+    expect(thinkingBox?.height || 0).toBeGreaterThanOrEqual(43)
     const log = page.getByRole('log')
     const scrollRange = await log.evaluate(element => element.scrollHeight - element.clientHeight)
     expect(scrollRange).toBeGreaterThan(0)
@@ -208,6 +213,8 @@ test.describe('390px primary visual matrix', () => {
     await expect.poll(() => log.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
     await assertPrimaryTouchTargets(page)
     await capture(page, 'session-rich-bottom.png', false)
+    await thinking.locator('summary').click()
+    await expect(page.getByText('正在检查路由、状态和响应式断点')).toBeVisible()
   })
 
   test('prompt queued while disconnected', async ({ page, request }) => {

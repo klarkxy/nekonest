@@ -281,7 +281,6 @@ html[data-theme="dark"] .message-bubble.user {
 .message-bubble.thinking {
   color: var(--neko-ink-faint);
   background: var(--neko-surface-muted);
-  font-style: italic;
 }
 
 .message-bubble.tool-call {

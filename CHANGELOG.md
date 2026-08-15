@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Fold thinking/reasoning blocks in the thread view so Grok (and other agents)
+  no longer dump long chain-of-thought into the phone chat. Tap the header to
+  expand; the latest block stays marked as in progress while it streams.
+
 ## [0.2.7] - 2026-08-15
 
 ### Changed

@@ -216,6 +216,8 @@ export default {
     interrupt: 'Stop',
     interruptAria: 'Interrupt current task',
     messagesAria: 'Thread messages',
+    thinking: 'Thinking',
+    thinkingLive: 'Thinking…',
     importing: 'Syncing history from the PC…',
     catalogLoadingTitle: 'Loading recent threads…',
     catalogLoadingHint: 'Waiting for the host to confirm this device’s thread catalog.',

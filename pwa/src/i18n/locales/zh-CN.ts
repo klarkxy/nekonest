@@ -215,6 +215,8 @@ export default {
     interrupt: '中断',
     interruptAria: '中断当前任务',
     messagesAria: '线团消息',
+    thinking: '思考',
+    thinkingLive: '思考中…',
     importing: '正在同步家里的记录…',
     catalogLoadingTitle: '正在加载近期线团…',
     catalogLoadingHint: '正在等待主机确认这台设备的线团目录。',
