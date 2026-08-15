@@ -102,6 +102,10 @@ are authoritative; see [agent support](./agent-capability-matrix.md).
 If the new daemon fails, stop it, restore the previous binary, and start the
 same service. Do not replace or edit native agent stores during an upgrade.
 
+Binary and archive upgrades do not rewrite the user unit. When release notes
+mention template changes, compare the installed unit with the
+[repository template](../daemon/packaging/nekonest-daemon.service) explicitly.
+
 ## Related
 
 - [VPS deploy](./deploy-vps.md)

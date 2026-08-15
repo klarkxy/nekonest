@@ -99,6 +99,9 @@ Daemon 配置只能由一个进程使用。
 新 Daemon 失败时，停止它，恢复旧二进制，再启动同一服务。升级期间不要替换
 或编辑原生智能体存储。
 
+二进制和压缩包升级不会改写用户服务单元。发版说明提到模板变化时，应主动将
+已安装单元与[仓库模板](../daemon/packaging/nekonest-daemon.service)比较。
+
 ## 相关文档
 
 - [VPS 部署](./deploy-vps.zh-CN.md)

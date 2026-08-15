@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-08-15
+
 ### Changed
 
 - Align operator docs with current behavior: new nests default to sealed, Windows and
   Linux hosts are first-class, and the three Go modules plus `go.work` are
-  described consistently. Linux daemon packaging no longer forces
-  `NEKONEST_TRANSPORT_MODE=open`.
+  described consistently. The repository's Linux systemd template no longer
+  forces `NEKONEST_TRANSPORT_MODE=open`; binary upgrades do not rewrite an
+  existing unit, so operators must compare template changes explicitly.
 - Keep live documentation under `docs/` (plus the root landing files). Move the
   frozen v1.0.0 target contract and unused v0.1→v1.0 migration runbook into
   `docs/archive/`.
@@ -313,7 +316,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/klarkxy/nekonest/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/klarkxy/nekonest/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/klarkxy/nekonest/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/klarkxy/nekonest/compare/v0.2.3...v0.2.4
