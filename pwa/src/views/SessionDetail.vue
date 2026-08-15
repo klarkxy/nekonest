@@ -102,7 +102,7 @@
             <template v-if="item.position > 0">{{ t('session.queuePosition', { position: item.position }) }} · </template>{{ queueStatusLabel(item.status) }}
           </span>
           <button
-            v-if="item.status === 'queued'"
+            v-if="item.status === 'queued' || item.status === 'blocked_failed' || item.status === 'blocked_interrupted'"
             type="button"
             class="queue-action"
             :disabled="sessionStore.wsStatus !== 'connected'"
@@ -341,6 +341,13 @@
     <p v-if="composeStatusText" class="compose-status" role="status">
       {{ composeStatusText }}
     </p>
+    <label v-if="planModeAvailable" class="plan-mode-toggle">
+      <input v-model="planMode" type="checkbox" :disabled="sending || uploading" />
+      <span>
+        <strong>{{ t('session.planMode') }}</strong>
+        <small>{{ t('session.planModeHint') }}</small>
+      </span>
+    </label>
     <button
       v-if="showSeparateSteer"
       type="button"
@@ -539,6 +546,12 @@ const steerMode = computed(
 )
 
 const queueEnabled = computed(() => !!sessionCaps.value?.queue && sessionStore.wsStatus === 'connected' && !isLocalDraft.value)
+const planMode = ref(false)
+const planModeAvailable = computed(() =>
+  sessionStore.currentSession?.agent_type === 'codex' &&
+  sessionCaps.value?.user_input === true &&
+  !isLocalDraft.value
+)
 const mainSendIsSteer = computed(() => steerMode.value && !queueEnabled.value)
 const showSeparateSteer = computed(() => steerMode.value && queueEnabled.value)
 
@@ -814,6 +827,7 @@ function bindSession() {
   pendingStartOpId.value = ''
   startTerminalStatus.value = ''
   sending.value = false
+  planMode.value = false
   const did = deviceId.value
   const sid = sessionId.value
   if (
@@ -1328,7 +1342,13 @@ async function handleSend() {
   pendingAtts.value = []
   draftStore.clear(deviceId.value, sessionId.value)
 
-  const ok = sessionStore.sendPrompt(deviceId.value, sessionId.value, prompt, atts)
+  const ok = sessionStore.sendPrompt(
+    deviceId.value,
+    sessionId.value,
+    prompt,
+    atts,
+    planMode.value ? 'plan' : undefined
+  )
   if (!ok) {
     inputText.value = prompt
     pendingAtts.value = attsSnapshot
@@ -1911,6 +1931,23 @@ async function handleUserInputSubmit() {
   font-weight: 650;
   cursor: pointer;
 }
+.plan-mode-toggle {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: 0;
+  padding: 6px 16px;
+  border-top: 1px solid var(--neko-line);
+  color: var(--neko-ink);
+  background: var(--neko-panel);
+  cursor: pointer;
+}
+.plan-mode-toggle input { width: 18px; height: 18px; accent-color: var(--neko-primary); }
+.plan-mode-toggle span { display: grid; gap: 1px; }
+.plan-mode-toggle strong { font-size: 12px; }
+.plan-mode-toggle small { color: var(--neko-ink-soft); font-size: 11px; line-height: 1.35; }
 .queue-action:disabled,
 .separate-steer-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 .separate-steer-btn {

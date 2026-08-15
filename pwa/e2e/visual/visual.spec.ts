@@ -198,6 +198,10 @@ test.describe('390px primary visual matrix', () => {
     await openScenario(page, request, 'session-rich', sessionPath)
     await waitForConnected(page)
     await expect(page.getByText('390 × 844')).toBeVisible()
+    const planMode = page.getByRole('checkbox', { name: /规划模式/ })
+    await expect(planMode).toBeVisible()
+    await planMode.check()
+    await expect(planMode).toBeChecked()
     const thinking = page.locator('.thinking-block')
     await expect(thinking.getByText('思考', { exact: true })).toBeVisible()
     await expect(page.getByText('正在检查路由、状态和响应式断点')).toBeHidden()
@@ -215,6 +219,22 @@ test.describe('390px primary visual matrix', () => {
     await capture(page, 'session-rich-bottom.png', false)
     await thinking.locator('summary').click()
     await expect(page.getByText('正在检查路由、状态和响应式断点')).toBeVisible()
+  })
+
+  test('Codex structured question reaches the PWA', async ({ page, request }) => {
+    await openScenario(page, request, 'session-question', sessionPath)
+    await waitForConnected(page)
+    await expect(page.getByRole('group', { name: 'Codex 正在等你回答' })).toBeVisible()
+    await expect(page.getByText('这次先验证哪条路径？')).toBeVisible()
+    await page.getByRole('radio', { name: /队列/ }).check()
+    await expect(page.getByRole('button', { name: '提交回答' })).toBeEnabled()
+  })
+
+  test('failed and queued prompts remain removable', async ({ page, request }) => {
+    await openScenario(page, request, 'session-queue-blocked', sessionPath)
+    await waitForConnected(page)
+    await expect(page.getByRole('region', { name: '提示词队列' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '取消' })).toHaveCount(2)
   })
 
   test('prompt queued while disconnected', async ({ page, request }) => {

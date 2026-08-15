@@ -23,6 +23,8 @@ export const SCENARIO_NAMES = new Set([
   'device-filter',
   'device-archived',
   'session-rich',
+  'session-question',
+  'session-queue-blocked',
   'prompt-queued',
   'prompt-sending',
   'prompt-accepted',
@@ -99,13 +101,14 @@ export function devicesFor(name) {
 
 function primarySession(name) {
   const approval = name === 'session-approval'
+  const question = name === 'session-question'
   const streaming = name === 'session-streaming'
   const unavailable = name === 'session-unavailable'
   return {
     id: MAIN_SESSION_ID,
     device_id: MAIN_DEVICE_ID,
     agent_type: 'codex',
-    status: approval ? 'waiting_approval' : streaming ? 'running' : 'idle',
+    status: approval ? 'waiting_approval' : question ? 'waiting_user' : streaming ? 'running' : 'idle',
     summary: '完善 NekoNest 本地截图回归',
     last_activity: FIXED_NOW - 45,
     project_dir: 'D:\\0 code\\nekonest',
@@ -124,7 +127,7 @@ function primarySession(name) {
           attachment_mode: 'unsupported'
         }
       : codexCapabilities,
-    ...((approval || streaming) ? {
+    ...((approval || question || streaming) ? {
       active_turn: { generation: 21, client_msg_id: 'visual-active-turn', native_request_id: 'turn-visual-21' }
     } : {}),
     ...(approval
@@ -137,6 +140,26 @@ function primarySession(name) {
               command: 'pnpm test:visual',
               workdir: 'D:\\0 code\\nekonest\\pwa'
             }
+          }
+        }
+      : {}),
+    ...(question
+      ? {
+          pending_user_input: {
+            request_id: 'request-user-input-visual',
+            item_id: 'item-user-input-visual',
+            questions: [
+              {
+                id: 'scope',
+                header: '修复范围',
+                question: '这次先验证哪条路径？',
+                options: [
+                  { label: '队列', description: '验证插入、取消和恢复。' },
+                  { label: '提问', description: '验证 Codex 问题抵达 PWA。' }
+                ],
+                is_other: true
+              }
+            ]
           }
         }
       : {})

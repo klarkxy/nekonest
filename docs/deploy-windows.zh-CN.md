@@ -52,27 +52,30 @@ D:\NekoNest\nekonest-daemon.exe -pair gen
 
 ## 3. 登录后自动运行
 
-先交互测试：
+可选的前台测试：
 
 ```powershell
 D:\NekoNest\nekonest-daemon.exe
 ```
 
-用 Ctrl+C 停止，再注册当前用户的计划任务：
+用 Ctrl+C 停止，再注册当前用户的登录计划任务并启动：
 
 ```powershell
-$exe = "D:\NekoNest\nekonest-daemon.exe"
-$action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory (Split-Path $exe)
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-Register-ScheduledTask -TaskName "NekoNestDaemon" -Action $action -Trigger $trigger -Description "NekoNest host daemon"
-Start-ScheduledTask -TaskName "NekoNestDaemon"
+D:\NekoNest\nekonest-daemon.exe install
+D:\NekoNest\nekonest-daemon.exe start
+D:\NekoNest\nekonest-daemon.exe status
 ```
 
-同一份 Daemon 配置只能由一个进程使用。计划任务退出时，先检查是否还有手工
-启动的进程，不要直接修改配置。
+`install` 会写入当前用户的计划任务（默认配置名为 `NekoNestDaemon`）。任务以
+已登录用户运行，没有 72 小时时限，也不会复制二进制。请把可执行文件放在稳定
+目录。自定义 `-config` 会使用单独的任务名。
+
+同一份 Daemon 配置只能由一个进程使用。任务退出时，先用 `status` 检查是否还有
+手工启动的进程，不要直接修改配置。
 
 ## 验证
 
+- `nekonest-daemon.exe status` 在 `start` 后显示任务已安装且进程锁被持有。
 - `nekonest-daemon.exe -doctor` 没有关键配置或网络错误。
 - 手机上主机显示在线。
 - 最近的原生线程出现在对应项目与智能体下。
@@ -85,11 +88,12 @@ Start-ScheduledTask -TaskName "NekoNestDaemon"
 
 1. 停止当前 Daemon 前，先下载并校验目标版本。
 2. 备份 `%USERPROFILE%\.nekonest`，记录当前可执行文件哈希。
-3. 停止计划任务，确认没有 Daemon 进程残留。
+3. 运行 `nekonest-daemon.exe stop`，并确认 `status` 显示进程锁空闲。
 4. 把旧可执行文件改为唯一的回滚文件名，再将新文件放到原路径。
-5. 启动任务，运行 `-doctor`，并验证手机在线和一次真实提示词。
+5. 若可执行文件路径变了，再运行一次 `install`。然后 `start`，运行 `-doctor`，
+   并验证手机在线和一次真实提示词。
 
-新 Daemon 无法保持连接时，停止它，恢复旧可执行文件，再启动同一计划任务。
+新 Daemon 无法保持连接时，先 `stop`，恢复旧可执行文件，再 `start` 同一任务。
 升级期间不要替换或编辑原生智能体存储。
 
 ## 相关文档

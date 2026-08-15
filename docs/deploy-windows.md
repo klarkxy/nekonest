@@ -53,27 +53,32 @@ The registration environment variables are not needed for normal runs.
 
 ## 3. Run at logon
 
-Test interactively first:
+Optional foreground test:
 
 ```powershell
 D:\NekoNest\nekonest-daemon.exe
 ```
 
-Stop it with Ctrl+C, then register a per-user scheduled task:
+Stop it with Ctrl+C, then register the current-user logon task and start it:
 
 ```powershell
-$exe = "D:\NekoNest\nekonest-daemon.exe"
-$action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory (Split-Path $exe)
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-Register-ScheduledTask -TaskName "NekoNestDaemon" -Action $action -Trigger $trigger -Description "NekoNest host daemon"
-Start-ScheduledTask -TaskName "NekoNestDaemon"
+D:\NekoNest\nekonest-daemon.exe install
+D:\NekoNest\nekonest-daemon.exe start
+D:\NekoNest\nekonest-daemon.exe status
 ```
 
-Only one process may use a daemon config at a time. If the scheduled task exits,
-check for an already-running manual process before changing the configuration.
+`install` writes a per-user scheduled task (`NekoNestDaemon` for the default
+config). The task runs as the logged-on user, has no 72-hour time limit, and
+does not copy the binary. Keep the executable in a stable directory. A custom
+`-config` path gets its own task name.
+
+Only one process may use a daemon config at a time. If the task exits, check
+`status` for a leftover manual process before changing the configuration.
 
 ## Verify
 
+- `nekonest-daemon.exe status` reports the task installed and the process lock
+  held after `start`.
 - `nekonest-daemon.exe -doctor` has no critical config or network error.
 - The phone shows the host online.
 - A recent native thread appears under its project and agent.
@@ -86,15 +91,16 @@ are authoritative; see [agent support](./agent-capability-matrix.md).
 
 1. Download and verify the target release before stopping the current daemon.
 2. Back up `%USERPROFILE%\.nekonest` and record the current executable hash.
-3. Stop the scheduled task and confirm no daemon process remains.
+3. Run `nekonest-daemon.exe stop` and confirm `status` shows the process lock
+   free.
 4. Rename the old executable to a unique rollback name, then install the new
    executable at the original path.
-5. Start the task, run `-doctor`, and verify phone online state and a real
-   prompt.
+5. If the executable path changed, run `install` again. Then `start`, run
+   `-doctor`, and verify phone online state and a real prompt.
 
-If the new daemon does not stay connected, stop it, restore the previous
-executable, and start the same scheduled task. Do not replace or edit native
-agent stores during an upgrade.
+If the new daemon does not stay connected, `stop` it, restore the previous
+executable, and `start` the same task. Do not replace or edit native agent
+stores during an upgrade.
 
 ## Related
 

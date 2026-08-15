@@ -33,11 +33,13 @@ Run `nekonest-daemon -doctor` before editing any files.
 
 ## Host stays offline
 
-1. Confirm exactly one daemon process uses the config.
-2. Check daemon logs for authentication, TLS, or reconnect errors.
-3. Confirm the host can make outbound WSS connections to the nest.
-4. Confirm the Server is healthy and not restarting.
-5. If credentials were revoked or copied from another installation, revoke the
+1. Run `nekonest-daemon status` and confirm the host service is installed and
+   the process lock is held.
+2. Confirm exactly one daemon process uses the config.
+3. Check daemon logs for authentication, TLS, or reconnect errors.
+4. Confirm the host can make outbound WSS connections to the nest.
+5. Confirm the Server is healthy and not restarting.
+6. If credentials were revoked or copied from another installation, revoke the
    old host and register again instead of hand-editing `config.json`.
 
 ## No projects or threads appear
@@ -75,6 +77,15 @@ if appropriate, and reconnect the daemon.
 4. If NekoNest reports an indeterminate or blocked queue item, follow the
    explicit Resume/Skip action shown by the PWA instead of editing state files.
 
+For a long Codex task started by NekoNest, an active app-server turn is positive
+evidence that it is still running; `turn/completed`, interruption, failure, or
+app-server exit closes that state. A task started from another Codex surface
+cannot be proven alive from silence in its rollout file. NekoNest therefore
+uses fresh native activity as supporting evidence and waits through a
+conservative inactivity window before treating an unterminated record as an
+orphan. Inspect the host process when you need to distinguish a quiet task from
+a stalled external task.
+
 ## Attachments fail
 
 - Limit each prompt to 5 files and each file to 4 MB.
@@ -89,6 +100,10 @@ Only native, current agent events create approval or structured-input UI. On a
 compatibility path, finish the request in the host terminal. If the PWA had the
 control before a reconnect, run `-doctor` and wait for a fresh capability
 catalog rather than assuming it is still available.
+
+For Codex questions, select **Plan mode** before sending the prompt. Normal
+execution mode does not expose Codex's structured question tool. If Plan mode
+is unavailable, the current app-server probe did not confirm the required API.
 
 ## Web Push does not arrive
 

@@ -20,8 +20,8 @@ contracts and unused migration notes are frozen under [archive/](./archive/).
 | Document | Purpose |
 |---|---|
 | [VPS deploy](./deploy-vps.md) | Run the Server and PWA behind HTTPS |
-| [Windows host](./deploy-windows.md) | Install, register, and autostart the host daemon |
-| [Linux host](./deploy-linux.md) | Install, register, and run the host daemon with systemd |
+| [Windows host](./deploy-windows.md) | Register the host and manage autostart with `nekonest-daemon install` |
+| [Linux host](./deploy-linux.md) | Register the host and manage the systemd user unit with `nekonest-daemon install` |
 | [Configuration](./configuration.md) | Supported operator settings and data locations |
 | [Security](./security.md) | Trust model, secrets, backups, and hardening |
 | [Troubleshooting](./troubleshooting.md) | Symptom-first recovery steps |

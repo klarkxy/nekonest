@@ -58,8 +58,17 @@ Common commands:
 | `nekonest-daemon -register -name "Home PC"` | Register a host and print pairing material |
 | `nekonest-daemon -pair gen` | Generate a new phone pairing code |
 | `nekonest-daemon -doctor` | Check config, server reachability, and installed agents |
+| `nekonest-daemon install` | Register current-user autostart (Windows logon task or Linux systemd user unit) |
+| `nekonest-daemon start` | Start the installed supervisor |
+| `nekonest-daemon stop` | Stop the installed supervisor |
+| `nekonest-daemon status` | Show supervisor and process-lock state |
+| `nekonest-daemon uninstall` | Remove the current-user autostart registration |
 | `nekonest-daemon -config <path>` | Use a non-default config file |
 | `nekonest-daemon -version` | Print the application version |
+
+`install` / `start` / `stop` / `status` / `uninstall` talk to the current-user
+supervisor. They do not keep a second CLI process resident. A non-default
+`-config` path gets its own task or unit name.
 
 Registration reads these variables:
 

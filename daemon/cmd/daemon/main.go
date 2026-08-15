@@ -26,6 +26,7 @@ import (
 	"github.com/nekonest/daemon/internal/buildinfo"
 	"github.com/nekonest/daemon/internal/config"
 	"github.com/nekonest/daemon/internal/connection"
+	"github.com/nekonest/daemon/internal/hostsvc"
 	"github.com/nekonest/daemon/internal/identity"
 	"github.com/nekonest/daemon/internal/opslog"
 	"github.com/nekonest/daemon/internal/sealed"
@@ -53,12 +54,16 @@ func requestForceDiscover() {
 }
 
 func main() {
+	if cmd, ok := hostsvc.FindCommand(os.Args[1:]); ok {
+		os.Exit(runHostServiceCLI(cmd, os.Args[1:]))
+	}
 	configPath := flag.String("config", "", "config file path (default: ~/.nekonest/config.json)")
 	pairFlag := flag.String("pair", "", "generate phone pair code for already-registered device (e.g. -pair gen)")
 	register := flag.Bool("register", false, "register this device with the server (needs NEKONEST_SERVER)")
 	deviceName := flag.String("name", "", "device name (for registration)")
 	doctor := flag.Bool("doctor", false, "run non-interactive diagnostics and exit")
 	showVersion := flag.Bool("version", false, "print the NekoNest daemon version and exit")
+	flag.Usage = hostDaemonUsage
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(buildinfo.Version)
@@ -238,6 +243,7 @@ func main() {
 	})
 	var turnGenerations atomic.Uint64
 	var dispatchQueued func(string)
+	var sessionReportedBusy func(string) bool
 	var handleControlEvent func(adapters.ControlEvent)
 	handleControlEvent = func(event adapters.ControlEvent) {
 		lifecycle := event.Lifecycle
@@ -315,6 +321,12 @@ func main() {
 		if !queueAvailable {
 			return
 		}
+		// The app-server only knows about turns joined by this daemon. Native
+		// discovery also observes work started from another Codex surface; do not
+		// claim a queued phone prompt until that authoritative busy state clears.
+		if sessionReportedBusy != nil && sessionReportedBusy(sessionID) {
+			return
+		}
 		target := pickAdapterForSession(sessionID, adapterList)
 		if target == nil {
 			return
@@ -335,7 +347,8 @@ func main() {
 			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 			return
 		}
-		prompt, refs, dispatchErr := queuedPromptPayload(deviceID, sessionID, item)
+		prompt, refs, collaborationMode, dispatchErr := queuedPromptPayload(deviceID, sessionID, item)
+		item.CollaborationMode = collaborationMode
 		var files []attach.LocalFile
 		attDir := ""
 		if dispatchErr == nil && len(refs) > 0 {
@@ -366,6 +379,12 @@ func main() {
 			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 			return
 		}
+		if errors.Is(dispatchErr, agentexec.ErrPromptNotStarted) {
+			_ = durableQueue.block(sessionID, item.ClientMsgID, promptQueueBlockedFailed)
+			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+			sendPromptFailed(client, deviceID, sessionID, item.ClientMsgID, dispatchErr.Error())
+			return
+		}
 		_ = durableQueue.block(sessionID, item.ClientMsgID, promptQueueBlockedIndeterminate)
 		sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 		sendPromptIndeterminate(client, deviceID, sessionID, item.ClientMsgID, "queued prompt became indeterminate before a safe native acceptance: "+dispatchErr.Error())
@@ -377,6 +396,11 @@ func main() {
 		lastSessions          = make(map[string]*adapters.SessionInfo)
 		lastStartCapabilities []map[string]interface{}
 	)
+	sessionReportedBusy = func(sessionID string) bool {
+		sessionMu.Lock()
+		defer sessionMu.Unlock()
+		return sessionStatusBlocksQueueDispatch(lastSessions[sessionID])
+	}
 	startCapabilityCache := newAgentStartCapabilityCache(30 * time.Second)
 	threadStarts := &threadStartCoordinator{
 		journal:       threadJournal,
@@ -500,6 +524,11 @@ func main() {
 			}
 			prompt, _ := payload["prompt"].(string)
 			originalPrompt := prompt
+			collaborationMode, modeErr := normalizeCollaborationMode(payload["collaboration_mode"])
+			if modeErr != nil {
+				sendPromptFailed(client, deviceID, sessionID, clientMsgID, modeErr.Error())
+				return
+			}
 			// Drop stale attachment blocks if client re-sent an already-augmented draft.
 			prompt = stripNekoAttachSuffix(prompt)
 			refs := parseAttachmentRefs(payload["attachments"])
@@ -528,6 +557,7 @@ func main() {
 			if queueCapable {
 				queued := promptQueueItem{
 					SessionID: sessionID, ClientMsgID: clientMsgID, AgentType: targetAdapter.Name(),
+					CollaborationMode: collaborationMode,
 				}
 				if len(sealedPromptWire) > 0 {
 					queued.SealedEnvelope = sealedPromptWire
@@ -620,11 +650,12 @@ func main() {
 				})
 			}
 			request := adapters.PromptRequest{
-				Prompt:      prompt,
-				Attachments: localAttachments,
-				OnComplete:  onComplete,
-				Generation:  generation,
-				ClientMsgID: clientMsgID,
+				Prompt:            prompt,
+				Attachments:       localAttachments,
+				CollaborationMode: collaborationMode,
+				OnComplete:        onComplete,
+				Generation:        generation,
+				ClientMsgID:       clientMsgID,
 				OnNativeBound: func(nativeRequestID string) {
 					activeTurns.setNativeRequestID(sessionID, generation, clientMsgID, nativeRequestID)
 				},
@@ -653,6 +684,12 @@ func main() {
 						return
 					} else {
 						opslog.Error("daemon.main", "prompt_dispatch_rollback_failed", "busy prompt dispatch rollback failed", journalErr, "session_id", sessionID, "client_msg_id", clientMsgID, "generation", generation)
+					}
+				}
+				if errors.Is(err, agentexec.ErrPromptNotStarted) {
+					if journalErr := commandJournal.rollbackDispatching(sessionID, clientMsgID); journalErr == nil {
+						sendPromptFailed(client, deviceID, sessionID, clientMsgID, err.Error())
+						return
 					}
 				}
 				// The adapter API cannot prove whether a failing Start/Send
@@ -1227,6 +1264,16 @@ func main() {
 
 			lastSessions = newSessions
 			sessionMu.Unlock()
+			// A prompt admitted while native Codex was busy may have had no
+			// app-server turn to emit a completion callback. Discovery is the
+			// authoritative wake-up edge for that queue.
+			if queueAvailable && dispatchQueued != nil {
+				for _, session := range allSessions {
+					if session != nil && sessionStatusWakesQueueDispatch(session) && durableQueue.hasActive(session.ID) {
+						go dispatchQueued(session.ID)
+					}
+				}
+			}
 			if !changed && !reflect.DeepEqual(lastStartCapabilities, startCapabilities) {
 				changed = true
 			}
@@ -1321,6 +1368,22 @@ func main() {
 	// 4. Wait a bit for goroutines to finish
 	time.Sleep(500 * time.Millisecond)
 	opslog.Info("daemon.main", "shutdown_completed", "daemon shutdown completed", "device_id", deviceID)
+}
+
+func sessionStatusBlocksQueueDispatch(session *adapters.SessionInfo) bool {
+	if session == nil {
+		return false
+	}
+	switch session.Status {
+	case adapters.StatusRunning, adapters.StatusWaitingApproval, adapters.StatusWaitingUser:
+		return true
+	default:
+		return false
+	}
+}
+
+func sessionStatusWakesQueueDispatch(session *adapters.SessionInfo) bool {
+	return session != nil && session.Status == adapters.StatusIdle
 }
 
 // runSessionDiscoveryLoop waits the full interval after each completed scan.
@@ -2100,46 +2163,68 @@ func parseAttachmentRefs(raw interface{}) []attach.Ref {
 	return out
 }
 
-func queuedPromptPayload(deviceID, sessionID string, item promptQueueItem) (string, []attach.Ref, error) {
+func queuedPromptPayload(deviceID, sessionID string, item promptQueueItem) (string, []attach.Ref, string, error) {
 	if len(item.SealedEnvelope) > 0 {
 		var wire map[string]interface{}
 		if err := json.Unmarshal(item.SealedEnvelope, &wire); err != nil {
-			return "", nil, fmt.Errorf("decode saved sealed prompt: %w", err)
+			return "", nil, "", fmt.Errorf("decode saved sealed prompt: %w", err)
 		}
 		sealedObj, ok := wire["sealed_payload"].(map[string]interface{})
 		if !ok || daemonSealedKeys == nil {
-			return "", nil, errors.New("saved sealed prompt cannot be opened")
+			return "", nil, "", errors.New("saved sealed prompt cannot be opened")
 		}
 		payload, err := openSealedPrompt(deviceID, sessionID, wire, sealedObj)
 		if err != nil {
-			return "", nil, err
+			return "", nil, "", err
 		}
 		return queuedPromptPayloadFromMap(payload)
 	}
 	var raw interface{}
 	if len(item.Attachments) > 0 && json.Unmarshal(item.Attachments, &raw) != nil {
-		return "", nil, errors.New("saved prompt attachments are invalid")
+		return "", nil, "", errors.New("saved prompt attachments are invalid")
 	}
 	refs := parseAttachmentRefs(raw)
 	if len(refs) > maxPromptAttachments {
-		return "", nil, fmt.Errorf("too many attachments (limit %d)", maxPromptAttachments)
+		return "", nil, "", fmt.Errorf("too many attachments (limit %d)", maxPromptAttachments)
 	}
-	return stripNekoAttachSuffix(item.Prompt), refs, nil
+	return stripNekoAttachSuffix(item.Prompt), refs, item.CollaborationMode, nil
 }
 
-func queuedPromptPayloadFromMap(payload map[string]interface{}) (string, []attach.Ref, error) {
+func queuedPromptPayloadFromMap(payload map[string]interface{}) (string, []attach.Ref, string, error) {
 	if payload == nil {
-		return "", nil, errors.New("saved prompt payload is empty")
+		return "", nil, "", errors.New("saved prompt payload is empty")
+	}
+	collaborationMode, err := normalizeCollaborationMode(payload["collaboration_mode"])
+	if err != nil {
+		return "", nil, "", err
 	}
 	prompt, _ := payload["prompt"].(string)
 	refs := parseAttachmentRefs(payload["attachments"])
 	if len(refs) > maxPromptAttachments {
-		return "", nil, fmt.Errorf("too many attachments (limit %d)", maxPromptAttachments)
+		return "", nil, "", fmt.Errorf("too many attachments (limit %d)", maxPromptAttachments)
 	}
 	if prompt == "" && len(refs) == 0 {
-		return "", nil, errors.New("saved prompt is empty")
+		return "", nil, "", errors.New("saved prompt is empty")
 	}
-	return stripNekoAttachSuffix(prompt), refs, nil
+	return stripNekoAttachSuffix(prompt), refs, collaborationMode, nil
+}
+
+func normalizeCollaborationMode(raw interface{}) (string, error) {
+	if raw == nil {
+		return "", nil
+	}
+	mode, ok := raw.(string)
+	if !ok {
+		return "", errors.New("collaboration_mode must be a string")
+	}
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "", nil
+	}
+	if mode != "plan" {
+		return "", fmt.Errorf("unsupported collaboration_mode %q", mode)
+	}
+	return mode, nil
 }
 
 // dispatchQueuedPrompt is called only after the queue persisted running. It
@@ -2190,7 +2275,8 @@ func dispatchQueuedPrompt(
 	}
 	request := adapters.PromptRequest{
 		Prompt: prompt, Attachments: files, OnComplete: onComplete,
-		Generation: generation, ClientMsgID: item.ClientMsgID, DeferAcceptance: true,
+		CollaborationMode: item.CollaborationMode,
+		Generation:        generation, ClientMsgID: item.ClientMsgID, DeferAcceptance: true,
 		OnNativeBound: func(nativeRequestID string) {
 			activeTurns.setNativeRequestID(item.SessionID, generation, item.ClientMsgID, nativeRequestID)
 		},
@@ -2208,6 +2294,13 @@ func dispatchQueuedPrompt(
 			cleanup()
 			if journalErr := journal.rollbackDispatching(item.SessionID, item.ClientMsgID); journalErr != nil {
 				return false, fmt.Errorf("pre-boundary busy but journal rollback failed: %w", journalErr)
+			}
+			return false, sendErr
+		}
+		if errors.Is(sendErr, agentexec.ErrPromptNotStarted) {
+			cleanup()
+			if journalErr := journal.rollbackDispatching(item.SessionID, item.ClientMsgID); journalErr != nil {
+				return false, fmt.Errorf("preflight failure but journal rollback failed: %w", journalErr)
 			}
 			return false, sendErr
 		}

@@ -44,6 +44,30 @@ func TestCodexAppServerOutputSinkAccumulatesStableMessage(t *testing.T) {
 	}
 }
 
+func TestCodexAppServerRequestEmitsStructuredUserInputImmediately(t *testing.T) {
+	adapter := NewCodexAdapter()
+	adapter.appServer.RegisterThreadIDs("thread-1", "session-1", "wire-1")
+	var events []ControlEvent
+	adapter.SetControlSink(func(event ControlEvent) {
+		events = append(events, event)
+	})
+	req := agentexec.ServerRequest{
+		ID:     "request-1",
+		Method: "item/tool/requestUserInput",
+		Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","isBlocking":true,"questions":[{"id":"choice","header":"Choice","question":"Pick one","options":[{"label":"Alpha","description":"First"}]}]}`),
+	}
+	if pending := adapter.appServer.TrackUserInput(req); pending == nil {
+		t.Fatal("current requestUserInput schema was not tracked")
+	}
+	adapter.handleAppServerRequest(req)
+	if len(events) != 1 || events[0].SessionID != "wire-1" || events[0].Status != StatusWaitingUser || events[0].PendingUserInput == nil {
+		t.Fatalf("structured user input events = %#v", events)
+	}
+	if got := events[0].PendingUserInput.Questions; len(got) != 1 || got[0].ID != "choice" {
+		t.Fatalf("structured questions = %#v", got)
+	}
+}
+
 func TestApplyAppServerTerminalStatus(t *testing.T) {
 	for _, test := range []struct {
 		status string
@@ -118,8 +142,9 @@ func TestCodexStaleTaskStartedReturnsIdle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stale := time.Now().UTC().Add(-codexOrphanTaskInactivityTimeout - time.Minute)
 	if err := json.NewEncoder(file).Encode(map[string]interface{}{
-		"timestamp": time.Now().UTC().Add(-3 * time.Minute).Format(time.RFC3339Nano),
+		"timestamp": stale.Format(time.RFC3339Nano),
 		"type":      "event_msg",
 		"payload":   map[string]interface{}{"type": "task_started", "turn_id": "turn-stale"},
 	}); err != nil {
@@ -127,6 +152,9 @@ func TestCodexStaleTaskStartedReturnsIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, stale, stale); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -140,6 +168,54 @@ func TestCodexStaleTaskStartedReturnsIdle(t *testing.T) {
 	}
 	if session.Status != StatusIdle {
 		t.Fatalf("stale task status=%q", session.Status)
+	}
+}
+
+func TestCodexLongTaskWithRecentActivityStaysRunning(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "019fbd3e-41a9-7771-86f7-be462ff76825"
+	started := time.Now().UTC().Add(-codexOrphanTaskInactivityTimeout - time.Minute)
+	path := writeCodexRolloutAt(t, dir, sessionID, map[string]interface{}{
+		"thread_source": "user",
+		"source":        "appServer",
+		"cwd":           `D:\nekonest`,
+	}, started)
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder := json.NewEncoder(file)
+	for _, event := range []map[string]interface{}{
+		{
+			"timestamp": started.Format(time.RFC3339Nano),
+			"type":      "event_msg",
+			"payload":   map[string]interface{}{"type": "task_started", "turn_id": "turn-long"},
+		},
+		{
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"type":      "response_item",
+			"payload":   map[string]interface{}{"type": "reasoning", "summary": []string{"still working"}},
+		},
+	} {
+		if err := encoder.Encode(event); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewCodexAdapter()
+	session, err := adapter.parseRolloutFile(path, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != StatusRunning {
+		t.Fatalf("long task with recent activity status=%q", session.Status)
 	}
 }
 

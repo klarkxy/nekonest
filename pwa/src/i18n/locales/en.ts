@@ -254,6 +254,8 @@ export default {
     sendBusyHint: 'The agent is still on the last prompt. You can draft the next one.',
     steer: 'Steer current task',
     steerHint: 'Codex is working. Send text here to adjust the current task.',
+    planMode: 'Plan mode',
+    planModeHint: 'Plan without editing files; structured Codex questions appear above.',
     attachSteerUnavailable: 'Attachments cannot be added while steering a running task',
     attachmentsFollowup: '(attachments)',
     queueTitle: 'Prompt queue',

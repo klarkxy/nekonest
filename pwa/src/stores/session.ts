@@ -67,6 +67,7 @@ export const useSessionStore = defineStore('sessions', () => {
     sessionId: string
     prompt: string
     attachments?: Array<{ id?: string; url: string; name?: string; mime?: string; size?: number }>
+    collaborationMode?: 'plan'
     status: 'queued' | 'sending' | 'failed'
     error?: string
     retryAllowed: boolean
@@ -228,6 +229,7 @@ export const useSessionStore = defineStore('sessions', () => {
       sessionId: it.sessionId,
       prompt: it.prompt,
       attachments: Array.isArray(it.attachments) ? it.attachments : undefined,
+      collaborationMode: it.collaborationMode === 'plan' ? 'plan' : undefined,
       status:
         it.status === 'failed'
           ? 'failed'
@@ -392,6 +394,7 @@ export const useSessionStore = defineStore('sessions', () => {
       client_msg_id: it.clientMsgId
     }
     if (it.attachments?.length) payload.attachments = it.attachments
+    if (it.collaborationMode === 'plan') payload.collaboration_mode = 'plan'
     const mode = nestTransportMode()
     if (mode === 'sealed') {
       // Persist and reuse the entire original envelope. Re-encrypting a retry
@@ -1319,7 +1322,8 @@ export const useSessionStore = defineStore('sessions', () => {
     deviceId: string,
     sessionId: string,
     prompt: string,
-    attachments?: Array<{ id?: string; url: string; name?: string; mime?: string; size?: number }>
+    attachments?: Array<{ id?: string; url: string; name?: string; mime?: string; size?: number }>,
+    collaborationMode?: 'plan'
   ): boolean {
     lastError.value = null
 	const capabilitySession = sessionForCapability(deviceId, sessionId)
@@ -1363,6 +1367,7 @@ export const useSessionStore = defineStore('sessions', () => {
       sessionId,
       prompt: trimmed,
       attachments: atts.length ? atts : undefined,
+      collaborationMode: collaborationMode === 'plan' ? 'plan' : undefined,
       status: 'queued',
       retryAllowed: true,
       createdAt: Math.floor(Date.now() / 1000)
@@ -1484,10 +1489,17 @@ export const useSessionStore = defineStore('sessions', () => {
     clientMsgId?: string
   ): boolean {
     const timestamp = Math.floor(Date.now() / 1000)
+    // Queue and interrupt controls carry the target prompt id in their body.
+    // Bind that same id into the outer envelope/AAD in sealed mode; the daemon
+    // rejects an unbound inner client_msg_id to prevent target substitution.
+    const payloadClientMsgId = typeof payload.client_msg_id === 'string'
+      ? payload.client_msg_id.trim()
+      : ''
+    const wireClientMsgId = clientMsgId?.trim() || payloadClientMsgId || undefined
     if (nestTransportMode() === 'open') {
       return nekoWS().send({
         type, device_id: deviceId, session_id: sessionId,
-        client_msg_id: clientMsgId, timestamp, payload
+        client_msg_id: wireClientMsgId, timestamp, payload
       })
     }
     void (async () => {
@@ -1495,7 +1507,7 @@ export const useSessionStore = defineStore('sessions', () => {
       try {
         sealed = await encryptSessionPayload(
           deviceId, sessionId, getPhoneId() || 'phone', type, payload,
-          clientMsgId, timestamp, nekoWS().getProtocolVersion()
+          wireClientMsgId, timestamp, nekoWS().getProtocolVersion()
         )
       } catch {
         // Fall through to the fail-closed error below.
@@ -1506,7 +1518,7 @@ export const useSessionStore = defineStore('sessions', () => {
       }
       if (!nekoWS().send({
         type, device_id: deviceId, session_id: sessionId,
-        client_msg_id: clientMsgId, timestamp, sealed_payload: sealed
+        client_msg_id: wireClientMsgId, timestamp, sealed_payload: sealed
       })) lastError.value = tGlobal('errors.channelQueued')
     })()
     return true

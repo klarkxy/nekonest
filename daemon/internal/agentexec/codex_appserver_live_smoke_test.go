@@ -440,79 +440,14 @@ func TestLiveCodexAppServerUserInputSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	modeRaw, err := c.Call(ctx, "collaborationMode/list", map[string]any{})
-	if err != nil {
+	if _, err := c.StartTurnWithCollaborationMode(
+		ctx,
+		started.WireID(),
+		"Use the request_user_input tool exactly once. Ask one question with id `choice`, header `Choice`, question `Pick one`, and options `Alpha` and `Beta`. After the answer, reply exactly NEKONEST_USER_INPUT_OK and do nothing else.",
+		nil,
+		"plan",
+	); err != nil {
 		t.Fatal(err)
-	}
-	var modes struct {
-		Data []struct {
-			Name            string  `json:"name"`
-			Mode            *string `json:"mode"`
-			Model           *string `json:"model"`
-			ReasoningEffort *string `json:"reasoning_effort"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(modeRaw, &modes); err != nil {
-		t.Fatal(err)
-	}
-	modelRaw, err := c.Call(ctx, "model/list", map[string]any{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var models struct {
-		Data []struct {
-			Model     string `json:"model"`
-			IsDefault bool   `json:"isDefault"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(modelRaw, &models); err != nil {
-		t.Fatal(err)
-	}
-	defaultModel := ""
-	for _, model := range models.Data {
-		if model.IsDefault {
-			defaultModel = model.Model
-			break
-		}
-	}
-	if defaultModel == "" && len(models.Data) > 0 {
-		defaultModel = models.Data[0].Model
-	}
-	var planMode map[string]any
-	for _, mode := range modes.Data {
-		if mode.Mode == nil || *mode.Mode != "plan" {
-			continue
-		}
-		model := defaultModel
-		if mode.Model != nil && *mode.Model != "" {
-			model = *mode.Model
-		}
-		if model == "" {
-			continue
-		}
-		settings := map[string]any{"model": model, "developer_instructions": nil}
-		if mode.ReasoningEffort != nil {
-			settings["reasoning_effort"] = *mode.ReasoningEffort
-		}
-		planMode = map[string]any{"mode": "plan", "settings": settings}
-		break
-	}
-	if planMode == nil {
-		t.Fatalf("Codex did not advertise a Plan collaboration mode: %s", modeRaw)
-	}
-	input, err := buildTurnInput(
-		"Use the request_user_input tool exactly once. Ask one question with id `choice`, header `Choice`, question `Pick one`, and options `Alpha` and `Beta`. After the answer, reply exactly NEKONEST_USER_INPUT_OK and do nothing else.", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	params := buildTurnStartParams(c.ResolveThreadID(started.WireID()), input)
-	params["collaborationMode"] = planMode
-	turnRaw, err := c.Call(ctx, "turn/start", params)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if turnID := parseTurnID(turnRaw); turnID != "" {
-		c.setStartingTurn(started.WireID(), turnID)
 	}
 
 	var request ServerRequest

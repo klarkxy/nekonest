@@ -50,15 +50,16 @@ const (
 // a byte slice: it is written as base64 JSON so the opaque envelope round trips
 // byte-for-byte, rather than being decoded and re-marshaled as JSON.
 type promptQueueItem struct {
-	SessionID      string            `json:"session_id"`
-	ClientMsgID    string            `json:"client_msg_id"`
-	AgentType      string            `json:"agent_type"`
-	Prompt         string            `json:"prompt,omitempty"`
-	Attachments    json.RawMessage   `json:"attachments,omitempty"`
-	SealedEnvelope []byte            `json:"sealed_envelope,omitempty"`
-	CreatedAt      int64             `json:"created_at"`
-	Order          uint64            `json:"order"`
-	Status         promptQueueStatus `json:"status"`
+	SessionID         string            `json:"session_id"`
+	ClientMsgID       string            `json:"client_msg_id"`
+	AgentType         string            `json:"agent_type"`
+	Prompt            string            `json:"prompt,omitempty"`
+	Attachments       json.RawMessage   `json:"attachments,omitempty"`
+	SealedEnvelope    []byte            `json:"sealed_envelope,omitempty"`
+	CollaborationMode string            `json:"collaboration_mode,omitempty"`
+	CreatedAt         int64             `json:"created_at"`
+	Order             uint64            `json:"order"`
+	Status            promptQueueStatus `json:"status"`
 }
 
 type promptQueueDisk struct {
@@ -179,6 +180,9 @@ func validatePromptQueueItem(item promptQueueItem) error {
 	}
 	if len(item.SealedEnvelope) > 0 && (item.Prompt != "" || len(item.Attachments) != 0) {
 		return errors.New("sealed envelope cannot be combined with plaintext prompt data")
+	}
+	if item.CollaborationMode != "" && item.CollaborationMode != "plan" {
+		return fmt.Errorf("invalid collaboration_mode %q", item.CollaborationMode)
 	}
 	if item.Prompt == "" && len(item.Attachments) == 0 && len(item.SealedEnvelope) == 0 {
 		return errors.New("prompt data or sealed envelope is required")
@@ -562,6 +566,7 @@ func clearPromptQueuePayload(item *promptQueueItem) {
 	item.Prompt = ""
 	item.Attachments = nil
 	item.SealedEnvelope = nil
+	item.CollaborationMode = ""
 }
 
 func compactPromptQueueTombstones(items map[string]promptQueueItem, sessionID string) map[string]promptQueueItem {

@@ -51,37 +51,25 @@ The registration environment variables are not needed for normal runs.
 
 ## 3. Run with systemd
 
-Create `~/.config/systemd/user/nekonest-daemon.service`:
-
-```ini
-[Unit]
-Description=NekoNest host daemon
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=%h/.local/bin/nekonest-daemon
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-```
-
-Enable it:
+Register the current-user unit and start it:
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user enable --now nekonest-daemon.service
+nekonest-daemon install
+nekonest-daemon start
+nekonest-daemon status
 journalctl --user -u nekonest-daemon -f
 ```
 
-`loginctl enable-linger "$USER"` is optional when the daemon must keep running
-after logout. Only one process may use a daemon config at a time.
+`install` writes `~/.config/systemd/user/nekonest-daemon.service` for the
+default config (or a hashed unit name for `-config`) and enables it. It does
+not copy the binary or start the process. `loginctl enable-linger "$USER"` is
+optional when the daemon must keep running after logout. Only one process may
+use a daemon config at a time.
 
 ## Verify
 
+- `nekonest-daemon status` reports the user unit installed and active after
+  `start`.
 - `nekonest-daemon -doctor` has no critical config or network error.
 - `systemctl --user is-active nekonest-daemon` reports `active`.
 - The phone shows the host online and lists a recent native thread.
@@ -94,17 +82,21 @@ are authoritative; see [agent support](./agent-capability-matrix.md).
 
 1. Download and verify the target release before stopping the service.
 2. Back up `~/.nekonest` and record the current executable hash.
-3. Stop the user service and save the old binary under a unique rollback name.
-4. Install the new binary at the existing path and restart the service.
-5. Run `-doctor`, inspect the journal, and verify phone online state and a real
+3. Run `nekonest-daemon stop` and confirm `status` shows the process lock free.
+4. Save the old binary under a unique rollback name, then install the new
+   binary at the existing path.
+5. If the executable path changed, run `install` again. Then `start`, run
+   `-doctor`, inspect the journal, and verify phone online state and a real
    prompt.
 
-If the new daemon fails, stop it, restore the previous binary, and start the
-same service. Do not replace or edit native agent stores during an upgrade.
+If the new daemon fails, `stop` it, restore the previous binary, and `start`
+the same service. Do not replace or edit native agent stores during an upgrade.
 
-Binary and archive upgrades do not rewrite the user unit. When release notes
-mention template changes, compare the installed unit with the
-[repository template](../daemon/packaging/nekonest-daemon.service) explicitly.
+Replacing only the binary at the same path keeps the existing unit. After
+moving the executable, run `install` again so `ExecStart` matches. Compare a
+hand-written unit with the
+[repository template](../daemon/packaging/nekonest-daemon.service) only when
+you still maintain that file yourself.
 
 ## Related
 

@@ -86,6 +86,42 @@ func TestPromptQueueFIFOAndLimitAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestSessionStatusBlocksQueueDispatch(t *testing.T) {
+	for _, status := range []adapters.AgentStatus{
+		adapters.StatusRunning,
+		adapters.StatusWaitingApproval,
+		adapters.StatusWaitingUser,
+	} {
+		if !sessionStatusBlocksQueueDispatch(&adapters.SessionInfo{Status: status}) {
+			t.Fatalf("status %q did not block queue dispatch", status)
+		}
+	}
+	for _, status := range []adapters.AgentStatus{adapters.StatusIdle, adapters.StatusError} {
+		if sessionStatusBlocksQueueDispatch(&adapters.SessionInfo{Status: status}) {
+			t.Fatalf("status %q unexpectedly blocked queue dispatch", status)
+		}
+	}
+}
+
+func TestSessionStatusWakesQueueDispatchOnlyWhenIdle(t *testing.T) {
+	if !sessionStatusWakesQueueDispatch(&adapters.SessionInfo{Status: adapters.StatusIdle}) {
+		t.Fatal("idle session did not wake queue dispatch")
+	}
+	for _, status := range []adapters.AgentStatus{
+		adapters.StatusRunning,
+		adapters.StatusWaitingApproval,
+		adapters.StatusWaitingUser,
+		adapters.StatusError,
+	} {
+		if sessionStatusWakesQueueDispatch(&adapters.SessionInfo{Status: status}) {
+			t.Fatalf("status %q unexpectedly woke queue dispatch", status)
+		}
+	}
+	if sessionStatusWakesQueueDispatch(nil) {
+		t.Fatal("missing session unexpectedly woke queue dispatch")
+	}
+}
+
 func TestPromptQueueCancelAndTransitions(t *testing.T) {
 	queue, err := loadPromptQueue(filepath.Join(t.TempDir(), "queue.json"))
 	if err != nil {
@@ -331,12 +367,12 @@ func TestPromptQueueClaimNextAllowsOneConcurrentRunner(t *testing.T) {
 func TestQueuedPromptPayloadDefersAttachmentMaterialization(t *testing.T) {
 	item := queueItem("session", "message", "keep this")
 	item.Attachments = []byte(`[{"url":"https://nest.example/api/attachments/one","name":"one.txt","mime":"text/plain"}]`)
-	prompt, refs, err := queuedPromptPayload("device", "session", item)
+	prompt, refs, mode, err := queuedPromptPayload("device", "session", item)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prompt != "keep this" || len(refs) != 1 || refs[0].URL != "https://nest.example/api/attachments/one" {
-		t.Fatalf("queued payload = %q, %#v", prompt, refs)
+	if prompt != "keep this" || len(refs) != 1 || refs[0].URL != "https://nest.example/api/attachments/one" || mode != "" {
+		t.Fatalf("queued payload = %q, %#v, mode=%q", prompt, refs, mode)
 	}
 }
 
@@ -350,8 +386,20 @@ func TestQueuedPromptPayloadRejectsMoreThanFiveAttachments(t *testing.T) {
 		{"url":"https://nest.example/api/attachments/5"},
 		{"url":"https://nest.example/api/attachments/6"}
 	]`)
-	if _, _, err := queuedPromptPayload("device", "session", item); err == nil || !strings.Contains(err.Error(), "limit 5") {
+	if _, _, _, err := queuedPromptPayload("device", "session", item); err == nil || !strings.Contains(err.Error(), "limit 5") {
 		t.Fatalf("queued payload limit error = %v", err)
+	}
+}
+
+func TestQueuedPromptPayloadPreservesPlanMode(t *testing.T) {
+	item := queueItem("session", "message", "make a plan")
+	item.CollaborationMode = "plan"
+	prompt, refs, mode, err := queuedPromptPayload("device", "session", item)
+	if err != nil || prompt != "make a plan" || len(refs) != 0 || mode != "plan" {
+		t.Fatalf("queued plan payload = %q, %#v, %q, %v", prompt, refs, mode, err)
+	}
+	if _, err := normalizeCollaborationMode("execute"); err == nil {
+		t.Fatal("unsupported collaboration mode was accepted")
 	}
 }
 

@@ -19,7 +19,12 @@ import (
 
 var errCodexSubagentRollout = errors.New("codex subagent rollout")
 
-const codexOrphanTaskTimeout = 2 * time.Minute
+// A native rollout without a terminal event is only an orphan candidate after
+// a long period with no file/event activity. Turn age alone is not evidence of
+// death: builds, deployments, and delegated work can legitimately run for a
+// long time. Queue safety prefers a temporary false-busy state over starting a
+// second prompt in a turn that may still be alive on another Codex surface.
+const codexOrphanTaskInactivityTimeout = 30 * time.Minute
 
 const (
 	codexRecoveryAttempts = 5
@@ -616,7 +621,7 @@ func (a *CodexAdapter) parseRolloutFile(path string, info os.FileInfo) (*Session
 	commanderRunning := a.commander != nil && a.commander.IsSessionRunning(session.ID)
 	if commanderRunning {
 		session.Status = StatusRunning
-	} else if session.Status == StatusRunning && time.Since(session.LastActivity) > codexOrphanTaskTimeout {
+	} else if session.Status == StatusRunning && time.Since(session.LastActivity) > codexOrphanTaskInactivityTimeout {
 		// Re-evaluate the wall-clock-dependent orphan rule on cache hits.
 		session.Status = StatusIdle
 	}
@@ -638,7 +643,6 @@ func (a *CodexAdapter) parseRolloutFileUncached(path string, info os.FileInfo) (
 	var msgCount int
 	var isWaiting bool
 	var taskInFlight bool
-	var taskStartedAt time.Time
 	var pendingApproval *ApprovalInfo
 	var projectDir string
 	sessionID := codexSessionIDFromFilename(filepath.Base(path))
@@ -702,16 +706,13 @@ func (a *CodexAdapter) parseRolloutFileUncached(path string, info os.FileInfo) (
 			case pType == "task_started":
 				// Positive running signal from Codex event stream.
 				taskInFlight = true
-				taskStartedAt = eventTime
 			case pType == "task_complete":
 				taskInFlight = false
-				taskStartedAt = time.Time{}
 				if m, _ := payload["last_agent_message"].(string); m != "" {
 					lastMessage = truncate(m, 120)
 				}
 			case pType == "turn_aborted":
 				taskInFlight = false
-				taskStartedAt = time.Time{}
 				isWaiting = false
 				pendingApproval = nil
 			case pType == "message":
@@ -790,7 +791,7 @@ func (a *CodexAdapter) parseRolloutFileUncached(path string, info os.FileInfo) (
 	// Status must not be inferred from "recent file mtime alone" — completed
 	// turns leave a fresh task_complete and would otherwise stay running forever.
 	commanderRunning := a.commander != nil && a.commander.IsSessionRunning(sessionID)
-	if taskInFlight && !taskStartedAt.IsZero() && time.Since(taskStartedAt) > codexOrphanTaskTimeout && !commanderRunning {
+	if taskInFlight && !lastTime.IsZero() && time.Since(lastTime) > codexOrphanTaskInactivityTimeout && !commanderRunning {
 		// A killed app-server can leave task_started as the last native event.
 		// Current app-server activity is overlaid after discovery; do not keep a
 		// stale orphan record running forever after daemon/app-server restart.
@@ -977,7 +978,7 @@ func (a *CodexAdapter) SendPrompt(sessionID string, request PromptRequest) error
 			opslog.Warn("daemon.adapters", "thread_resume_degraded", "Codex thread resume failed before turn start; continuing with registered thread ids", "agent_type", "codex", "session_id", sessionID)
 		}
 		a.appServer.RegisterThreadIDs(sessionID, sessionID, sessionID)
-		turnID, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments)
+		turnID, err := a.appServer.StartTurnWithCollaborationMode(ctx, sessionID, request.Prompt, request.Attachments, request.CollaborationMode)
 		if err != nil {
 			// turn/start is the native write boundary. An error cannot prove that
 			// Codex did not accept it, so never execute the same prompt through a
@@ -1026,7 +1027,7 @@ func (a *CodexAdapter) SendQueuedPrompt(sessionID string, request PromptRequest)
 		opslog.Warn("daemon.adapters", "queued_thread_resume_degraded", "Codex thread resume failed before queued turn start; continuing with registered thread ids", "agent_type", "codex", "session_id", sessionID)
 	}
 	a.appServer.RegisterThreadIDs(sessionID, sessionID, sessionID)
-	turnID, err := a.appServer.StartTurn(ctx, sessionID, request.Prompt, request.Attachments)
+	turnID, err := a.appServer.StartTurnWithCollaborationMode(ctx, sessionID, request.Prompt, request.Attachments, request.CollaborationMode)
 	if err != nil {
 		return err
 	}

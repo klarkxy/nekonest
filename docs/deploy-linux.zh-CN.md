@@ -49,37 +49,24 @@ nekonest-daemon -pair gen
 
 ## 3. 用 systemd 运行
 
-创建 `~/.config/systemd/user/nekonest-daemon.service`：
-
-```ini
-[Unit]
-Description=NekoNest host daemon
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=%h/.local/bin/nekonest-daemon
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-```
-
-启用服务：
+注册当前用户单元并启动：
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user enable --now nekonest-daemon.service
+nekonest-daemon install
+nekonest-daemon start
+nekonest-daemon status
 journalctl --user -u nekonest-daemon -f
 ```
 
-如果退出登录后仍需常驻，可选运行 `loginctl enable-linger "$USER"`。同一份
-Daemon 配置只能由一个进程使用。
+`install` 会为默认配置写入
+`~/.config/systemd/user/nekonest-daemon.service`（自定义 `-config` 使用带哈希
+的单元名）并启用它。它不会复制二进制，也不会立刻启动进程。如果退出登录后仍
+需常驻，可选运行 `loginctl enable-linger "$USER"`。同一份 Daemon 配置只能由
+一个进程使用。
 
 ## 验证
 
+- `nekonest-daemon status` 在 `start` 后显示用户单元已安装且处于 active。
 - `nekonest-daemon -doctor` 没有关键配置或网络错误。
 - `systemctl --user is-active nekonest-daemon` 返回 `active`。
 - 手机上主机显示在线，并列出最近的原生线程。
@@ -92,15 +79,17 @@ Daemon 配置只能由一个进程使用。
 
 1. 停止服务前，先下载并校验目标版本。
 2. 备份 `~/.nekonest`，记录当前可执行文件哈希。
-3. 停止用户服务，把旧二进制保存为唯一的回滚文件名。
-4. 将新二进制安装到原路径并重启服务。
-5. 运行 `-doctor`、检查日志，并验证手机在线和一次真实提示词。
+3. 运行 `nekonest-daemon stop`，并确认 `status` 显示进程锁空闲。
+4. 把旧二进制保存为唯一的回滚文件名，再将新二进制安装到原路径。
+5. 若可执行文件路径变了，再运行一次 `install`。然后 `start`，运行 `-doctor`、
+   检查日志，并验证手机在线和一次真实提示词。
 
-新 Daemon 失败时，停止它，恢复旧二进制，再启动同一服务。升级期间不要替换
-或编辑原生智能体存储。
+新 Daemon 失败时，先 `stop`，恢复旧二进制，再 `start` 同一服务。升级期间不要
+替换或编辑原生智能体存储。
 
-二进制和压缩包升级不会改写用户服务单元。发版说明提到模板变化时，应主动将
-已安装单元与[仓库模板](../daemon/packaging/nekonest-daemon.service)比较。
+只替换同一路径上的二进制时，已有用户单元会继续使用。移动可执行文件后应再
+运行 `install`，使 `ExecStart` 与新路径一致。只有在继续手写单元时，才需要与
+[仓库模板](../daemon/packaging/nekonest-daemon.service)比较。
 
 ## 相关文档
 

@@ -363,6 +363,23 @@ func TestStructuredPendingUserInputAndResponse(t *testing.T) {
 	}
 }
 
+func TestResolvePlanCollaborationModeUsesAdvertisedDefaults(t *testing.T) {
+	mode, err := resolvePlanCollaborationMode(
+		json.RawMessage(`{"data":[{"name":"Default","mode":"default","model":null},{"name":"Plan","mode":"plan","model":null,"reasoning_effort":"high"}]}`),
+		json.RawMessage(`{"data":[{"model":"fallback"},{"model":"preferred","isDefault":true}]}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, ok := mode["settings"].(map[string]any)
+	if mode["mode"] != "plan" || !ok || settings["model"] != "preferred" || settings["reasoning_effort"] != "high" {
+		t.Fatalf("resolved Plan mode = %#v", mode)
+	}
+	if _, err := resolvePlanCollaborationMode(json.RawMessage(`{"data":[]}`), json.RawMessage(`{"data":[]}`)); err == nil {
+		t.Fatal("missing Plan collaboration mode was accepted")
+	}
+}
+
 func TestStructuredUserInputExpiredAndStale(t *testing.T) {
 	c := NewCodexAppServer()
 	zero := uint64(0)

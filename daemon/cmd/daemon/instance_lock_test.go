@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -79,6 +80,8 @@ func TestDaemonInstanceLockIsExclusiveAcrossProcessesAndReleases(t *testing.T) {
 	if second, err := acquireDaemonInstanceLock(path); err == nil {
 		_ = second.Close()
 		t.Fatal("second process acquired the same daemon lock")
+	} else if !errors.Is(err, errDaemonInstanceLockHeld) {
+		t.Fatalf("second process returned non-contention error: %v", err)
 	}
 	// Simulate a crash: the process does not run its deferred unlock. The OS
 	// must release the advisory lock when the handle disappears.

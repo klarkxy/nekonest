@@ -23,6 +23,10 @@ Codex is the only agent with a supported full-control role. Even for Codex, the
 PWA enables each control only after the installed app-server path passes its
 runtime probes. A fallback may expose fewer controls.
 
+Structured Codex questions are available on explicit **Plan mode** turns. The
+PWA keeps normal execution as the default because Plan mode plans and asks for
+decisions instead of performing implementation work.
+
 ## Runtime is authoritative
 
 For every thread, the PWA uses the daemon's current capability catalog. Missing

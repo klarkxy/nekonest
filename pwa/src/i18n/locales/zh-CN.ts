@@ -253,6 +253,8 @@ export default {
     sendBusyHint: '猫娘还在处理上一条，可以先把下一句写好。',
     steer: '调整当前任务',
     steerHint: 'Codex 正在执行；这里发送的文字会立即调整当前任务。',
+    planMode: '规划模式',
+    planModeHint: '本轮只规划、不直接改文件；Codex 的结构化问题会显示在上方。',
     attachSteerUnavailable: '调整运行中任务时不能添加附件',
     attachmentsFollowup: '（附件）',
     queueTitle: '提示词队列',

@@ -55,8 +55,16 @@ Web Push 的三个 VAPID 值要么全部配置，要么保持关闭。`debug` �
 | `nekonest-daemon -register -name "Home PC"` | 注册主机并打印配对材料 |
 | `nekonest-daemon -pair gen` | 生成新的手机配对码 |
 | `nekonest-daemon -doctor` | 检查配置、Server 连通性和已安装智能体 |
+| `nekonest-daemon install` | 注册当前用户自启动（Windows 登录计划任务或 Linux systemd 用户单元） |
+| `nekonest-daemon start` | 启动已安装的监督器 |
+| `nekonest-daemon stop` | 停止已安装的监督器 |
+| `nekonest-daemon status` | 显示监督器与进程锁状态 |
+| `nekonest-daemon uninstall` | 移除当前用户的自启动注册 |
 | `nekonest-daemon -config <path>` | 使用非默认配置文件 |
 | `nekonest-daemon -version` | 输出应用版本 |
+
+`install` / `start` / `stop` / `status` / `uninstall` 只与当前用户的系统监督器
+通信，不会再常驻一个 CLI 进程。非默认 `-config` 会使用单独的任务或单元名。
 
 注册时读取：
 

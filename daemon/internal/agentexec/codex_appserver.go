@@ -755,6 +755,13 @@ func (c *CodexAppServer) ResumeThread(ctx context.Context, threadID string) (thr
 
 // StartTurn starts a turn on an existing thread.
 func (c *CodexAppServer) StartTurn(ctx context.Context, threadID, prompt string, files []attach.LocalFile) (turnID string, err error) {
+	return c.StartTurnWithCollaborationMode(ctx, threadID, prompt, files, "")
+}
+
+// StartTurnWithCollaborationMode starts a normal turn or an explicit Plan
+// collaboration turn. Plan is opt-in because it enables structured questions
+// but intentionally does not perform implementation work.
+func (c *CodexAppServer) StartTurnWithCollaborationMode(ctx context.Context, threadID, prompt string, files []attach.LocalFile, collaborationMode string) (turnID string, err error) {
 	threadID = c.ResolveThreadID(threadID)
 	if strings.TrimSpace(threadID) == "" {
 		return "", fmt.Errorf("thread id required")
@@ -763,7 +770,27 @@ func (c *CodexAppServer) StartTurn(ctx context.Context, threadID, prompt string,
 	if err != nil {
 		return "", err
 	}
-	raw, err := c.Call(ctx, "turn/start", buildTurnStartParams(threadID, input))
+	params := buildTurnStartParams(threadID, input)
+	switch strings.TrimSpace(collaborationMode) {
+	case "":
+	case "plan":
+		modeRaw, callErr := c.Call(ctx, "collaborationMode/list", map[string]any{})
+		if callErr != nil {
+			return "", fmt.Errorf("%w: collaborationMode/list: %v", ErrPromptNotStarted, callErr)
+		}
+		modelRaw, callErr := c.Call(ctx, "model/list", map[string]any{})
+		if callErr != nil {
+			return "", fmt.Errorf("%w: model/list: %v", ErrPromptNotStarted, callErr)
+		}
+		planMode, modeErr := resolvePlanCollaborationMode(modeRaw, modelRaw)
+		if modeErr != nil {
+			return "", fmt.Errorf("%w: %v", ErrPromptNotStarted, modeErr)
+		}
+		params["collaborationMode"] = planMode
+	default:
+		return "", fmt.Errorf("%w: unsupported collaboration mode %q", ErrPromptNotStarted, collaborationMode)
+	}
+	raw, err := c.Call(ctx, "turn/start", params)
 	if err != nil {
 		return "", err
 	}
@@ -772,6 +799,56 @@ func (c *CodexAppServer) StartTurn(ctx context.Context, threadID, prompt string,
 		c.setStartingTurn(threadID, turnID)
 	}
 	return turnID, nil
+}
+
+func resolvePlanCollaborationMode(modeRaw, modelRaw json.RawMessage) (map[string]any, error) {
+	var modes struct {
+		Data []struct {
+			Mode            *string `json:"mode"`
+			Model           *string `json:"model"`
+			ReasoningEffort *string `json:"reasoning_effort"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(modeRaw, &modes); err != nil {
+		return nil, fmt.Errorf("decode collaboration modes: %w", err)
+	}
+	var models struct {
+		Data []struct {
+			Model     string `json:"model"`
+			IsDefault bool   `json:"isDefault"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(modelRaw, &models); err != nil {
+		return nil, fmt.Errorf("decode model list: %w", err)
+	}
+	defaultModel := ""
+	for _, model := range models.Data {
+		if model.IsDefault {
+			defaultModel = strings.TrimSpace(model.Model)
+			break
+		}
+	}
+	if defaultModel == "" && len(models.Data) > 0 {
+		defaultModel = strings.TrimSpace(models.Data[0].Model)
+	}
+	for _, mode := range modes.Data {
+		if mode.Mode == nil || *mode.Mode != "plan" {
+			continue
+		}
+		model := defaultModel
+		if mode.Model != nil && strings.TrimSpace(*mode.Model) != "" {
+			model = strings.TrimSpace(*mode.Model)
+		}
+		if model == "" {
+			return nil, errors.New("Plan collaboration mode has no usable model")
+		}
+		settings := map[string]any{"model": model, "developer_instructions": nil}
+		if mode.ReasoningEffort != nil && strings.TrimSpace(*mode.ReasoningEffort) != "" {
+			settings["reasoning_effort"] = strings.TrimSpace(*mode.ReasoningEffort)
+		}
+		return map[string]any{"mode": "plan", "settings": settings}, nil
+	}
+	return nil, errors.New("Codex did not advertise a Plan collaboration mode")
 }
 
 // InterruptTurn interrupts the active turn for threadID.

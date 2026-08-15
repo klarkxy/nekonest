@@ -49,6 +49,15 @@ by the connected daemon; run `nekonest-daemon -doctor` when a control is
 unavailable. See [agent support](./docs/agent-capability-matrix.md) for the stable
 support policy.
 
+For Codex, enable **Plan mode** beside the composer when you want a planning
+turn that can pause for structured questions on the phone. Normal mode remains
+the default and continues to execute coding work. Prompts sent while a thread is
+busy enter the durable FIFO and can be cancelled before native execution.
+For long Codex turns, app-server `turn/started`/`turn/completed` state is the
+authoritative signal for work launched through NekoNest. Native-store fallback
+uses terminal events plus recent rollout activity and stays conservatively busy
+instead of treating turn age alone as proof that a task stopped.
+
 ## Quick start
 
 ### 1. Run the Server on a VPS
@@ -89,7 +98,8 @@ Set-Location .\nekonest-daemon
 $env:NEKONEST_SERVER = "https://nekonest.example.com"
 $env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
 .\nekonest-daemon.exe -register -name "Study PC"
-.\nekonest-daemon.exe
+.\nekonest-daemon.exe install
+.\nekonest-daemon.exe start
 ```
 
 Use the [Windows](./docs/deploy-windows.md) or

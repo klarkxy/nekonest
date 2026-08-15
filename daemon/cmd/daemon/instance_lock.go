@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 )
+
+var errDaemonInstanceLockHeld = errors.New("daemon instance lock is held")
 
 type daemonInstanceLock struct {
 	file     *os.File
@@ -29,7 +32,7 @@ func acquireDaemonInstanceLock(path string) (*daemonInstanceLock, error) {
 	unlock, err := lockFileExclusive(file)
 	if err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("another daemon already owns %s: %w", path, err)
+		return nil, fmt.Errorf("%w: another daemon already owns %s: %w", errDaemonInstanceLockHeld, path, err)
 	}
 	return &daemonInstanceLock{file: file, unlock: unlock}, nil
 }

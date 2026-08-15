@@ -19,6 +19,8 @@ path. Local tests are useful preflight, not a substitute for this workflow.
 - [ ] Public `https://your-nest/health` succeeds through the reverse proxy.
 - [ ] A wrong admin secret is rejected; the correct one completes setup.
 - [ ] `nekonest-daemon -doctor` has no critical config or network error.
+- [ ] After `install` and `start`, `nekonest-daemon status` reports the host
+      service installed and the process lock held.
 - [ ] A fresh pair code connects the intended host and the phone shows it online.
 - [ ] A recent native main thread appears under **directory → agent → thread**.
 - [ ] Opening the thread loads native history without duplicate turns.
@@ -35,10 +37,12 @@ path. Local tests are useful preflight, not a substitute for this workflow.
 
 Test only controls currently enabled by the PWA:
 
-- [ ] Approval, denial, steering, or structured input completes a real native
-      request when advertised.
-- [ ] Queue controls preserve order across reconnect and require an explicit user
-      decision for uncertain work.
+- [ ] Approval, denial, and steering complete a real native request when advertised.
+- [ ] A Codex Plan-mode prompt raises a real structured question in the PWA;
+      answering it resumes the same native turn.
+- [ ] Queue controls preserve order across reconnect; a queued item can be
+      cancelled before native execution, and uncertain work requires an explicit
+      user decision.
 - [ ] New thread creation targets an already discovered project and navigates to
       the thread only after native creation is confirmed.
 - [ ] A disabled control explains why it is unavailable instead of doing nothing.

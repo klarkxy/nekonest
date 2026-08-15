@@ -20,8 +20,8 @@
 | 文档 | 用途 |
 |---|---|
 | [VPS 部署](./deploy-vps.zh-CN.md) | 在 HTTPS 后运行 Server 与 PWA |
-| [Windows 主机](./deploy-windows.zh-CN.md) | 安装、注册并自启动主机 Daemon |
-| [Linux 主机](./deploy-linux.zh-CN.md) | 安装、注册并用 systemd 运行主机 Daemon |
+| [Windows 主机](./deploy-windows.zh-CN.md) | 注册主机并用 `nekonest-daemon install` 管理自启动 |
+| [Linux 主机](./deploy-linux.zh-CN.md) | 注册主机并用 `nekonest-daemon install` 管理 systemd 用户单元 |
 | [配置](./configuration.zh-CN.md) | 受支持的运维设置与数据位置 |
 | [安全](./security.zh-CN.md) | 信任模型、密钥、备份与加固 |
 | [排障](./troubleshooting.zh-CN.md) | 按症状恢复 |

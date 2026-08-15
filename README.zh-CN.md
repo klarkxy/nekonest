@@ -46,6 +46,13 @@ NekoNest 把手机 PWA 与你自己电脑上的编码智能体连接起来。主
 先运行 `nekonest-daemon -doctor`。稳定的支持边界见
 [智能体支持说明](./docs/agent-capability-matrix.zh-CN.md)。
 
+使用 Codex 时，如果希望本轮只规划并能在手机上回答结构化问题，可在输入框旁启用
+**规划模式**。普通模式仍是默认值，用于继续执行编码工作。线程忙碌时发送的提示会
+进入持久 FIFO 队列，并可在原生执行开始前取消。
+对长时间运行的 Codex turn，由 NekoNest 发起的任务以 app-server 的
+`turn/started` / `turn/completed` 状态为权威依据。原生存储回退路径同时检查终止
+事件和近期 rollout 活动，不再仅凭 turn 已运行多久就误判任务已经停止。
+
 ## 快速开始
 
 ### 1. 在 VPS 运行 Server
@@ -85,7 +92,8 @@ Set-Location .\nekonest-daemon
 $env:NEKONEST_SERVER = "https://nekonest.example.com"
 $env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
 .\nekonest-daemon.exe -register -name "Study PC"
-.\nekonest-daemon.exe
+.\nekonest-daemon.exe install
+.\nekonest-daemon.exe start
 ```
 
 安装与自启动请分别看 [Windows](./docs/deploy-windows.zh-CN.md) 或

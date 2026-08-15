@@ -1053,9 +1053,10 @@ describe('session prompt outbox', () => {
       summary: '', last_activity: 0, capabilities: { send: true, queue: true }
     }
 
-    expect(store.sendPrompt('device-a', 'session-a', 'next in FIFO')).toBe(true)
+    expect(store.sendPrompt('device-a', 'session-a', 'next in FIFO', undefined, 'plan')).toBe(true)
     expect(store.messages).toHaveLength(1)
     expect(sentPrompts()).toHaveLength(1)
+    expect(sentPrompts()[0].payload).toMatchObject({ collaboration_mode: 'plan' })
     store.cleanup()
   })
 
@@ -1118,13 +1119,14 @@ describe('session prompt outbox', () => {
       }
     }
 
-    expect(store.sendPrompt('device-a', 'session-a', 'sealed prompt')).toBe(true)
+    expect(store.sendPrompt('device-a', 'session-a', 'sealed prompt', undefined, 'plan')).toBe(true)
     vi.setSystemTime(new Date(3_500))
     await Promise.resolve()
     await Promise.resolve()
     expect(vi.mocked(encryptSessionPayload).mock.calls[0][6]).toBe(harness.sent[0].timestamp)
     expect(vi.mocked(encryptSessionPayload).mock.calls[0][7]).toBe('1.1')
     expect(harness.sent[0].protocol_version).toBe('1.1')
+    expect(vi.mocked(encryptSessionPayload).mock.calls[0][4]).toMatchObject({ collaboration_mode: 'plan' })
 
     const response = store.respondUserInput(
       'device-a', 'session-a', store.currentSession.pending_user_input!, { answer: ['yes'] }
@@ -1140,6 +1142,8 @@ describe('session prompt outbox', () => {
     await Promise.resolve()
     expect(vi.mocked(encryptSessionPayload).mock.calls[2][6]).toBe(harness.sent[2].timestamp)
     expect(vi.mocked(encryptSessionPayload).mock.calls[2][7]).toBe('1.1')
+    expect(vi.mocked(encryptSessionPayload).mock.calls[2][5]).toBe('prompt-a')
+    expect(harness.sent[2].client_msg_id).toBe('prompt-a')
     store.cleanup()
   })
 
@@ -1714,6 +1718,42 @@ describe('session prompt outbox', () => {
     expect(store.interrupt('device-a', 'session-a')).toBe(true)
     expect(harness.sent[0]).toMatchObject({
       type: 'interrupt', payload: { generation: 8, client_msg_id: 'message-8' }
+    })
+    store.cleanup()
+  })
+
+  it('applies a structured Codex question from a partial session update', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({ sessions: [{
+      id: 'session-a', device_id: 'device-a', agent_type: 'codex', status: 'running',
+      summary: '', last_activity: 1,
+      capabilities: { send: true, queue: true, user_input: true }
+    }] }, 'device-a', '1.2')
+    store.currentSession = store.sessions[0]
+
+    emit({
+      protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+      device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      payload: { session: {
+        id: 'session-a', device_id: 'device-a', agent_type: 'codex',
+        status: 'waiting_user', last_activity: 2,
+        pending_user_input: {
+          request_id: 'request-1', item_id: 'item-1',
+          questions: [{
+            id: 'choice', header: 'Choice', question: 'Pick one',
+            options: [{ label: 'Alpha', description: 'First option' }],
+            is_other: true
+          }]
+        }
+      } }
+    })
+
+    expect(store.currentSession?.status).toBe('waiting_user')
+    expect(store.currentSession?.pending_user_input).toMatchObject({
+      request_id: 'request-1',
+      questions: [{ id: 'choice', question: 'Pick one', is_other: true }]
     })
     store.cleanup()
   })

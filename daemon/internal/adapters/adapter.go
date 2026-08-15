@@ -230,14 +230,15 @@ type OutputSink func(OutputEvent)
 // PromptRequest carries a user turn and any daemon-materialized local files.
 // OnComplete releases those temporary files after the resumed CLI process exits.
 type PromptRequest struct {
-	Prompt          string
-	Attachments     []attach.LocalFile
-	OnComplete      func()
-	Generation      uint64
-	ClientMsgID     string
-	OnLifecycle     func(TurnLifecycle, string)
-	OnNativeBound   func(string)
-	DeferAcceptance bool
+	Prompt            string
+	Attachments       []attach.LocalFile
+	CollaborationMode string
+	OnComplete        func()
+	Generation        uint64
+	ClientMsgID       string
+	OnLifecycle       func(TurnLifecycle, string)
+	OnNativeBound     func(string)
+	DeferAcceptance   bool
 }
 
 type PromptAcceptanceAcker interface {

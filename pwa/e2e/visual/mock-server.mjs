@@ -253,6 +253,20 @@ webSockets.on('connection', socket => {
         device_id: deviceId,
         payload: { sessions: state.sessions, start_capabilities: START_CAPABILITIES }
       })
+      if (state.name === 'session-queue-blocked') {
+        sendFrame(socket, {
+          type: 'queue_update',
+          device_id: deviceId,
+          session_id: MAIN_SESSION_ID,
+          payload: {
+            paused: true,
+            items: [
+              { client_msg_id: 'queue-blocked-visual', position: 1, status: 'blocked_failed' },
+              { client_msg_id: 'queue-next-visual', position: 2, status: 'queued' }
+            ]
+          }
+        })
+      }
       if (state.behavior.websocket === 'disconnect') {
         disconnectedCatalogScenario = state.name
         setTimeout(() => socket.close(1012, 'visual fixture disconnected'), 20)
