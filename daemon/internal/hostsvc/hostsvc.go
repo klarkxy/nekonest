@@ -317,9 +317,15 @@ if ($arguments -ne '') {
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-$settings.ExecutionTimeLimit = [TimeSpan]::Zero
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'NekoNest host daemon' -Force | Out-Null
+$service = New-Object -ComObject 'Schedule.Service'
+$service.Connect()
+$root = $service.GetFolder('\')
+$registered = $root.GetTask($taskName)
+$definition = $registered.Definition
+$definition.Settings.ExecutionTimeLimit = 'PT0S'
+$root.RegisterTaskDefinition($taskName, $definition, 6, $currentUser, $null, 3, $null) | Out-Null
 `
 	windowsUninstallBody = `
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

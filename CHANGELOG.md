@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8-rc.2] - 2026-08-15
+
+### Fixed
+
+- Register the Windows daemon's unlimited scheduled-task runtime through the
+  Task Scheduler COM API as `PT0S`, avoiding Windows builds that reject the
+  `00:00:00` value emitted for a zero .NET `TimeSpan`.
+
 ## [0.2.8-rc.1] - 2026-08-15
 
 ### Changed
@@ -341,7 +349,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.1...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.2...HEAD
+[0.2.8-rc.2]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.1...v0.2.8-rc.2
 [0.2.8-rc.1]: https://github.com/klarkxy/nekonest/compare/v0.2.7...v0.2.8-rc.1
 [0.2.7]: https://github.com/klarkxy/nekonest/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/klarkxy/nekonest/compare/v0.2.5...v0.2.6

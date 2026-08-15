@@ -47,8 +47,11 @@ func TestWindowsInstallInvokesPowerShellScript(t *testing.T) {
 		t.Fatalf("PowerShell unexpectedly used stdin: %q", stdin)
 	}
 	decoded := decodePowerShellForTest(t, args[5])
-	if !strings.Contains(decoded, "ExecutionTimeLimit = [TimeSpan]::Zero") || !strings.Contains(decoded, mgr.UnitName()) {
+	if !strings.Contains(decoded, "ExecutionTimeLimit = 'PT0S'") || !strings.Contains(decoded, mgr.UnitName()) {
 		t.Fatalf("script=%s", decoded)
+	}
+	if !strings.Contains(decoded, "RegisterTaskDefinition($taskName, $definition, 6, $currentUser, $null, 3, $null)") {
+		t.Fatalf("script does not preserve the interactive-token task principal: %s", decoded)
 	}
 	if !strings.Contains(decoded, "-config") {
 		t.Fatal("custom config was not passed to the scheduled task")
