@@ -157,6 +157,7 @@ func interruptProcess(p *os.Process) error {
 // it. If the host does not permit Job Objects, execution continues with an
 // explicit warning and taskkill /T is used as the termination fallback.
 func startManagedProcess(cmd *exec.Cmd) (uintptr, error) {
+	configureBackgroundProcess(cmd)
 	job, err := createJobObject()
 	if err != nil || job == 0 {
 		opslog.Warn("daemon.agentexec", "job_object_create_failed", "Windows Job Object creation failed; taskkill tree fallback enabled", "status", "fallback")
@@ -213,7 +214,9 @@ func killProcessTree(p *os.Process) error {
 	if _, err := os.Stat(taskkill); err != nil {
 		taskkill = "taskkill.exe"
 	}
-	errTree := exec.Command(taskkill, "/PID", strconv.Itoa(p.Pid), "/T", "/F").Run()
+	cmd := exec.Command(taskkill, "/PID", strconv.Itoa(p.Pid), "/T", "/F")
+	configureBackgroundProcess(cmd)
+	errTree := cmd.Run()
 	errParent := p.Kill()
 	if errTree == nil || errParent == nil {
 		return nil

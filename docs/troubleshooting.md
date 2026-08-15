@@ -66,6 +66,18 @@ agent request that can only be completed in the host terminal.
 Do not bypass the disabled state. Run `-doctor`, update the relevant agent CLI
 if appropriate, and reconnect the daemon.
 
+An agent with no visible thread activity in seven days is re-probed only once
+per day. After installing or upgrading such a CLI, restart the daemon to run its
+startup probe immediately; normal phone reconnects intentionally do not force
+all dormant CLIs to launch.
+
+## A CLI console window appears
+
+Current Windows installs run the daemon and background agent probes without a
+visible console. Run `nekonest-daemon.exe install` again to refresh the managed
+scheduled-task launcher, then `stop` and `start` it. `status` should still report
+the daemon executable, while Task Scheduler's action uses `wscript.exe`.
+
 ## Prompt is stuck or delivery is uncertain
 
 1. Check whether the thread is already running or waiting for input/approval.

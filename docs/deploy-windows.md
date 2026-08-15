@@ -69,8 +69,11 @@ D:\NekoNest\nekonest-daemon.exe status
 
 `install` writes a per-user scheduled task (`NekoNestDaemon` for the default
 config). The task runs as the logged-on user, has no 72-hour time limit, and
-does not copy the binary. Keep the executable in a stable directory. A custom
-`-config` path gets its own task name.
+does not copy the binary. It uses a managed, hidden WScript launcher under
+`%LOCALAPPDATA%\NekoNest\hostsvc` so the daemon and its background agent probes
+do not open console windows. `status` still reports the underlying daemon path
+and arguments. Keep the executable in a stable directory. A custom `-config`
+path gets its own task and launcher name.
 
 Only one process may use a daemon config at a time. If the task exits, check
 `status` for a leftover manual process before changing the configuration.
@@ -101,6 +104,9 @@ are authoritative; see [agent support](./agent-capability-matrix.md).
 If the new daemon does not stay connected, `stop` it, restore the previous
 executable, and `start` the same task. Do not replace or edit native agent
 stores during an upgrade.
+
+Running `install` again atomically refreshes the managed launcher. `uninstall`
+removes the matching launcher and manifest together with the scheduled task.
 
 ## Related
 

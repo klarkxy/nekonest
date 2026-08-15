@@ -114,6 +114,12 @@ func main() {
 		fmt.Println(`  nekonest-daemon -register -name "My PC"`)
 		os.Exit(1)
 	}
+	releaseManagedPID, err := hostsvc.ClaimManagedProcess()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "managed host process claim failed:", err)
+		os.Exit(1)
+	}
+	defer releaseManagedPID()
 
 	opslog.Info("daemon.main", "starting", "daemon starting", "version", buildinfo.Version)
 	// The mode belongs to the registered nest, not to an ad-hoc process
@@ -401,7 +407,28 @@ func main() {
 		defer sessionMu.Unlock()
 		return sessionStatusBlocksQueueDispatch(lastSessions[sessionID])
 	}
-	startCapabilityCache := newAgentStartCapabilityCache(30 * time.Second)
+	startCapabilityCache := newAgentStartCapabilityCache()
+	startCapabilityCache.logProbe = func(agentType adapters.AgentType, tier startCapabilityActivityTier, outcome string, next time.Time) {
+		opslog.Info("daemon.start_capability", "probe_completed", "native thread-start capability probe completed",
+			"agent_type", agentType,
+			"activity_tier", tier,
+			"outcome", outcome,
+			"next_probe_at", next.UTC().Format(time.RFC3339),
+		)
+	}
+	snapshotStartCapabilitySessions := func() []*adapters.SessionInfo {
+		sessionMu.Lock()
+		defer sessionMu.Unlock()
+		sessions := make([]*adapters.SessionInfo, 0, len(lastSessions))
+		for _, session := range lastSessions {
+			if session == nil {
+				continue
+			}
+			copySession := *session
+			sessions = append(sessions, &copySession)
+		}
+		return sessions
+	}
 	threadStarts := &threadStartCoordinator{
 		journal:       threadJournal,
 		lookupAdapter: adapterRegistry.Get,
@@ -410,6 +437,9 @@ func main() {
 		},
 		materializeAttachments: func(operationID string, refs []attach.Ref) (string, []attach.LocalFile, string, error) {
 			return attach.Materialize(currentConfig().ServerURL, operationID, refs)
+		},
+		probeStartCapability: func(probeCtx context.Context, agentType adapters.AgentType, _ adapters.NativeThreadStarter) (adapters.ThreadStartCapability, error) {
+			return startCapabilityCache.ProbeForStart(probeCtx, adapterRegistry, agentType, snapshotStartCapabilitySessions())
 		},
 	}
 
@@ -1236,7 +1266,7 @@ func main() {
 				}
 			}
 			// Check for changes
-			startCapabilities := startCapabilityCache.Get(ctx, adapterRegistry)
+			startCapabilities := startCapabilityCache.Get(ctx, adapterRegistry, allSessions)
 			changed := force
 			sessionMu.Lock()
 

@@ -98,6 +98,8 @@ $env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
 
 安装与自启动请分别看 [Windows](./docs/deploy-windows.zh-CN.md) 或
 [Linux](./docs/deploy-linux.zh-CN.md) 指南。
+智能体的新建线程能力会在 Daemon 启动时检测一次，之后按活跃度刷新：活跃智能体
+每五分钟、最近七天用过的智能体每小时、七天没有线程活动的智能体每天检测一次。
 
 ### 3. 配对手机
 

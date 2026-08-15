@@ -103,6 +103,7 @@ func probeCodexCLI(candidate string) bool {
 		return false
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
+	configureBackgroundProcess(cmd)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run() == nil

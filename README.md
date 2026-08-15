@@ -104,6 +104,9 @@ $env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
 
 Use the [Windows](./docs/deploy-windows.md) or
 [Linux](./docs/deploy-linux.md) guide for installation and autostart.
+Agent start capabilities are probed on daemon startup and then refreshed by
+activity: active agents every five minutes, recently used agents hourly, and
+agents with no thread activity in seven days daily.
 
 ### 3. Pair the phone
 

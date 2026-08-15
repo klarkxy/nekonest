@@ -1,6 +1,7 @@
 package hostsvc
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,17 +101,103 @@ func TestRenderWindowsTaskScript(t *testing.T) {
 		"ExecutionTimeLimit = 'PT0S'",
 		"RegisterTaskDefinition($taskName, $definition, 6, $currentUser, $null, 3, $null)",
 		"AllowStartIfOnBatteries",
+		"New-ScheduledTaskSettingsSet -Hidden",
+		"$definition.Settings.Hidden = $true",
 		"LogonType Interactive",
 		"Register-ScheduledTask",
+		"System32\\wscript.exe",
+		"//B //NoLogo",
+		"Set-Content -LiteralPath $launcherTemp",
+		"NekoNest\\hostsvc",
 		"$taskName = 'NekoNestDaemon'",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q:\n%s", want, script)
 		}
 	}
+	if strings.Contains(script, "New-ScheduledTaskAction -Execute $exe") {
+		t.Fatal("scheduled task still executes the console daemon directly")
+	}
+	if !strings.HasSuffix(script, "exit 0\n") {
+		t.Fatal("successful install script does not normalize its process exit code")
+	}
 	start := RenderWindowsTaskScript("start", "NekoNestDaemon", "exe", "wd", "")
-	if !strings.Contains(start, "not installed") || !strings.Contains(start, "Start-ScheduledTask") {
+	if !strings.Contains(start, "not installed") || !strings.Contains(start, "Start-ScheduledTask") ||
+		!strings.Contains(start, "Wait-ManagedDaemon -TimeoutSeconds 15") {
 		t.Fatalf("start script unexpected:\n%s", start)
+	}
+	stop := RenderWindowsTaskScript("stop", "NekoNestDaemon", "exe", "wd", "")
+	if !strings.Contains(stop, "Wait-ManagedDaemon -TimeoutSeconds 5") {
+		t.Fatalf("stop script does not close the PID-ready race:\n%s", stop)
+	}
+	if !strings.Contains(stop, "Wait-ManagedDaemonExit -TimeoutSeconds 5") ||
+		!strings.Contains(stop, "throw 'failed to stop the managed NekoNest daemon process tree'") {
+		t.Fatalf("stop script does not fail closed when process-tree termination fails:\n%s", stop)
+	}
+	throwAt := strings.Index(stop, "throw 'failed to stop the managed NekoNest daemon process tree'")
+	cleanupAt := strings.Index(stop, "Remove-Item -LiteralPath $pidPath")
+	if throwAt < 0 || cleanupAt < 0 || throwAt > cleanupAt {
+		t.Fatalf("stop script can remove the lease before reporting a surviving daemon:\n%s", stop)
+	}
+}
+
+func TestRenderWindowsLauncherQuotesPathsAndWaits(t *testing.T) {
+	launcher := RenderWindowsLauncher(
+		"NekoNestDaemon-猫",
+		`D:\猫娘 Nest\nekonest-daemon.exe`,
+		`D:\猫娘 Nest`,
+		`-config "D:\猫娘 Nest\profile\.nekonest\config.json"`,
+	)
+	for _, want := range []string{
+		`Set shell = CreateObject("WScript.Shell")`,
+		`environment("NEKONEST_HOST_SERVICE_PID_FILE") = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%\NekoNest\hostsvc\NekoNestDaemon-猫.pid")`,
+		`shell.CurrentDirectory = "D:\猫娘 Nest"`,
+		`"""D:\猫娘 Nest\nekonest-daemon.exe"" -config ""D:\猫娘 Nest\profile\.nekonest\config.json"""`,
+		`, 0, True)`,
+	} {
+		if !strings.Contains(launcher, want) {
+			t.Fatalf("launcher missing %q:\n%s", want, launcher)
+		}
+	}
+}
+
+func TestRenderWindowsUninstallCleansManagedLauncher(t *testing.T) {
+	script := RenderWindowsTaskScript("uninstall", "NekoNestDaemon", "exe", "wd", "")
+	for _, want := range []string{"$launcherPath", "$manifestPath", "$pidPath", "Stop-ManagedDaemon", "Unregister-ScheduledTask"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("uninstall script missing %q:\n%s", want, script)
+		}
+	}
+	if !strings.Contains(script, "$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue\nStop-ManagedDaemon\nif ($null -ne $existing)") {
+		t.Fatal("uninstall only stops the managed daemon when the task still exists")
+	}
+}
+
+func TestClaimManagedProcessPublishesAndCleansPID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.pid")
+	t.Setenv(managedPIDEnvironment, path)
+	cleanup, err := ClaimManagedProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lease managedPIDLease
+	if err := json.Unmarshal(raw, &lease); err != nil {
+		t.Fatal(err)
+	}
+	if lease.Version != 1 || lease.PID != os.Getpid() || lease.StartedAt.IsZero() {
+		t.Fatalf("pid lease = %#v", lease)
+	}
+	if _, inherited := os.LookupEnv(managedPIDEnvironment); inherited {
+		t.Fatal("managed PID environment was left available to child processes")
+	}
+	cleanup()
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("pid file still exists: %v", err)
 	}
 }
 

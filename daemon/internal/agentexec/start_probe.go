@@ -21,7 +21,9 @@ func probeCLIHelp(ctx context.Context, command string, required ...string) error
 	if err != nil {
 		return err
 	}
-	output, runErr := exec.CommandContext(probeCtx, executable, args...).CombinedOutput()
+	cmd := exec.CommandContext(probeCtx, executable, args...)
+	configureBackgroundProcess(cmd)
+	output, runErr := cmd.CombinedOutput()
 	text := strings.ToLower(string(output))
 	if runErr != nil && strings.TrimSpace(text) == "" {
 		return fmt.Errorf("CLI help failed: %w", runErr)

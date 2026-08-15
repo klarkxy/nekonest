@@ -308,7 +308,9 @@ func (c *KimiCommander) probeHelp() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	output, runErr := exec.CommandContext(ctx, executable, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, executable, args...)
+	configureBackgroundProcess(cmd)
+	output, runErr := cmd.CombinedOutput()
 	text := string(output)
 	if runErr != nil && strings.TrimSpace(text) == "" {
 		return "", runErr

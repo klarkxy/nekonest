@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,12 +14,22 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/nekonest/daemon/internal/config"
 )
 
 // ErrUnsupported is returned on operating systems that have no host supervisor.
 var ErrUnsupported = errors.New("host service management is supported on Windows and Linux only")
+
+const managedPIDEnvironment = "NEKONEST_HOST_SERVICE_PID_FILE"
+
+type managedPIDLease struct {
+	Version   int       `json:"version"`
+	PID       int       `json:"pid"`
+	StartedAt time.Time `json:"started_at"`
+}
 
 // Commands are the supported host-service verbs.
 var Commands = []string{"install", "uninstall", "start", "stop", "status"}
@@ -228,6 +239,68 @@ func validateSupervisorPath(label, value string) error {
 	return nil
 }
 
+// ClaimManagedProcess publishes the daemon PID for the Windows scheduled-task
+// wrapper. The wrapper itself remains the Task Scheduler action; the PID file
+// lets stop and uninstall terminate the daemon tree after Task Scheduler stops
+// wscript.exe. Foreground and Linux launches do not set the environment value.
+func ClaimManagedProcess() (func(), error) {
+	path := strings.TrimSpace(os.Getenv(managedPIDEnvironment))
+	_ = os.Unsetenv(managedPIDEnvironment)
+	if path == "" {
+		return func() {}, nil
+	}
+	if err := validateSupervisorPath("managed process", path); err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("managed process path must be absolute")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	lease := managedPIDLease{Version: 1, PID: os.Getpid(), StartedAt: time.Now().UTC()}
+	data, err := json.Marshal(lease)
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".nekonest-hostsvc-pid-*.tmp")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	_ = os.Remove(path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			current, err := os.ReadFile(path)
+			var currentLease managedPIDLease
+			if err == nil && json.Unmarshal(current, &currentLease) == nil &&
+				currentLease.PID == lease.PID && currentLease.StartedAt.Equal(lease.StartedAt) {
+				_ = os.Remove(path)
+			}
+		})
+	}, nil
+}
+
 // RenderWindowsTaskScript is the PowerShell used by the Windows supervisor.
 func RenderWindowsTaskScript(action, taskName, exe, workDir, arguments string) string {
 	var b strings.Builder
@@ -236,6 +309,8 @@ func RenderWindowsTaskScript(action, taskName, exe, workDir, arguments string) s
 	b.WriteString("$exe = " + psSingleQuote(exe) + "\n")
 	b.WriteString("$workDir = " + psSingleQuote(workDir) + "\n")
 	b.WriteString("$arguments = " + psSingleQuote(arguments) + "\n")
+	b.WriteString("$launcherBody = " + psSingleQuote(RenderWindowsLauncher(taskName, exe, workDir, arguments)) + "\n")
+	b.WriteString(windowsLauncherPreamble)
 	switch action {
 	case "install":
 		b.WriteString(windowsInstallBody)
@@ -250,7 +325,35 @@ func RenderWindowsTaskScript(action, taskName, exe, workDir, arguments string) s
 	default:
 		b.WriteString("throw 'unsupported host service action'\n")
 	}
+	if action == "install" || action == "uninstall" || action == "start" || action == "stop" || action == "query" {
+		b.WriteString("exit 0\n")
+	}
 	return b.String()
+}
+
+// RenderWindowsLauncher builds the hidden WScript wrapper owned by a scheduled
+// task. The wrapper waits for the daemon and publishes a task-specific PID file
+// so stop and uninstall can clean up the child tree after Task Scheduler stops
+// wscript.exe.
+func RenderWindowsLauncher(taskName, exe, workDir, arguments string) string {
+	commandLine := `"` + exe + `"`
+	if arguments != "" {
+		commandLine += " " + arguments
+	}
+	return strings.Join([]string{
+		"Option Explicit",
+		"Dim shell",
+		"Dim environment",
+		`Set shell = CreateObject("WScript.Shell")`,
+		`Set environment = shell.Environment("PROCESS")`,
+		"environment(" + vbsStringLiteral(managedPIDEnvironment) + ") = shell.ExpandEnvironmentStrings(" + vbsStringLiteral(`%LOCALAPPDATA%\NekoNest\hostsvc\`+taskName+`.pid`) + ")",
+		"shell.CurrentDirectory = " + vbsStringLiteral(workDir),
+		"WScript.Quit shell.Run(" + vbsStringLiteral(commandLine) + ", 0, True)",
+	}, "\r\n")
+}
+
+func vbsStringLiteral(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 func daemonConfigArgs(configPath string) string {
@@ -308,15 +411,103 @@ func defaultRun(stdin, name string, args ...string) (string, string, error) {
 }
 
 const (
-	windowsInstallBody = `
-if ($arguments -ne '') {
-  $action = New-ScheduledTaskAction -Execute $exe -Argument $arguments -WorkingDirectory $workDir
-} else {
-  $action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory $workDir
+	windowsLauncherPreamble = `
+$launcherRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'NekoNest\hostsvc'
+$launcherPath = Join-Path $launcherRoot ($taskName + '.vbs')
+$manifestPath = Join-Path $launcherRoot ($taskName + '.json')
+$pidPath = Join-Path $launcherRoot ($taskName + '.pid')
+
+function Stop-ManagedDaemon {
+  $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  $wasRunning = $null -ne $existing -and [string]$existing.State -eq 'Running'
+  if ($null -ne $existing) {
+    try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
+  }
+  $managed = Get-ManagedDaemon
+  if ($null -eq $managed -and $wasRunning) {
+    $managed = Wait-ManagedDaemon -TimeoutSeconds 5
+  }
+  if ($null -ne $managed) {
+    $managedPid = [int]$managed.ProcessId
+    $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+    & $taskkill /PID $managedPid /T /F 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Stop-Process -Id $managedPid -Force -ErrorAction SilentlyContinue
+    }
+    if (-not (Wait-ManagedDaemonExit -TimeoutSeconds 5)) {
+      throw 'failed to stop the managed NekoNest daemon process tree'
+    }
+  }
+  Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
 }
+
+function Get-ManagedDaemon {
+  if (-not (Test-Path -LiteralPath $pidPath)) { return $null }
+  try {
+    $lease = Get-Content -LiteralPath $pidPath -Raw | ConvertFrom-Json
+    $managedPid = [int]$lease.pid
+    if ([int]$lease.version -ne 1 -or $managedPid -le 0) { return $null }
+    $managed = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $managedPid) -ErrorAction SilentlyContinue
+    if ($null -eq $managed -or -not [string]::Equals([string]$managed.ExecutablePath, $exe, [StringComparison]::OrdinalIgnoreCase)) {
+      return $null
+    }
+    $leaseStart = [DateTimeOffset]::Parse([string]$lease.started_at).UtcDateTime
+    $processStart = ([datetime]$managed.CreationDate).ToUniversalTime()
+    if ([Math]::Abs(($processStart - $leaseStart).TotalSeconds) -gt 30) { return $null }
+    return $managed
+  } catch {
+    return $null
+  }
+}
+
+function Wait-ManagedDaemon {
+  param([int]$TimeoutSeconds)
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    $managed = Get-ManagedDaemon
+    if ($null -ne $managed) { return $managed }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  return $null
+}
+
+function Wait-ManagedDaemonExit {
+  param([int]$TimeoutSeconds)
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    if ($null -eq (Get-ManagedDaemon)) { return $true }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  return $null -eq (Get-ManagedDaemon)
+}
+`
+	windowsInstallBody = `
+$null = New-Item -ItemType Directory -Path $launcherRoot -Force
+$launcherTemp = $launcherPath + '.tmp-' + [Guid]::NewGuid().ToString('N')
+$manifestTemp = $manifestPath + '.tmp-' + [Guid]::NewGuid().ToString('N')
+try {
+  Set-Content -LiteralPath $launcherTemp -Value $launcherBody -Encoding Unicode -NoNewline
+  Move-Item -LiteralPath $launcherTemp -Destination $launcherPath -Force
+$manifest = [pscustomobject]@{
+    version = 1
+    executable = $exe
+    arguments = $arguments
+    work_dir = $workDir
+    launcher = $launcherPath
+    pid_file = $pidPath
+  }
+  Set-Content -LiteralPath $manifestTemp -Value ($manifest | ConvertTo-Json -Compress) -Encoding UTF8 -NoNewline
+  Move-Item -LiteralPath $manifestTemp -Destination $manifestPath -Force
+} finally {
+  Remove-Item -LiteralPath $launcherTemp -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $manifestTemp -Force -ErrorAction SilentlyContinue
+}
+$wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
+$taskArguments = '//B //NoLogo "' + $launcherPath + '"'
+$action = New-ScheduledTaskAction -Execute $wscript -Argument $taskArguments -WorkingDirectory $workDir
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'NekoNest host daemon' -Force | Out-Null
 $service = New-Object -ComObject 'Schedule.Service'
@@ -325,24 +516,30 @@ $root = $service.GetFolder('\')
 $registered = $root.GetTask($taskName)
 $definition = $registered.Definition
 $definition.Settings.ExecutionTimeLimit = 'PT0S'
+$definition.Settings.Hidden = $true
 $root.RegisterTaskDefinition($taskName, $definition, 6, $currentUser, $null, 3, $null) | Out-Null
 `
 	windowsUninstallBody = `
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($null -eq $existing) { exit 0 }
-try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
-Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+Stop-ManagedDaemon
+if ($null -ne $existing) {
+  Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+}
+Remove-Item -LiteralPath $launcherPath -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $manifestPath -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
 `
 	windowsStartBody = `
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($null -eq $existing) { throw 'host service is not installed; run nekonest-daemon install' }
-if ([string]$existing.State -eq 'Running') { exit 0 }
-Start-ScheduledTask -TaskName $taskName
+if ([string]$existing.State -ne 'Running') {
+  Start-ScheduledTask -TaskName $taskName
+}
+$managed = Wait-ManagedDaemon -TimeoutSeconds 15
+if ($null -eq $managed) { throw 'NekoNest daemon did not publish its managed process lease' }
 `
 	windowsStopBody = `
-$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($null -eq $existing) { exit 0 }
-try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
+Stop-ManagedDaemon
 `
 	windowsQueryBody = `
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -351,12 +548,27 @@ if ($null -eq $existing) {
   exit 0
 }
 $action = $existing.Actions | Select-Object -First 1
+$reportedExecute = [string]$action.Execute
+$reportedArguments = [string]$action.Arguments
+$reportedState = [string]$existing.State
+if ((Test-Path -LiteralPath $manifestPath) -and ([IO.Path]::GetFileName($reportedExecute) -ieq 'wscript.exe')) {
+  try {
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ([string]$manifest.launcher -eq $launcherPath -and $reportedArguments.Contains($launcherPath)) {
+      $reportedExecute = [string]$manifest.executable
+      $reportedArguments = [string]$manifest.arguments
+    }
+  } catch {}
+}
+if ($null -ne (Get-ManagedDaemon)) {
+  $reportedState = 'Running'
+}
 [pscustomobject]@{
   found = $true
-  state = [string]$existing.State
+  state = $reportedState
   enabled = [bool]$existing.Settings.Enabled
-  execute = [string]$action.Execute
-  arguments = [string]$action.Arguments
+  execute = $reportedExecute
+  arguments = $reportedArguments
 } | ConvertTo-Json -Compress
 `
 )

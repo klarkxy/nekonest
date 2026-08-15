@@ -59,6 +59,10 @@ type threadStartCoordinator struct {
 	startTimeout        time.Duration
 	ownershipWait       time.Duration
 	ownershipPoll       time.Duration
+	// probeStartCapability shares the daemon's cached native-starter probe with
+	// session discovery. It is deliberately optional so focused coordinator
+	// tests and standalone callers retain the safe direct-probe fallback.
+	probeStartCapability func(context.Context, adapters.AgentType, adapters.NativeThreadStarter) (adapters.ThreadStartCapability, error)
 	// materializeAttachments must download every ref before the native starter
 	// is invoked. Keeping it injected makes the no-native-boundary failure
 	// path directly testable.
@@ -153,7 +157,7 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 		probeTimeout = defaultStartProbeTimeout
 	}
 	probeCtx, cancelProbe := context.WithTimeout(parent, probeTimeout)
-	capability, probePanic := probeNativeThreadStart(probeCtx, starter)
+	capability, probePanic := c.probeThreadStart(probeCtx, agentType, starter)
 	cancelProbe()
 	if probePanic != nil {
 		finish(startjournal.StatusFailed, "", "native thread creation probe failed: "+probePanic.Error())
@@ -288,6 +292,13 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 		reason = startErr.Error()
 	}
 	finish(startjournal.StatusFailed, "", reason)
+}
+
+func (c *threadStartCoordinator) probeThreadStart(ctx context.Context, agentType adapters.AgentType, starter adapters.NativeThreadStarter) (adapters.ThreadStartCapability, error) {
+	if c.probeStartCapability != nil {
+		return c.probeStartCapability(ctx, agentType, starter)
+	}
+	return probeNativeThreadStart(ctx, starter)
 }
 
 func threadStartAttachmentsDigest(refs []attach.Ref) string {
@@ -552,71 +563,280 @@ func snapshotProjectDirs(mu *sync.Mutex, sessions map[string]*adapters.SessionIn
 	return dirs
 }
 
+type startCapabilityActivityTier string
+
+const (
+	startCapabilityActiveTier  startCapabilityActivityTier = "active"
+	startCapabilityRecentTier  startCapabilityActivityTier = "recent"
+	startCapabilityDormantTier startCapabilityActivityTier = "dormant"
+)
+
+const (
+	startCapabilityActiveInterval  = 5 * time.Minute
+	startCapabilityRecentInterval  = time.Hour
+	startCapabilityDormantInterval = 24 * time.Hour
+)
+
+type startCapabilityCacheEntry struct {
+	capability adapters.ThreadStartCapability
+	activity   startCapabilityActivityTier
+	hasResult  bool
+	lastProbe  time.Time
+	nextProbe  time.Time
+	inFlight   bool
+	done       chan struct{}
+	waiters    int
+}
+
+// agentStartCapabilityCache keeps native-start probes independent per CLI.
+// Discovery never waits on a child CLI: a missing first result is fail-closed
+// and the following regular discovery publishes the completed value.
 type agentStartCapabilityCache struct {
-	mu      sync.Mutex
-	ttl     time.Duration
-	updated time.Time
-	entries []map[string]interface{}
+	mu           sync.Mutex
+	entries      map[adapters.AgentType]*startCapabilityCacheEntry
+	now          func() time.Time
+	probeTimeout time.Duration
+	logProbe     func(adapters.AgentType, startCapabilityActivityTier, string, time.Time)
 }
 
-func newAgentStartCapabilityCache(ttl time.Duration) *agentStartCapabilityCache {
-	return &agentStartCapabilityCache{ttl: ttl}
+// The optional argument preserves callers compiled against the former
+// TTL-based constructor. Probe intervals are deliberately fixed by activity.
+func newAgentStartCapabilityCache(_ ...time.Duration) *agentStartCapabilityCache {
+	return &agentStartCapabilityCache{
+		entries:      make(map[adapters.AgentType]*startCapabilityCacheEntry),
+		now:          time.Now,
+		probeTimeout: defaultStartProbeTimeout,
+	}
 }
 
-func (c *agentStartCapabilityCache) Get(parent context.Context, registry *adapters.Registry) []map[string]interface{} {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.entries) > 0 && time.Since(c.updated) < c.ttl {
-		return cloneStartCapabilities(c.entries)
+func startCapabilityTier(agentType adapters.AgentType, sessions []*adapters.SessionInfo, now time.Time) startCapabilityActivityTier {
+	recentCutoff := now.Add(-adapters.RecentSessionWindow)
+	activeCutoff := now.Add(-15 * time.Minute)
+	hasRecent := false
+	for _, session := range sessions {
+		if session == nil || session.AgentType != agentType {
+			continue
+		}
+		switch session.Status {
+		case adapters.StatusRunning, adapters.StatusWaitingUser, adapters.StatusWaitingApproval:
+			return startCapabilityActiveTier
+		}
+		if !session.LastActivity.Before(activeCutoff) {
+			return startCapabilityActiveTier
+		}
+		if !session.LastActivity.Before(recentCutoff) {
+			hasRecent = true
+		}
+	}
+	if hasRecent {
+		return startCapabilityRecentTier
+	}
+	return startCapabilityDormantTier
+}
+
+func startCapabilityProbeInterval(tier startCapabilityActivityTier) time.Duration {
+	switch tier {
+	case startCapabilityActiveTier:
+		return startCapabilityActiveInterval
+	case startCapabilityRecentTier:
+		return startCapabilityRecentInterval
+	default:
+		return startCapabilityDormantInterval
+	}
+}
+
+func (c *agentStartCapabilityCache) currentTime() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+func (c *agentStartCapabilityCache) Get(parent context.Context, registry *adapters.Registry, sessionSets ...[]*adapters.SessionInfo) []map[string]interface{} {
+	var sessions []*adapters.SessionInfo
+	if len(sessionSets) > 0 {
+		sessions = sessionSets[0]
 	}
 	entries := make([]map[string]interface{}, 0, len(supportedStartAgents))
 	for _, agentType := range supportedStartAgents {
-		entry := map[string]interface{}{
-			"agent_type":      string(agentType),
-			"available":       false,
-			"spawn":           false,
-			"attachment_mode": string(adapters.AttachUnsupported),
-		}
-		adapter, exists := registry.Get(string(agentType))
-		starter, canStart := adapter.(adapters.NativeThreadStarter)
-		if !exists || adapter == nil || !canStart {
-			entry["reason"] = "native thread creation is not implemented"
-		} else {
-			probeCtx, cancel := context.WithTimeout(parent, defaultStartProbeTimeout)
-			capability, panicErr := probeNativeThreadStart(probeCtx, starter)
-			cancel()
-			if panicErr != nil {
-				entry["reason"] = "native thread creation probe failed"
-			} else {
-				entry["available"] = capability.Available
-				entry["spawn"] = capability.Available
-				entry["control_path"] = capability.ControlPath
-				entry["control_version"] = capability.ControlVersion
-				entry["attachment_mode"] = string(capability.AttachmentMode)
-				if !capability.Available {
-					reason := strings.TrimSpace(capability.Reason)
-					if reason == "" {
-						reason = "native thread creation is unavailable"
-					}
-					entry["reason"] = reason
-				}
-			}
-		}
-		entries = append(entries, entry)
+		tier := startCapabilityTier(agentType, sessions, c.currentTime())
+		capability, hasResult, inFlight, implemented := c.getOrStart(parent, registry, agentType, tier)
+		entries = append(entries, startCapabilityEntry(agentType, capability, hasResult, inFlight, implemented))
 	}
-	c.entries = cloneStartCapabilities(entries)
-	c.updated = time.Now()
 	return entries
 }
 
-func cloneStartCapabilities(entries []map[string]interface{}) []map[string]interface{} {
-	cloned := make([]map[string]interface{}, 0, len(entries))
-	for _, entry := range entries {
-		copyEntry := make(map[string]interface{}, len(entry))
-		for key, value := range entry {
-			copyEntry[key] = value
+// ProbeForStart is the mandatory first-prompt preflight. It forces a fresh
+// result when no probe is running, but joins an in-flight discovery probe so a
+// user action never launches a second CLI process for the same agent.
+func (c *agentStartCapabilityCache) ProbeForStart(parent context.Context, registry *adapters.Registry, agentType adapters.AgentType, sessions []*adapters.SessionInfo) (adapters.ThreadStartCapability, error) {
+	tier := startCapabilityTier(agentType, sessions, c.currentTime())
+	waitedForProbe := false
+	for {
+		c.mu.Lock()
+		entry := c.entryLocked(agentType)
+		if entry.inFlight {
+			done := entry.done
+			entry.waiters++
+			c.mu.Unlock()
+			waitedForProbe = true
+			select {
+			case <-done:
+				c.mu.Lock()
+				entry.waiters--
+				c.mu.Unlock()
+				continue
+			case <-parent.Done():
+				c.mu.Lock()
+				entry.waiters--
+				c.mu.Unlock()
+				return adapters.ThreadStartCapability{}, parent.Err()
+			}
 		}
-		cloned = append(cloned, copyEntry)
+		if waitedForProbe && entry.hasResult {
+			capability := entry.capability
+			c.mu.Unlock()
+			return capability, nil
+		}
+		entry.inFlight = true
+		entry.done = make(chan struct{})
+		c.mu.Unlock()
+		return c.probeAndStore(parent, registry, agentType, tier)
 	}
-	return cloned
+}
+
+func (c *agentStartCapabilityCache) getOrStart(parent context.Context, registry *adapters.Registry, agentType adapters.AgentType, tier startCapabilityActivityTier) (adapters.ThreadStartCapability, bool, bool, bool) {
+	adapter, exists := registry.Get(string(agentType))
+	_, implemented := adapter.(adapters.NativeThreadStarter)
+	if !exists || adapter == nil || !implemented {
+		return adapters.ThreadStartCapability{}, false, false, false
+	}
+
+	c.mu.Lock()
+	entry := c.entryLocked(agentType)
+	entry.activity = tier
+	if entry.inFlight {
+		capability, hasResult := entry.capability, entry.hasResult
+		c.mu.Unlock()
+		return capability, hasResult, true, true
+	}
+	if entry.hasResult {
+		entry.nextProbe = entry.lastProbe.Add(startCapabilityProbeInterval(tier))
+	}
+	if entry.hasResult && c.currentTime().Before(entry.nextProbe) {
+		capability := entry.capability
+		c.mu.Unlock()
+		return capability, true, false, true
+	}
+	entry.inFlight = true
+	entry.done = make(chan struct{})
+	capability, hasResult := entry.capability, entry.hasResult
+	c.mu.Unlock()
+	go func() { _, _ = c.probeAndStore(parent, registry, agentType, tier) }()
+	return capability, hasResult, true, true
+}
+
+func (c *agentStartCapabilityCache) entryLocked(agentType adapters.AgentType) *startCapabilityCacheEntry {
+	entry := c.entries[agentType]
+	if entry == nil {
+		entry = &startCapabilityCacheEntry{}
+		c.entries[agentType] = entry
+	}
+	return entry
+}
+
+func (c *agentStartCapabilityCache) probeAndStore(parent context.Context, registry *adapters.Registry, agentType adapters.AgentType, tier startCapabilityActivityTier) (adapters.ThreadStartCapability, error) {
+	capability, err := c.runProbe(parent, registry, agentType)
+	now := c.currentTime()
+	next := now.Add(startCapabilityProbeInterval(tier))
+	c.mu.Lock()
+	entry := c.entryLocked(agentType)
+	entry.capability = capability
+	entry.activity = tier
+	entry.hasResult = true
+	entry.lastProbe = now
+	entry.nextProbe = next
+	entry.inFlight = false
+	done := entry.done
+	entry.done = nil
+	c.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
+	if c.logProbe != nil {
+		outcome := "unavailable"
+		if err != nil {
+			outcome = "failed"
+		} else if capability.Available {
+			outcome = "available"
+		}
+		c.logProbe(agentType, tier, outcome, next)
+	}
+	return capability, err
+}
+
+func (c *agentStartCapabilityCache) runProbe(parent context.Context, registry *adapters.Registry, agentType adapters.AgentType) (adapters.ThreadStartCapability, error) {
+	adapter, exists := registry.Get(string(agentType))
+	starter, canStart := adapter.(adapters.NativeThreadStarter)
+	if !exists || adapter == nil || !canStart {
+		return adapters.ThreadStartCapability{Reason: "native thread creation is not implemented"}, nil
+	}
+	timeout := c.probeTimeout
+	if timeout <= 0 {
+		timeout = defaultStartProbeTimeout
+	}
+	probeCtx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	type result struct {
+		capability adapters.ThreadStartCapability
+		err        error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		capability, panicErr := probeNativeThreadStart(probeCtx, starter)
+		resultCh <- result{capability: capability, err: panicErr}
+	}()
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			return adapters.ThreadStartCapability{Reason: "native thread creation probe failed"}, result.err
+		}
+		return result.capability, nil
+	case <-probeCtx.Done():
+		return adapters.ThreadStartCapability{Reason: "native thread creation probe failed"}, probeCtx.Err()
+	}
+}
+
+func startCapabilityEntry(agentType adapters.AgentType, capability adapters.ThreadStartCapability, hasResult, inFlight, implemented bool) map[string]interface{} {
+	entry := map[string]interface{}{
+		"agent_type":      string(agentType),
+		"available":       false,
+		"spawn":           false,
+		"attachment_mode": string(adapters.AttachUnsupported),
+	}
+	if !implemented {
+		entry["reason"] = "native thread creation is not implemented"
+		return entry
+	}
+	if !hasResult {
+		entry["reason"] = "native thread creation probe is in progress"
+		return entry
+	}
+	entry["available"] = capability.Available
+	entry["spawn"] = capability.Available
+	entry["control_path"] = capability.ControlPath
+	entry["control_version"] = capability.ControlVersion
+	entry["attachment_mode"] = string(capability.AttachmentMode)
+	if !capability.Available {
+		reason := strings.TrimSpace(capability.Reason)
+		if reason == "" {
+			reason = "native thread creation is unavailable"
+		}
+		entry["reason"] = reason
+	}
+	if inFlight {
+		// Keep the last known value while the next due probe is running.
+		entry["spawn"] = capability.Available
+	}
+	return entry
 }

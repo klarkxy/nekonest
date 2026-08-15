@@ -53,6 +53,11 @@ func TestWindowsInstallInvokesPowerShellScript(t *testing.T) {
 	if !strings.Contains(decoded, "RegisterTaskDefinition($taskName, $definition, 6, $currentUser, $null, 3, $null)") {
 		t.Fatalf("script does not preserve the interactive-token task principal: %s", decoded)
 	}
+	for _, want := range []string{"NEKONEST_HOST_SERVICE_PID_FILE", "Stop-ManagedDaemon", "taskkill.exe", "$pidPath"} {
+		if !strings.Contains(decoded, want) {
+			t.Fatalf("script missing managed process cleanup %q: %s", want, decoded)
+		}
+	}
 	if !strings.Contains(decoded, "-config") {
 		t.Fatal("custom config was not passed to the scheduled task")
 	}
@@ -68,6 +73,32 @@ func TestWindowsStartRequiresInstall(t *testing.T) {
 	})
 	if err := mgr.Start(); err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("start err=%v", err)
+	}
+}
+
+func TestWindowsStartWaitsForLeaseWhenTaskAlreadyRunning(t *testing.T) {
+	dir := t.TempDir()
+	calls := 0
+	var startScript string
+	mgr := NewWithRunner(Spec{
+		Executable: filepath.Join(dir, "nekonest-daemon.exe"),
+		ConfigPath: filepath.Join(dir, "config.json"),
+	}, func(stdin, name string, args ...string) (string, string, error) {
+		calls++
+		if calls == 1 {
+			return `{"found":true,"state":"Running","enabled":true}`, "", nil
+		}
+		startScript = decodePowerShellForTest(t, args[len(args)-1])
+		return "", "", nil
+	})
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("runner calls=%d want query plus start handshake", calls)
+	}
+	if !strings.Contains(startScript, "Wait-ManagedDaemon -TimeoutSeconds 15") {
+		t.Fatalf("start script skipped PID-ready handshake:\n%s", startScript)
 	}
 }
 

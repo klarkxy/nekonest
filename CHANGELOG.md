@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8-rc.3] - 2026-08-15
+
+### Changed
+
+- Refresh native thread-start capabilities per agent: active agents every five
+  minutes, agents used within seven days hourly, and dormant agents daily.
+- Run Windows agent probes, ACP processes, and Codex app-server without visible
+  console windows, and suppress untrusted app-server stderr content.
+
+### Fixed
+
+- Launch the Windows daemon's scheduled task through a managed hidden wrapper,
+  while preserving Task Scheduler ownership, stop behavior, and the real daemon
+  path reported by `status`.
+
 ## [0.2.8-rc.2] - 2026-08-15
 
 ### Fixed
@@ -349,7 +364,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.2...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.3...HEAD
+[0.2.8-rc.3]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.2...v0.2.8-rc.3
 [0.2.8-rc.2]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.1...v0.2.8-rc.2
 [0.2.8-rc.1]: https://github.com/klarkxy/nekonest/compare/v0.2.7...v0.2.8-rc.1
 [0.2.7]: https://github.com/klarkxy/nekonest/compare/v0.2.6...v0.2.7

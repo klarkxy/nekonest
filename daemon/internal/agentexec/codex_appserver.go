@@ -229,6 +229,7 @@ func (c *CodexAppServer) Available() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.binPath, "app-server", "--help")
+	configureBackgroundProcess(cmd)
 	out, err := cmd.CombinedOutput()
 	s := strings.ToLower(string(out))
 	if err != nil {
@@ -248,7 +249,9 @@ func (c *CodexAppServer) CodexVersion() (string, bool, error) {
 			c.versionErr = err
 			return
 		}
-		out, err := exec.CommandContext(ctx, command, args...).CombinedOutput()
+		cmd := exec.CommandContext(ctx, command, args...)
+		configureBackgroundProcess(cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
 			c.versionErr = fmt.Errorf("codex --version: %w", err)
 			return
@@ -308,6 +311,7 @@ func (c *CodexAppServer) ensureProcess() error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, c.binPath, "app-server")
+	configureBackgroundProcess(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -320,7 +324,12 @@ func (c *CodexAppServer) ensureProcess() error {
 		c.mu.Unlock()
 		return err
 	}
-	cmd.Stderr = os.Stderr
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		c.mu.Unlock()
+		return fmt.Errorf("open codex app-server stderr: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		cancel()
 		c.mu.Unlock()
@@ -343,7 +352,9 @@ func (c *CodexAppServer) ensureProcess() error {
 	c.pendingInput = make(map[string]*PendingUserInput)
 	c.resolvedInput = make(map[string]resolvedUserInput)
 	reader := c.stdout
+	var diagnostics stderrDiagnostics
 	go c.readLoop(generation, reader)
+	go drainStderrDiagnostics(stderr, &diagnostics, "codex", "")
 	go func() {
 		waitErr := cmd.Wait()
 		c.handleProcessExit(generation, cmd, waitErr)
@@ -1748,7 +1759,9 @@ func (c *CodexAppServer) probeGeneratedSchema() map[string]bool {
 	if err != nil {
 		return out
 	}
-	if _, err := exec.CommandContext(ctx, command, args...).CombinedOutput(); err != nil {
+	cmd := exec.CommandContext(ctx, command, args...)
+	configureBackgroundProcess(cmd)
+	if _, err := cmd.CombinedOutput(); err != nil {
 		opslog.Error("daemon.agentexec", "appserver_schema_probe_failed", "Codex app-server schema probe failed", err, "agent_type", "codex")
 		return out
 	}

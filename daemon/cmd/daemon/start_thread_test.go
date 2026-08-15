@@ -94,6 +94,8 @@ type fakeStartAdapter struct {
 	mu              sync.Mutex
 	name            string
 	probe           adapters.ThreadStartCapability
+	probeFn         func(context.Context) adapters.ThreadStartCapability
+	probeCalls      int
 	result          adapters.ThreadStartResult
 	startErr        error
 	startCalls      int
@@ -124,8 +126,16 @@ func (a *fakeStartAdapter) Interrupt(string) error                          { re
 func (a *fakeStartAdapter) FetchHistory(string, int) ([]*adapters.HistoryMessage, error) {
 	return nil, nil
 }
-func (a *fakeStartAdapter) ProbeThreadStart(context.Context) adapters.ThreadStartCapability {
-	return a.probe
+func (a *fakeStartAdapter) ProbeThreadStart(ctx context.Context) adapters.ThreadStartCapability {
+	a.mu.Lock()
+	a.probeCalls++
+	probeFn := a.probeFn
+	probe := a.probe
+	a.mu.Unlock()
+	if probeFn != nil {
+		return probeFn(ctx)
+	}
+	return probe
 }
 func (a *fakeStartAdapter) StartNativeThread(_ context.Context, request adapters.ThreadStartRequest) (adapters.ThreadStartResult, error) {
 	a.mu.Lock()
@@ -150,6 +160,12 @@ func (a *fakeStartAdapter) counts() (starts, ownership int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.startCalls, a.ownershipChecks
+}
+
+func (a *fakeStartAdapter) probeCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.probeCalls
 }
 
 func newThreadStartTestCoordinator(t *testing.T, agent *fakeStartAdapter, projectDir string) (*threadStartCoordinator, *startjournal.Journal) {

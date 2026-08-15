@@ -67,8 +67,10 @@ D:\NekoNest\nekonest-daemon.exe status
 ```
 
 `install` 会写入当前用户的计划任务（默认配置名为 `NekoNestDaemon`）。任务以
-已登录用户运行，没有 72 小时时限，也不会复制二进制。请把可执行文件放在稳定
-目录。自定义 `-config` 会使用单独的任务名。
+已登录用户运行，没有 72 小时时限，也不会复制二进制。任务通过
+`%LOCALAPPDATA%\NekoNest\hostsvc` 下受管理的隐藏 WScript 启动器运行，因此
+Daemon 及其后台智能体探测不会弹出控制台；`status` 仍报告真实 Daemon 路径和
+参数。请把可执行文件放在稳定目录。自定义 `-config` 会使用单独的任务和启动器名。
 
 同一份 Daemon 配置只能由一个进程使用。任务退出时，先用 `status` 检查是否还有
 手工启动的进程，不要直接修改配置。
@@ -95,6 +97,9 @@ D:\NekoNest\nekonest-daemon.exe status
 
 新 Daemon 无法保持连接时，先 `stop`，恢复旧可执行文件，再 `start` 同一任务。
 升级期间不要替换或编辑原生智能体存储。
+
+再次运行 `install` 会原子更新受管理的启动器；`uninstall` 会随计划任务一起删除
+对应的启动器和清单。
 
 ## 相关文档
 

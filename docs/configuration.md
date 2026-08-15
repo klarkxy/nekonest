@@ -70,6 +70,13 @@ Common commands:
 supervisor. They do not keep a second CLI process resident. A non-default
 `-config` path gets its own task or unit name.
 
+Native thread-start probes are activity-aware. A running, attention-blocked, or
+very recently active agent is refreshed every five minutes; other agents used
+within seven days are refreshed hourly; agents without a visible thread in the
+last seven days are refreshed daily. Daemon startup performs one initial probe.
+Session discovery and phone reconnects do not bypass these intervals. An actual
+`start_thread` request always performs a fresh fail-closed probe before launch.
+
 Registration reads these variables:
 
 | Variable | Purpose |

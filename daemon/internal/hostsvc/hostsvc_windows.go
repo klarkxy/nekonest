@@ -46,9 +46,9 @@ func (m *Manager) Start() error {
 	if !query.Found {
 		return fmt.Errorf("host service is not installed; run nekonest-daemon install")
 	}
-	if strings.EqualFold(query.State, "Running") {
-		return nil
-	}
+	// The scheduled-task wrapper can report Running before the child daemon has
+	// published its managed-process lease. Always enter the start script: it is
+	// idempotent for an already-running task and waits for the PID-ready handshake.
 	return m.runWindows("start")
 }
 
