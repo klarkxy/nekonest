@@ -7,11 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8-rc.1] - 2026-08-15
+
 ### Changed
 
 - Fold thinking/reasoning blocks in the thread view so Grok (and other agents)
   no longer dump long chain-of-thought into the phone chat. Tap the header to
   expand; the latest block stays marked as in progress while it streams.
+
+### Added
+
+- Add host daemon `install`, `uninstall`, `start`, `stop`, and `status`
+  commands that register a current-user Windows logon task or Linux systemd
+  user unit. The OS supervises the process; the CLI does not stay resident.
+- Add an explicit Codex Plan-mode composer control so structured
+  `requestUserInput` questions can be answered from the PWA without changing
+  normal coding turns into planning turns.
+
+### Fixed
+
+- Wake durable prompts after a native busy session becomes idle, bind sealed
+  queue/interrupt controls to their target message id, and allow failed or
+  interrupted blockers to be removed from the queue UI.
+- Keep long Codex native turns busy while their rollout is still active; orphan
+  fallback now uses a conservative inactivity window instead of turn age.
 
 ## [0.2.7] - 2026-08-15
 
@@ -322,7 +341,8 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.1...HEAD
+[0.2.8-rc.1]: https://github.com/klarkxy/nekonest/compare/v0.2.7...v0.2.8-rc.1
 [0.2.7]: https://github.com/klarkxy/nekonest/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/klarkxy/nekonest/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/klarkxy/nekonest/compare/v0.2.4...v0.2.5
