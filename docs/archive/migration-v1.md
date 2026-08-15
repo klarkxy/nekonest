@@ -1,4 +1,7 @@
 > English | [简体中文](./migration-v1.zh-CN.md)
+>
+> **Archived.** This runbook is for a v0.1 → v1.0 cut that has not shipped.
+> Do not run it against a live **v0.2** nest.
 
 # Migrate v0.1 → v1.0
 

@@ -1,10 +1,13 @@
 > [English](./v1-product.md) | 简体中文
+>
+> **已归档。** 这是冻结的 v1.0.0 目标快照，不是现行产品合同。现行行为见
+> [README.zh-CN.md](../../README.zh-CN.md) 与 `docs/` 下除本归档外的运维指南。
 
 # NekoNest v1.0.0 — 产品全功能合同
 
 **状态：** 首个完整版本的**冻结**目标产品合同  
 **读者：** 维护者、贡献者、编码 Agent  
-**与 v0.1 的关系：** v0.1.0 是为快速上线裁切的*发布切片*。除本文外，`docs/*.md`、`README.md` 中的边界说明，以及 `docs/archive/`，描述的是该切片。**仅供参考。** 本文定义 v1.0.0 发布时产品必须达到的完整形态。
+**与现行文档的关系：** v0.1.0 是第一份*发布切片*。除本文外，现行 `docs/*.md` 与 `README.md` 描述的是 **v0.2**。`docs/archive/` 是冻结施工历史。那些来源**不是**本合同。本文仍定义 v1.0.0 发布时产品必须达到的完整形态。
 
 v1 推进期间若实现与合同冲突，应**有意识地修订合同**，而不是默默缩回 v0.1 限制。任何对冻结决策的修改，必须先同步更新**两种语言**镜像，再继续实现。
 
@@ -200,7 +203,7 @@ v1.0.0 = **单人运维的自托管乐园**可日常在路上使用的功能完�
 
 Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemon、PWA、测试、文档）。
 
-各 harness **现行**与目标对照卡片：[agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)。本节 §7.3 仍是冻结的 v1 发版门槛。
+各 harness **现行**与目标对照卡片：[agent-capability-matrix.zh-CN.md](../agent-capability-matrix.zh-CN.md)。本节 §7.3 仍是冻结的 v1 发版门槛。
 
 #### 7.3.1 全控制 agent（MUST）
 
@@ -561,11 +564,11 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 | | |
 |---|---|
 | **v1.0.0 权威产品合同** | 本文件 + `v1-product.md` |
-| **现行工程不变量** | [AGENTS.md](../AGENTS.md)（含 agent 范围、首条提示词的 `start_thread`；禁止通用 `create_session`） |
-| **v0.1 运维文档** | 发版前仍为 `docs/*.md` — **构建 v1 期间仅参考** |
-| **线上根 README** | 在发版重写前描述**现行 v0.1** 行为 — 不作 v1 合同 |
-| **冻结历史** | `docs/archive/` — 永不当合同 |
-| **用户可见历史** | [CHANGELOG.md](../CHANGELOG.md) |
+| **现行工程不变量** | [AGENTS.md](../../AGENTS.md)（含 agent 范围、首条提示词的 `start_thread`；禁止通用 `create_session`） |
+| **现行运维文档** | `docs/*.md`（除本归档）描述 **v0.2** |
+| **线上根 README** | 描述**现行 v0.2** 行为 |
+| **本文件** | 已归档的冻结 v1.0.0 快照 — 不是现行合同 |
+| **用户可见历史** | [CHANGELOG.md](../../CHANGELOG.md) |
 
 ### 变更流程
 
@@ -573,7 +576,7 @@ Wire id 保持稳定；新增 agent 必须全栈一致（schema、server、daemo
 2. 同步简体中文镜像并保持对等。  
 3. 不变量变化时更新 `AGENTS.md`。  
 4. 实现并配测试。  
-5. v1.0.0 发版时：按本合同重写 README 与运维文档；把过时的「v0.1 边界」表述移出线上 README。
+5. v1.0.0 发版时：按本合同重写 README 与运维文档；把过时的「v0.2 边界」表述移出线上 README。
 
 ---
 

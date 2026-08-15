@@ -15,21 +15,23 @@ The active supported wire identifiers are `claude_code`, `codex`, `kimi_cli`,
 and `grok_build`. Protocol 1.x may still parse the retired legacy `kilo` id for
 backward compatibility, but current daemon/PWA catalogs must not advertise it.
 
-**Shipped v0.1** behavior is described by `README.md` / operator docs under
-`docs/` (except the v1 contract). **Target v1.0.0** product meaning is defined
-by `docs/v1-product.md` and `docs/v1-product.zh-CN.md`. When building toward
-v1, prefer the v1 contract over v0.1 launch compromises.
+**Current supported** behavior is described by `README.md` / operator docs under
+`docs/` (except `docs/archive/`). The old v1.0.0 target snapshot and the
+unused v0.1→v1.0 migration runbook live in `docs/archive/`. They are frozen
+records, not the live contract. When implementation and live docs disagree,
+update the live README and operator guides; do not revive archive files
+unless a maintainer explicitly restarts v1.0.0 release work.
 
 Keep these product boundaries intact unless the user explicitly changes them
-(and updates the v1 contract in both languages when applicable):
+(and updates the live README and operator docs in both languages):
 
 - The phone primarily resumes sessions that already exist on the host from
   each agent's **native** local store.
 - Each agent's native local store is authoritative for session discovery and
   transcript history (and for ownership after a successful agent-scoped thread
   start).
-- The daemon initiates the connection to the server. Do not require an inbound
-  connection to the home host.
+- The daemon initiates the connection to the server. The home host only dials
+  out.
 - Sessions are presented as `directory -> agent -> thread`; sessions without a
   directory belong to `未分类`.
 - **Thread creation:** do **not** reintroduce generic `create_session`,
@@ -58,9 +60,9 @@ Keep these product boundaries intact unless the user explicitly changes them
 
 ## Read Before Editing
 
-1. Read `README.md` (English primary) or `README.zh-CN.md` for the **shipped
-   v0.1** product contract and repository layout. For v1 target scope read
-   `docs/v1-product.md` / `docs/v1-product.zh-CN.md`. Doc index: `docs/README.md`.
+1. Read `README.md` (English primary) or `README.zh-CN.md` for the current
+   product contract and repository layout. Doc index: `docs/README.md`.
+   Do not treat `docs/archive/` as current.
 2. Check `git status --short --branch` and preserve unrelated user changes.
 3. Check `codegraph status`. When the index is current, use `codegraph query`,
    `codegraph explore`, `codegraph node`, and `codegraph impact` to trace
@@ -73,10 +75,10 @@ Do not treat `_archive/`, `go-sdk/`, `gocache/`, `.pnpm-store/`, `bin/`,
 `data/`, built PWA output, archives, databases, coverage files, or local agent
 stores as application source. Do not edit `.codegraph/codegraph.db` directly.
 
-Historical construction and multi-agent delivery snapshots live under
-`docs/archive/`. They are frozen records, not the current product contract.
-Verify any claim there against live code, `README.md`, this guide, and (for v1
-work) `docs/v1-product.md`.
+Historical construction snapshots, the frozen v1.0.0 target contract, and the
+unused v0.1→v1.0 migration runbook live under `docs/archive/`. They are frozen
+records, not the current product contract. Verify any claim there against live
+code, `README.md`, this guide, and today's operator docs.
 
 Operator and contributor docs live under `docs/`: English short paths
 (`docs/foo.md`) with Simplified Chinese mirrors (`docs/foo.zh-CN.md`). Start
@@ -106,15 +108,14 @@ Release hygiene for maintainers: `CHANGELOG.md` and `docs/release.md`.
   helpers.
 - `docs/`: operator and contributor guides (deploy, configuration, security,
   architecture, protocol, development, troubleshooting, e2e, release); Chinese
-  mirrors as `*.zh-CN.md`; frozen history under `docs/archive/`; v1 target
-  contract in `docs/v1-product.md` (+ `.zh-CN.md`).
-- `README.md` / `README.zh-CN.md`: shipped v0.1 product contract and quick start
-  until the v1.0.0 release rewrite.
+  mirrors as `*.zh-CN.md`; frozen history under `docs/archive/`.
+- `README.md` / `README.zh-CN.md`: current product contract and quick start.
 - `CHANGELOG.md`, `LICENSE`, `LICENSE_zh`: user-visible history and SATA 2.0.
 - `tools/build_brand_assets.py`: reproducible derivation of PWA brand assets.
 
-There are two independent Go modules (`server/go.mod` and `daemon/go.mod`) and
-one pnpm project (`pwa/package.json`); there is no root Go module.
+There are three independent Go modules (`relaycore/`, `server/`, `daemon/`)
+linked by the root `go.work`, and one pnpm project (`pwa/package.json`). There
+is no root Go module.
 
 ## Cross-Layer Invariants
 
@@ -141,8 +142,8 @@ begins as a phone-local draft and creates a native thread only with its first
 prompt. It is available only when that agent's native starter has been
 installed/probed and advertises `spawn=true`, and only for a directory in the
 daemon's current union of native-discovered project directories, as specified
-in `docs/v1-product.md`. Capability flags are authoritative and default
-false/unsupported when absent. Protocol versioning is `major.minor`: reject
+in the live README and operator docs. Capability flags are authoritative and
+default false/unsupported when absent. Protocol versioning is `major.minor`: reject
 major mismatch; minor is backward compatible for unknown optional fields.
 
 ### Prompt delivery and history
@@ -174,9 +175,10 @@ major mismatch; minor is backward compatible for unknown optional fields.
 
 ### Agent adapters
 
-Live per-harness capability matrix (control flags, attachments, start probes):
-`docs/agent-capability-matrix.md` (+ `.zh-CN.md`). Prefer advertised
-`session.capabilities` / `start_capabilities` over README short tables when debugging.
+Stable user-facing support policy: `docs/agent-capability-matrix.md` (+
+`.zh-CN.md`). Live controls, attachments, and start support come from advertised
+`session.capabilities` / `start_capabilities` and `nekonest-daemon -doctor`;
+do not maintain a copied static control matrix in prose.
 
 - Route a session only after positive ownership against that adapter's native
   store. An empty transcript is not proof of ownership.
@@ -246,15 +248,24 @@ Live per-harness capability matrix (control flags, attachments, start probes):
   archives, secrets, or CodeGraph database files.
 - When behavior, environment variables, supported agents, deployment, or the
   manual acceptance path changes, update `README.md`, `README.zh-CN.md`, and the
-  matching English and `*.zh-CN.md` files under `docs/`. For v1 product-scope
-  changes, update `docs/v1-product.md` and `docs/v1-product.zh-CN.md` first and
-  keep EN/ZH parity.
+  matching English and `*.zh-CN.md` files under `docs/`. Do not edit archived
+  snapshots under `docs/archive/` unless a maintainer is explicitly reviving
+  that historical contract. Keep EN/ZH parity for live docs.
 - Do not create commits, push branches, or rewrite history unless the user asks.
 
 ## Verification
 
 Run the smallest focused test first, then the full suite for every affected
 module.
+
+### Relay core
+
+From `relaycore/`:
+
+```powershell
+go test -count=1 ./...
+go vet ./...
+```
 
 ### Server
 
@@ -296,7 +307,8 @@ missing or dependency declarations changed.
 ### Cross-layer and final checks
 
 For protocol, delivery, subscription, session-discovery, or agent-catalog
-changes, run all three module suites. Then, from the repository root:
+changes, run all three Go module suites plus the PWA gates. Then, from the
+repository root:
 
 ```powershell
 git diff --check

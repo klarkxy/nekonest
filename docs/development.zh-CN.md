@@ -2,221 +2,110 @@
 
 # 本地开发
 
-NekoNest monorepo 贡献者环境。跨层不变量：[AGENTS.md](../AGENTS.md)。产品合同：[README.zh-CN.md](../README.zh-CN.md)。
+这是 NekoNest 仓库的贡献者环境说明。产品与跨层不变量由
+[README.zh-CN.md](../README.zh-CN.md) 和 [AGENTS.md](../AGENTS.md) 定义。
 
-## 前置
+## 前置条件
 
-| 工具 | 说明 |
-|---|---|
-| Go 1.22+ | `relaycore/`、`server/` 与 `daemon/` 各自独立 module |
-| Node.js + pnpm | PWA；使用已提交的 `pnpm-lock.yaml` |
-| 可选 agent CLI | 仅 Windows 上做只读发现冒烟时需要 |
-| codegraph（可选） | 代码导航；改源码后 `codegraph sync` |
+- Go 1.22+
+- Node.js 与 pnpm
+- 可选的受支持智能体 CLI，用于只读原生存储冒烟
 
-## 仓库布局
+根 `go.work` 连接三个独立 Go 模块：`relaycore/`、`server/` 和 `daemon/`。
+PWA 是 `pwa/` 下独立的 pnpm 项目；仓库根不是 Go 模块。
 
-```text
-nekonest/
-├── protocol/          # protocol.json（手动类型）
-├── relaycore/         # module github.com/klarkxy/nekonest/relaycore
-├── server/            # module github.com/nekonest/server
-├── daemon/            # module github.com/nekonest/daemon
-├── pwa/               # Vue 3 + TypeScript + Pinia
-├── docs/              # 运维 + 贡献者文档
-├── tools/             # 品牌资源构建脚本
-├── AGENTS.md
-├── README.md
-└── README.zh-CN.md
-```
+## 本地安装与运行
 
-**没有根 Go module**。根目录 `go.work` 只用于三个 Go module 的本地联调；发布后的消费者必须固定 Relay Core 版本，不得依赖相邻目录 `replace`。勿把 `_archive/`、`go-sdk/`、`gocache/`、`.pnpm-store/`、`bin/`、`data/`、已构建 PWA 或原生 agent 存储当作应用源码。
-
-## 本地 Server（loopback 开发模式）
-
-**未**设置 `NEKONEST_PHONE_SECRET` 时：
-
-- Server 仅绑定 **`127.0.0.1`**
-- 日志提示手机鉴权关闭
-- 若 `NEKONEST_ALLOWED_ORIGINS` 为空，可能注入默认本机来源供 CORS
-- bootstrap 亦空时注册可能开放——**仅开发**
+构建或启动 PWA：
 
 ```powershell
-cd pwa
+Set-Location pwa
 pnpm install --frozen-lockfile
-pnpm build
-
-cd ..\server
-go run ./cmd/server -port 8080 -data ./data -pwa ../pwa/dist
-```
-
-更接近生产的本地运行可设置手机密钥 + bootstrap，仍用 loopback 或本地反代。
-
-PWA 开发服：
-
-```powershell
-cd pwa
 pnpm dev
 ```
 
-按分支将开发客户端指向本地 server URL。
-
-## 本地 Daemon
-
-在 Windows 上，使用已注册配置（或指向本地 server）：
+在另一终端运行只监听 loopback 的开发 Server，并把可丢弃数据放到仓库外：
 
 ```powershell
-cd daemon
-go run ./cmd/daemon
-```
-
-注册：
-
-```powershell
-$env:NEKONEST_SERVER = "http://127.0.0.1:8080"
-# 类公网本地可选：$env:NEKONEST_BOOTSTRAP_TOKEN = "…"
-go run ./cmd/daemon -register -name "dev-pc"
-go run ./cmd/daemon
-```
-
-适配器冒烟（只读发现辅助）：
-
-```powershell
-go run ./cmd/adapter_smoke
-```
-
-冒烟测试中切勿改写用户原生 agent 存储。
-
-## 测试
-
-Windows 上推荐显式模块命令：
-
-```powershell
-# Server
 Set-Location server
+$devData = Join-Path $env:TEMP "nekonest-server-dev"
+go run ./cmd/server -port 8080 -data $devData
+```
+
+没有管理员密钥时，Server 会有意只监听 loopback。需要本地端到端 Daemon 时，
+先注册到该 Server，再启动 Daemon：
+
+```powershell
+Set-Location daemon
+$devDir = Join-Path $env:TEMP "nekonest-daemon-dev"
+New-Item -ItemType Directory -Force -Path $devDir | Out-Null
+$devConfig = Join-Path $devDir "config.json"
+$env:NEKONEST_SERVER = "http://127.0.0.1:8080"
+go run ./cmd/daemon -config $devConfig -register -name "dev-pc"
+go run ./cmd/daemon -config $devConfig
+```
+
+使用可丢弃的本地数据；冒烟测试不得修改用户的原生智能体存储。
+
+## 验证
+
+先运行受影响模块；跨层变更再运行所有模块。
+
+```powershell
+Set-Location relaycore
 go test -count=1 ./...
 go vet ./...
 
-# Daemon
+Set-Location ..\server
+go test -count=1 ./...
+go vet ./...
+
 Set-Location ..\daemon
 go test -count=1 ./...
 go vet ./...
 
-# PWA
 Set-Location ..\pwa
-pnpm install --frozen-lockfile
 pnpm test
 pnpm type-check
 pnpm build
+
+Set-Location ..
+git diff --check
 ```
 
-### PWA 截图回归
-
-仓库内置 Windows/Chromium Playwright 截图套件。运行时会自动在 `127.0.0.1:18080` 启动确定性 HTTP/WebSocket Mock，并在 `127.0.0.1:5173` 启动 Vite；两个端口须空闲。Mock 使用 PWA 的真实 REST 与线消息形状，但绝不读取原生 agent 存储。
+常用 PWA 针对性检查：
 
 ```powershell
 Set-Location pwa
-pnpm exec playwright install chromium
-
-# 与已提交黄金截图比较。
 pnpm test:visual
-
-# 仅在确认 UI 变更符合预期后替换黄金截图。
+# 只有审查过有意的视觉变更后，才能更新黄金截图：
 pnpm test:visual:update
-
-# 打开最近一次运行生成的 HTML 报告。
-pnpm test:visual:report
 ```
 
-黄金截图与 `e2e/visual/visual.spec.ts` 放在一起；`test-results/` 与 `playwright-report/` 是已忽略的本地产物。主矩阵为 `390×844`、简体中文、浅色主题，并抽查窄屏、桌面、深色主题和英文布局。视觉运行还会检查预期页面状态、console/page error、横向溢出、主要触控尺寸、投递状态，以及 agent 范围 `start_thread` 的首条提示词归属。
+行为依赖真实反代、Service Worker、原生存储、主机进程或重连路径时，最后还要
+运行[验收清单](./e2e-smoke.zh-CN.md)。
 
-如需对已经启动的本地 PWA/server/daemon 真栈做只读截图冒烟，设置 PWA 地址及可选设备/会话 ID。手机令牌或管理员密钥只通过当前 PowerShell 会话传入，不要写入文件：
+## 变更规则
 
-```powershell
-$env:NEKONEST_VISUAL_BASE_URL = 'http://127.0.0.1:5173'
-$env:NEKONEST_VISUAL_PHONE_TOKEN = '<临时手机令牌>'
-$env:NEKONEST_VISUAL_PHONE_ID = '<手机 ID>'
-# 旧版/管理员本地鉴权也可改用 NEKONEST_VISUAL_ADMIN_SECRET。
-$env:NEKONEST_VISUAL_DEVICE_ID = '<设备 ID>'
-$env:NEKONEST_VISUAL_SESSION_ID = '<会话 ID>'
-pnpm test:visual:live
-```
+- 把 `protocol/protocol.json` 作为线上权威，并共同更新所有受影响的
+  Go/Daemon/PWA 入口。
+- UI 按声明能力开放，不根据智能体名称猜测支持。
+- 发现与验证期间保持原生存储只读。
+- 每个行为修复都增加回归测试。
+- 变更的 Go 文件运行 `gofmt`，TypeScript/Vue 沿用现有风格。
+- 不提交密钥、本地数据、原生转录、构建输出、缓存、覆盖率或
+  `.codegraph/codegraph.db`。
 
-真栈命令默认只截取设备列表、设备详情和会话详情。只有显式设置 `NEKONEST_VISUAL_SEND_PROMPT` 时才会向所选会话发送该文本，因此只能对一次性测试线程使用。真栈截图属于运行产物，不参与黄金基线比较。
+## 文档
 
-Unix 可用根目录 `Makefile` 的 `test`、`server`、`daemon`、`pwa`（daemon 默认交叉编译 Windows）。
+根目录和 docs 的英文文件是主版本，简体中文镜像使用 `.zh-CN.md` 后缀。面向
+运维的行为变化必须同步两种语言。精确枚举、消息字段、工作流算法和内部包细节应
+留在权威源码，不要复制到说明文档。
 
-跨层协议或目录变更：跑**全部三个**套件，然后在仓库根：
-
-```powershell
-git diff --check
-codegraph sync
-codegraph status
-```
-
-### 本地验证后的线上验收
-
-若行为依赖真实 VPS、反向代理、PWA Service Worker/缓存、daemon 出站连接、
-原生 agent 存储、重连时序或运行时 CPU/I/O/内存，本地测试只算预检，不算最终
-验收。对于当前维护中的线上猫娘乐园，默认收口流程是：
-
-1. 本地各模块测试通过并审查最终 diff。
-2. 合并并推送已批准的提交；所有部署产物必须从这个确切提交构建，不能从脏工作树构建。
-3. 先读取线上真实服务/进程配置，不得把文档示例里的用户、端口、路径或启动器当成现状。
-4. 核对产物哈希，分别保留 Server/PWA 与 daemon 回滚副本，再更新两端。
-5. 按 [线上 E2E 冒烟](./e2e-smoke.zh-CN.md) 验证公网健康、daemon 重连、当前
-   PWA 资源/版本以及此次修改的用户路径。
-6. 发现、调度、重连、进程控制或缓存改动还须采集有代表性的部署后运行指标，确认
-   内存和句柄没有持续增长。
-
-只有任务明确限定为 local-only / no-deploy，或运维者尚未授权目标环境访问时，才跳过
-部署。部署本身不代表打 tag 或发布 GitHub Release。
-
-## PWA 国际化与主题
-
-- 文案：`pwa/src/i18n/locales/zh-CN.ts`（默认）与 `en.ts` — 键集合须一致（`pnpm test` 含对齐检查）。
-- 运行时：`vue-i18n` Composition API；stores/utils 用 `@/i18n` 的 `tGlobal`。
-- 用户偏好：`localStorage` 的 `nekonest_locale`（`zh-CN` \| `en`）与 `nekonest_theme`（`system` \| `light` \| `dark`）。
-- 线协议枚举与 agent 商品名保持英文；只翻译 UI 壳层。
-- Agent 转录 / Markdown 正文永不走 i18n。
-
-新增界面文案：两个 locale 文件同时加 key，再用 `t()` / `tGlobal()`，勿在视图硬编码中英文。
-
-## 协议与智能体变更
-
-线协议变更须触及所有适用面——见 [protocol.zh-CN.md](./protocol.zh-CN.md) 清单与 AGENTS.md「Wire protocol」。
-
-新增智能体：
-
-1. Daemon 适配器 + 注册表  
-2. 如需则 server 类型 / 持久化  
-3. PWA `types/protocol.ts`、`config/agents.ts`、资源  
-4. `protocol/protocol.json`  
-5. 测试 + README/文档智能体表  
-
-## 格式与风格
-
-- 改动的 Go 文件跑 `gofmt`
-- 遵循既有 TypeScript/Vue 风格；不做顺手大重构
-- 除非依赖声明变更，勿手改 lockfile
-- 代码默认不擅自加注释；文档为自由 Markdown
-
-## 勿提交
-
-密钥、`data/`、设备 `config.json`、附件 blob、agent 转录、构建产物、归档包、覆盖率 DB、`.codegraph/codegraph.db`。
-
-## 文档语言布局
-
-| 路径模式 | 语言 |
-|---|---|
-| `README.md`、`docs/*.md` | 英文（主） |
-| `README.zh-CN.md`、`docs/*.zh-CN.md` | 简体中文镜像 |
-| `AGENTS.md`、`CHANGELOG.md` | 仅英文 |
-| `docs/archive/` | 冻结历史（非现行合同） |
+源码变更后，若 CodeGraph 可用，运行 `codegraph sync`。
 
 ## 相关文档
 
 - [架构](./architecture.zh-CN.md)
 - [协议](./protocol.zh-CN.md)
-- [配置](./configuration.zh-CN.md)
-- [端到端冒烟](./e2e-smoke.zh-CN.md)
 - [发版](./release.zh-CN.md)

@@ -1,104 +1,85 @@
 > English | [简体中文](./e2e-smoke.zh-CN.md)
 
-# End-to-end smoke checklist
+# Acceptance checklist
 
-Acceptance path after deploy or deploy-sensitive changes. Product target: [v1-product.md](./v1-product.md). Release cut: [release.md](./release.md). Migration: [migration-v1.md](./migration-v1.md).
+Run this after a new installation, an upgrade, or any change that depends on the
+real reverse proxy, service worker, host daemon, native agent store, or reconnect
+path. Local tests are useful preflight, not a substitute for this workflow.
 
-Run this checklist against the **updated live build**, not only a local mock or
-pre-deploy binary. For runtime-affecting maintenance of the maintained nest,
-deployment plus the relevant checks below is the default final acceptance unless
-the task explicitly says local-only / no-deploy. Record the exact commit and
-artifact hashes, preserve rollback copies before replacement, and include public
-health, daemon reconnect, and the changed user workflow in the evidence. A deploy
-does not by itself authorize a tag or GitHub Release.
+## Before changing a live nest
 
-## Modes
+- [ ] Record the deployed Server, PWA, and daemon versions or artifact hashes.
+- [ ] Back up the Server data directory, Server secrets, and host daemon state.
+- [ ] Preserve the previous Server image/binary, PWA, and daemon binary as
+      rollback material.
+- [ ] Confirm the current `/health` and host online state.
 
-| Mode | Env | When |
-|---|---|---|
-| **Sealed (new-nest default)** | Leave Server mode unset on a new DB; daemon registration persists the returned mode; PWA reads `/health` | Normal new installation after pair with QR JSON + key packages |
-| **Open (admin-selected / legacy)** | Set `NEKONEST_TRANSPORT_MODE=open` only when initializing a new open DB, or keep an existing open DB/config | Trusted relay operation where VPS plaintext access is accepted |
+## Core path
 
-One nest = one persisted mode. An environment/build override is only an assertion after initialization. Mismatch rejects startup/connection (no sealed→open downgrade).
+- [ ] Public `https://your-nest/health` succeeds through the reverse proxy.
+- [ ] A wrong admin secret is rejected; the correct one completes setup.
+- [ ] `nekonest-daemon -doctor` has no critical config or network error.
+- [ ] A fresh pair code connects the intended host and the phone shows it online.
+- [ ] A recent native main thread appears under **directory → agent → thread**.
+- [ ] Opening the thread loads native history without duplicate turns.
+- [ ] A short prompt streams output and reaches a final delivery state.
+- [ ] One small image or text attachment is delivered, or a clear unsupported
+      reason is shown.
+- [ ] If Interrupt is advertised, a long turn stops and the host process does not
+      remain running.
+- [ ] Stopping the daemon makes the host offline; restarting it reconnects and
+      restores the thread view.
+- [ ] Closing and reopening the PWA loads the current build without a stale loop.
 
-## Preconditions (open mode)
+## Capability-driven checks
 
-- [ ] VPS server running; `GET /health` → `status=nyan~` plus expected `server_version` / `protocol_version`
-- [ ] `NEKONEST_ADMIN_SECRET` set (or legacy `NEKONEST_PHONE_SECRET`)
-- [ ] `NEKONEST_BOOTSTRAP_TOKEN` set and used at daemon register
-- [ ] `NEKONEST_TRANSPORT_MODE=open` on server **and** daemon
-- [ ] HTTPS / WSS work through the reverse proxy
-- [ ] `NEKONEST_ALLOWED_ORIGINS` includes the public origin (recommended)
-- [ ] Host registered (`nekonest-daemon -register`); `config.json` has device token
-- [ ] `nekonest-daemon -doctor` critical checks green (or only expected missing CLIs)
-- [ ] Daemon process online (single instance for that config)
-- [ ] At least one supported agent CLI has a recent main-thread session on the host
+Test only controls currently enabled by the PWA:
 
-## A. Open-mode core path
+- [ ] Approval, denial, steering, or structured input completes a real native
+      request when advertised.
+- [ ] Queue controls preserve order across reconnect and require an explicit user
+      decision for uncertain work.
+- [ ] New thread creation targets an already discovered project and navigates to
+      the thread only after native creation is confirmed.
+- [ ] A disabled control explains why it is unavailable instead of doing nothing.
 
-1. Open PWA; enter the nest admin secret (setup). A wrong key stays on the setup page. An intentional open nest asks for a Chinese confirm, not a “mismatch”.
-2. Pair: run `nekonest-daemon -pair gen` on the host; paste **QR JSON** (preferred) or 6-digit code; compare **fingerprint** with the PC screen.  
-3. Device list shows the host **online**. The page-level PWA / Server releases align; each device card shows that machine's Daemon release. A deliberately stale PWA shows **Refresh now**; only the stale machine is marked for a Daemon update.
-4. On the host, open/use a supported agent so a recent thread exists.  
-5. Refresh the phone PWA: it first shows its cached catalog, then the online daemon promptly rescans and pushes the current **directory → agent → thread** list. Only agents with threads render as agent groups; startable missing agents stay in the project's **New** menu. Session capabilities appear when advertised.
-6. Open a thread; history loads; send a short prompt; stream appears.  
-7. Delivery UX: outbox moves toward **committed** (not cleared only on bare WS write).  
-8. Attachments (optional): one small PNG and one text file; agent reads or clear error.  
-9. Interrupt a long run if the session advertises `interrupt`; process tree does not linger (Windows Job Object / Linux process group).  
-10. Stop daemon → phone shows **offline**; start → **online**.  
-11. Wrong secret / revoked phone token → 401 / cannot operate.  
-12. Reconnect mid-send: same `client_msg_id`; no double agent turn.
+Codex normally provides the broadest control surface. Other agents may expose a
+smaller compatibility set; the running capability catalog, not a static table,
+decides this checklist.
 
-## B. Codex control path (when CLI present)
+## Transport checks
 
-Full-control baseline: **codex-cli 0.146.0+** with `codex app-server`.
+### Sealed nest
 
-1. `nekonest-daemon -doctor` reports installed/minimum versions and probes initialize, thread/start, turn/start, steer, interrupt, approval decision shape, and requestUserInput fields.
-2. If capabilities show `control_mode=app_server` and `approve=true`:  
-   - Trigger a real approval on host; phone shows approval UI; Approve/Deny resolve.  
-3. On a Codex Plan-mode thread, trigger `requestUserInput`: answer options, Other/free text, and a Secret question; confirm expiry disables submission and uncertain/stale requests are not retried. NekoNest does not add a Plan-mode selector in this release.
-4. Start a long turn, send two follow-ups with the main Send action, then verify FIFO order, cancel a waiting item, pause on interrupt/failure, and explicitly resume. Use Steer separately and confirm it modifies the active turn.
-5. Start a native thread with one image and one ordinary file. Both must be present in the same first `turn/start`; navigate only after prompt acceptance plus native-store ownership.
-6. Kill app-server during work: capability immediately degrades, the session becomes error, queue pauses, a generic failure attention event is emitted, and bounded re-initialize restores capability without replaying the uncertain turn/request.
-7. For every agent advertising `spawn=true`: target only the daemon's **currently discovered** native project union; lifecycle `thread_starting → thread_owned | failed | indeterminate`; no ghost nest-only row.
-8. A CLI below 0.146.0 or failed method probe stays `exec_resume`; no fake approval, user input, queue, steer, ordinary-file, or spawn capability.
+- [ ] `/health` reports `sealed` and every client accepts that mode.
+- [ ] Pairing completes with the expected phone/host identity.
+- [ ] A unique test prompt, response, path, approval detail, and attachment name
+      do not appear as plaintext in Server logs or the Server database.
+- [ ] Reconnect does not create a second native turn for one user action.
 
-## C. Sealed mode and notification pass
+### Open nest
 
-1. Create a fresh data directory without a mode override; `/health.transport_mode` is `sealed`. Register/re-pair so the daemon config and wrap keys match.
-2. Configure real VAPID and subscribe the phone. Trigger approval, structured input, failure, and completion; Push text is generic and each deep link opens the referenced session where details decrypt.
-3. Exercise prompt send/reconnect and queued retry. The Server replays the exact stored sealed envelope (same nonce/ciphertext/AAD) for one `client_msg_id`.
-4. Scan Server DB and logs for the unique prompt, answers, approval detail, attachment filename/path, and tool body; none may appear as plaintext.
-5. Existing open DB upgrades still report open. Open/ sealed environment, daemon-config, and PWA build mismatches are all **rejected**.
+- [ ] `/health` reports `open` and the first-use plaintext warning is explicitly
+      accepted.
+- [ ] Operators understand that the VPS can read application content.
 
-## D. Migration smoke (if upgrading from v0.1)
+Never run sealed tests against an existing open data directory or try to change
+a nest's stored mode during acceptance.
 
-1. Stop writers; `nekonest-server -migrate-v1 -data ./data -backup ./data-backup-v1`.  
-2. Device tokens still authenticate; old plaintext messages gone from live DB.  
-3. Phones re-login and re-pair.
+## Upgrade closeout
 
-## Known limitations (not failures)
-
-- Codex app-server is capability-gated by the 0.146.0 minimum and live schema/initialize probe
-- Non-Codex agents: compatibility resume only (no approval/steer/queue promise; `start_thread` only when `start_capabilities.spawn=true`) — see [agent-capability-matrix.md](./agent-capability-matrix.md)
-- Max 5 attachments, 4 MB each (open path)  
-- Web Push needs VAPID; sealed push bodies stay generic  
-- Formal hosts: Windows + Linux; macOS later  
-- Open mode: VPS can read application plaintext  
-
-## Protocol 1.2 capability acceptance
-
-1. Capture a live and reconnect `session_list`; confirm both retain the daemon producer version and explicitly include every boolean capability plus `unavailable_reasons`.
-2. Against an isolated 1.1 fixture, confirm legacy send/interrupt remains usable. Remove the producer version or use 1.2 with missing flags and confirm the controls stay closed.
-3. Queue two prompts on each reliable installed path. Verify FIFO success advances automatically; failure/interrupt pauses later items; restart converts an unconfirmed running item to `blocked_indeterminate`; explicit Skip advances without replaying its `client_msg_id`.
-4. Start a native thread and independently exercise the four prompt-success/ownership quadrants. Only the both-positive quadrant may become `thread_owned`; long first turns must not be terminated by a PWA timer.
-5. Keep the maintained production nest in its persisted transport mode. Run sealed acceptance only on an isolated fresh data directory; scan Server DB/logs for prompt, response, path, approval, and attachment plaintext.
+- [ ] Server and daemon stay healthy after several reconnect/discovery cycles.
+- [ ] The PWA and component version indicators match the intended deployment.
+- [ ] The changed user workflow passes on the real phone/host path.
+- [ ] Logs contain no new crash loop, repeated authentication failure, or secret
+      material.
+- [ ] Rollback material and backup locations are recorded until acceptance is
+      complete.
 
 ## Related
 
-- [Troubleshooting](./troubleshooting.md)
 - [VPS deploy](./deploy-vps.md)
-- [Windows deploy](./deploy-windows.md)
-- [Linux deploy](./deploy-linux.md)
+- [Windows host](./deploy-windows.md)
+- [Linux host](./deploy-linux.md)
+- [Troubleshooting](./troubleshooting.md)
 - [Security](./security.md)
-- [v1 product contract](./v1-product.md)

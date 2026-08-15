@@ -2,158 +2,109 @@
 
 # 排障
 
-面向自托管 NekoNest 的症状排查。配置细节：[configuration.zh-CN.md](./configuration.zh-CN.md)。安全背景：[security.zh-CN.md](./security.zh-CN.md)。
+从第一个失败边界开始检查：浏览器 → 反向代理 → Server → Daemon → 原生智能体。
+收集证据时不要暴露密钥或原生转录。
 
-## 打不开 PWA / 立即鉴权失败
+## PWA 无法打开或初始化被拒
 
-| 检查 | 期望 |
-|---|---|
-| URL | 公网 HTTPS 来源（或开发用 loopback） |
-| 手机密钥 | 与 `NEKONEST_PHONE_SECRET` 完全一致 |
-| 反代 | 具备 WebSocket 升级头（Nginx） |
-| Origins | `NEKONEST_ALLOWED_ORIGINS` 含浏览器来源 |
-| `/health` | 服务端返回 `{"status":"nyan~"}` |
+1. 检查 `https://your-nest/health`。
+2. 确认反代支持 WebSocket upgrade，并转发到私有 Server 端口。
+3. 确认 `NEKONEST_ALLOWED_ORIGINS` 准确包含浏览器来源。
+4. 重新输入管理员密钥。被拒绝的值不能保存为有效手机凭据。
+5. 升级后界面仍旧时，完全关闭 PWA，重新打开，再做一次强制刷新。
 
-401 / 无法操作通常是密钥错误或 API 缺少鉴权头。设置页用 `GET /api/devices` 探针，拒绝的钥匙不得写入。首次使用的**开放中继确认**不是传输模式不匹配。
+第一次连接到有意选择的 open 实例会要求确认，这不是传输模式不匹配。
 
 ## Daemon 无法注册
 
-| 检查 | 期望 |
-|---|---|
-| `NEKONEST_SERVER` | 可达的基址（`https://…` 或本地 `http://…`） |
-| `NEKONEST_BOOTSTRAP_TOKEN` | 与公网 VPS 值相同 |
-| Server bootstrap | 已设手机密钥时必须设置；否则注册可能被禁用 |
-| TLS | 系统信任库接受证书 |
-| 时钟 | 不要严重偏移 |
+- `NEKONEST_SERVER` 必须是可访问的 HTTPS 基础地址。
+- `NEKONEST_BOOTSTRAP_TOKEN` 必须与 Server 一致。
+- 公网 Server 配置了管理员密钥却没有注册令牌时，会拒绝新注册。
+- 主机时间与 TLS 信任库必须正常。
+- 若设置了传输模式断言，它必须与 Server 已保存模式一致。
 
-## 设备一直 offline
+修改任何文件前先运行 `nekonest-daemon -doctor`。
 
-| 检查 | 期望 |
-|---|---|
-| Daemon 进程 | 在跑；日志显示已鉴权 device id |
-| 第二实例 | 被 `.daemon.lock` 拒绝——同一配置只能一个进程 |
-| `config.json` | 应有稳定的 `server_url`、`device_id`、`token`。若残留尚未发布的 `control_plane_url`、`activation_poll_path`、`relay_generation` 或 `relay_url`，请重新注册，不要手改配置。 |
-| 网络 | PC 可出站 WSS 到 VPS |
-| Server | 在线；未崩溃重启循环 |
+## 主机一直离线
 
-Daemon 启动后，手机列表应在短重连窗口内变为 online。
+1. 确认只有一个 Daemon 进程使用该配置。
+2. 在 Daemon 日志中检查鉴权、TLS 或重连错误。
+3. 确认主机能向猫娘乐园建立出站 WSS 连接。
+4. 确认 Server 健康且没有反复重启。
+5. 凭据已撤销或从另一安装复制时，撤销旧主机并重新注册，不要手改
+   `config.json`。
 
-托管 Cloud 返回 `service_provisioning`，表示稳定 Connect 服务仍在准备该租户。
-保持 Daemon 运行；它会按服务端建议的间隔，在同一服务地址重试 `/ws/daemon`，
-不会轮询控制面 URL，也不会接受新的 Relay URL。凭据无效或其他不可重试响应需要
-走设备恢复流程，不会自动重新注册。
+## 看不到项目或线程
 
-托管 Cloud 轮换设备凭据或注册响应丢失时，先在 Cloud 控制台撤销主机。若
-`identity.json` 仍在，保留它、删除已失效的 `config.json`、升级到会发送
-`registration_proof` 的 Daemon，再使用新的一次性凭证注册。Cloud 只有在验证
-原 Ed25519 私钥持有证明后才恢复同一 host ID；身份文件已丢失时应注册为新主机。
+- 先在主机上使用一次受支持的智能体，确保存在原生线程。
+- 确认智能体 CLI、原生存储与 Daemon 属于同一个系统用户。
+- 运行 `-doctor`，并查看 PWA 显示的不可用原因。
+- Daemon 在线后刷新设备页。
+- 较旧、子智能体、侧链或纯合成记录可能被有意隐藏；在主机上重新打开旧主线程
+  即可恢复活跃度。
+- 无法识别目录的线程位于**未分类**。
 
-## 配对码被拒
+NekoNest 不浏览任意文件夹，也不创建只存在于猫娘乐园的幽灵线程。只有当所选
+智能体对已发现项目明确声明新建能力时，手机才显示新建入口。
 
-| 检查 | 期望 |
-|---|---|
-| 新码 | 约 5 分钟过期——运行 `-pair gen` |
-| 位数 | 6 位；PWA 会规范化输入——避免多余空格/字母 |
-| 手机鉴权 | 已用正确手机密钥登录 |
-| 同一乐园 | 码由注册到**本** Server 的 daemon 签发 |
+## 某个控制被禁用
 
-## 无会话 / 目录树为空
+正在运行的 Daemon 所声明的能力是权威结果。常见原因包括 CLI 缺失、原生探测
+失败、只支持兼容继续，或该智能体请求只能在主机终端完成。
 
-| 检查 | 期望 |
-|---|---|
-| PC 上已有线程 | 先在 PC **原生** agent 中创建/使用会话 |
-| CLI 已安装 | agent 在 PATH；适配器未静默不可用 |
-| 原生存储路径 | 用户目录下默认位置（见 README 智能体表） |
-| 发现间隔 | daemon 启动后数秒开始首次扫描；常规周期更新最长约等待 30 秒 |
-| 近期窗口 | 超过 7 天无活动的线程及仅由这些线程构成的项目会隐藏，但不会删除原生数据；在 PC 再次使用即可恢复 |
-| 所有权过滤 | 子代理/sidechain 设计上隐藏 |
-| 目录分组 | 无目录者在「**未分类**」 |
+不要绕过禁用状态。运行 `-doctor`，必要时更新对应智能体 CLI，再重连 Daemon。
 
-手机永不远程新建线程。
+## 提示词卡住或投递结果不确定
 
-## 提示词卡住、busy 或“仍在运行”
-
-| 检查 | 期望 |
-|---|---|
-| 会话状态 | `running` 时 UI 会阻止重叠发送 |
-| Outbox | localStorage 中有 pending `client_msg_id`；重连用**同一** id 重发 |
-| Outbox 满 | 上限 40——等 ack |
-| Daemon journal | 不确定状态 fail-close 会报错，而非静默成功 |
-| CLI 挂起 | UI 支持则 interrupt；否则在 PC 停进程 |
-
-若第一次发送可能已被接受，勿为“重试”手动换新 message id。
-
-## 重连后消息重复或缺失
-
-| 检查 | 期望 |
-|---|---|
-| 稳定 id | 历史合并用消息 id；服务端/原生追上后应去掉乐观本地消息 |
-| SW 更新 | 重大 PWA 升级后可能需完全关闭再开一次 |
-| fetch_history | 重新打开线程以同步空/残缺视图 |
+1. 检查线程是否正在运行，或正在等待输入/审批。
+2. 只有 PWA 启用中断时才使用中断；否则检查主机进程和终端。
+3. 重连期间保持 Daemon 运行。第一条提示词可能已经越过智能体边界时，不要用新
+   ID 重发同一操作。
+4. NekoNest 报告不确定或队列阻塞时，使用 PWA 明确显示的继续/跳过操作，不要
+   编辑状态文件。
 
 ## 附件失败
 
-| 检查 | 期望 |
+- 每次提示词最多 5 个文件，每个最多 4 MB。
+- 使用 JPEG、PNG、WebP、GIF、TXT、Markdown、PDF 或 JSON。
+- 检查 Server 磁盘空间及 Daemon 对临时下载位置的访问。
+- 即使上传成功，智能体沙箱也可能拒绝本地路径。PWA 只显示该智能体声明的附件
+  级别。
+
+## 手机没有出现审批或问题
+
+只有原生且仍然有效的智能体事件才能创建审批或结构化输入界面。兼容路径需要在
+主机终端完成请求。若某项控制在重连前存在，先运行 `-doctor` 并等待新的能力目录，
+不要假设它仍可用。
+
+## Web Push 收不到
+
+- 在 Server 上配置全部三个 VAPID 变量。
+- 使用 HTTPS，并允许浏览器通知权限。
+- 轮换 VAPID 密钥后，重新打开 PWA 并重建订阅。
+- Push 是可选功能，应单独验证应用内流程。
+
+## Server 无法启动
+
+| 症状 | 常见原因 |
 |---|---|
-| 数量 / 大小 | ≤ 5 个，每个 ≤ 4 MB |
-| MIME | 图片（jpeg/png/webp/gif）、txt、markdown、pdf、json |
-| 上传 | 手机密钥有效；`data/attachments` 有磁盘空间 |
-| Daemon 下载 | 设备 online；能从 VPS GET 附件 URL |
-| Agent 接线 | Claude/Codex 在能力广告允许时使用原生文件/图片机制；**Kimi CLI / Grok Build** 可能仅在提示词中得到本机路径——CLI 沙箱可能禁止读临时目录 |
+| 只监听 loopback | 没有管理员密钥；这是安全的开发模式。 |
+| 注册被禁用 | 已设置管理员密钥，但注册令牌为空。 |
+| 传输模式不匹配 | 环境断言与数据目录里保存的模式不同。 |
+| 权限错误 | Server 运行身份无法私有持有数据目录或密钥文件。 |
+| 限流识别到错误客户端 | 开启了代理信任，但没有正确覆盖转发头或配置可信 CIDR。 |
 
-## 手机上审批完不成
+## 收集有效日志
 
-对非交互 CLI 无法承载审批 UX 的 agent 属预期。在 **PC 终端**完成审批，会话 idle 后再用手机继续。
-
-## Web Push 从不到达
-
-| 检查 | 期望 |
-|---|---|
-| 三个 VAPID 环境变量 | 公钥、私钥、subject 均已设 |
-| 浏览器权限 | 已授权；订阅已 POST 到 `/api/push/subscribe` |
-| HTTPS | 真机 Push API 需要 |
-
-无 VAPID 时服务端跳过真实推送发送。
-
-## 升级后空白 UI 或旧客户端
-
-1. 完全关闭 PWA / 浏览器标签。  
-2. 再开一次以激活 service worker。  
-3. 若 worker 卡住可强刷。  
-4. 确认 VPS 正在提供新的 `pwa/dist` 资源。  
-
-## Server 起不来 / 绑错接口
-
-| 症状 | 原因 |
-|---|---|
-| 只在 127.0.0.1 | 未设手机密钥（设计如此） |
-| 注册 503 / 禁用 | 设了手机密钥但 bootstrap 为空 |
-| 反代限流异常 | 开了 `TRUST_PROXY` 却未覆盖 XFF |
-
-## Windows Defender / 杀软杀掉 daemon
-
-自托管者有时会加路径/进程排除（见 [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md)）。先理解安全代价。
-
-## 仍然卡住
-
-1. 从 `journalctl -u nekonest`、`docker compose logs server` 或 Daemon
-   控制台收集**非机密**日志。机器分析可设 `NEKONEST_LOG_FORMAT=json`；
-   `NEKONEST_LOG_LEVEL=debug` 只用于有界诊断窗口。
-2. 验证 `/health` 与设备 online 状态。  
-3. 按 [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) 做到第一个失败点。  
-4. 贡献者按 PWA → server → daemon → 适配器端到端追踪（[architecture.zh-CN.md](./architecture.zh-CN.md)）。  
-
-切勿把设备令牌、手机密钥或 bootstrap 粘贴到公开 issue。
-JSON 日志有意省略上游原始错误和用户正文；请用 `component`、`event` 及可用的
-设备/会话/消息标识的稳定匿名值关联。日志不输出原始标识，既可跨事件关联，也避免攻击者控制的 wire 字段直接变成日志内容。
-
-## 协议 1.2 控制与 blocker
-
-- **能看历史但不能发送：**查看会话 `unavailable_reasons`。只剩原生 store、CLI 已缺失时出现 `cli_missing` 属于预期，不要绕过标志。
-- **重连后某项 1.2 控制消失：**核对能力目录生产者版本。只有确认来自 1.1 daemon 的目录才兼容推定发送/中断；来源缺失或未知时失败关闭。
-- **队列显示 `blocked_failed` / `blocked_interrupted`：**“恢复”只继续后续 FIFO 条目，绝不重放 blocker。`blocked_indeterminate` 必须经过带强警告的显式“跳过”。
-- **开线程长期停在 `thread_starting`：**Daemon 仍在等首提示词终态与原生 store 所有权；不要重发，也不要由手机计时器伪造不确定结果。
+1. 用 `NEKONEST_LOG_FORMAT=json` 复现一次。
+2. `NEKONEST_LOG_LEVEL=debug` 只短时间启用。
+3. 记录组件版本、`/health`、Daemon `-doctor` 和第一个失败边界。
+4. 分享前删除密钥、令牌、私钥、路径、提示词、附件和原生转录。
 
 ## 相关文档
 
-- [智能体能力矩阵](./agent-capability-matrix.zh-CN.md)
+- [配置](./configuration.zh-CN.md)
+- [安全](./security.zh-CN.md)
+- [Windows 主机](./deploy-windows.zh-CN.md)
+- [Linux 主机](./deploy-linux.zh-CN.md)
+- [验收清单](./e2e-smoke.zh-CN.md)

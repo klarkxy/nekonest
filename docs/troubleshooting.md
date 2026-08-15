@@ -2,163 +2,124 @@
 
 # Troubleshooting
 
-Symptom-oriented checks for self-hosted NekoNest. Configuration details: [configuration.md](./configuration.md). Security context: [security.md](./security.md).
+Start with the first failing boundary: browser → reverse proxy → Server →
+daemon → native agent. Do not expose secrets or native transcripts while
+collecting evidence.
 
-## Cannot open PWA / immediate auth failure
+## PWA does not open or rejects setup
 
-| Check | Expectation |
-|---|---|
-| URL | HTTPS public origin (or loopback for dev) |
-| Phone secret | Exactly matches `NEKONEST_PHONE_SECRET` |
-| Reverse proxy | WebSocket upgrade headers present (Nginx) |
-| Origins | `NEKONEST_ALLOWED_ORIGINS` includes the browser origin |
-| `/health` | `{"status":"nyan~"}` on the server |
+1. Check `https://your-nest/health`.
+2. Confirm the reverse proxy supports WebSocket upgrades and routes to the
+   private Server port.
+3. Confirm `NEKONEST_ALLOWED_ORIGINS` exactly includes the browser origin.
+4. Re-enter the admin secret. A rejected value must not be stored as a valid
+   phone credential.
+5. If the PWA looks stale after an upgrade, fully close it, reopen it, and then
+   hard-refresh once.
 
-401 / unable to operate usually means wrong secret or missing auth headers on API calls. Setup probes `GET /api/devices` and must not persist a rejected key. A first-use **open relay confirm** is not a transport-mode mismatch.
+An intentional first connection to an open nest asks for confirmation; it is
+not a transport mismatch.
 
-## Daemon will not register
+## Daemon cannot register
 
-| Check | Expectation |
-|---|---|
-| `NEKONEST_SERVER` | Reachable base URL (`https://…` or local `http://…`) |
-| `NEKONEST_BOOTSTRAP_TOKEN` | Identical to server value on public VPS |
-| Server bootstrap | Set when phone secret is set; otherwise register may be disabled |
-| TLS | System trust store accepts the certificate |
-| Clock | Not wildly skewed |
+- `NEKONEST_SERVER` must be the reachable HTTPS base URL.
+- `NEKONEST_BOOTSTRAP_TOKEN` must match the Server value.
+- A public Server with an admin secret but no bootstrap token refuses new
+  registrations.
+- The host clock and TLS trust store must be valid.
+- A transport-mode assertion, if set, must match the Server's persisted mode.
 
-## Device stays offline
+Run `nekonest-daemon -doctor` before editing any files.
 
-| Check | Expectation |
-|---|---|
-| Daemon process | Running; log shows authenticated device id |
-| Second instance | Refused by `.daemon.lock`—only one process per config |
-| `config.json` | Valid stable `server_url`, `device_id`, and `token`. If an unreleased `control_plane_url`, `activation_poll_path`, `relay_generation`, or `relay_url` key remains, re-register instead of editing the file. |
-| Network | PC can open outbound WSS to VPS |
-| Server | Up; not crash-looping |
+## Host stays offline
 
-Phone list should flip online within a short reconnect window after daemon start.
+1. Confirm exactly one daemon process uses the config.
+2. Check daemon logs for authentication, TLS, or reconnect errors.
+3. Confirm the host can make outbound WSS connections to the nest.
+4. Confirm the Server is healthy and not restarting.
+5. If credentials were revoked or copied from another installation, revoke the
+   old host and register again instead of hand-editing `config.json`.
 
-For managed Cloud, `service_provisioning` means the stable Connect service is
-still preparing this tenant. Keep the daemon running: it retries `/ws/daemon`
-on the same service address after the advertised delay. It never polls a
-control-plane URL or accepts a replacement Relay URL. A credential-invalid or
-other non-retryable response requires device recovery instead of automatic
-re-registration.
+## No projects or threads appear
 
-For managed Cloud credential rotation or a lost registration response, revoke
-the host in the Cloud console first. If `identity.json` still exists, keep it,
-remove the obsolete `config.json`, update to a daemon that sends
-`registration_proof`, and register with a fresh one-time credential. Cloud
-restores the same host ID only after verifying the original Ed25519 private-key
-proof. If the identity file is gone, register as a new host.
+- Use a supported agent on the host first so a native thread exists.
+- Confirm the agent CLI and its native store belong to the same OS user as the
+  daemon.
+- Run `-doctor` and inspect the unavailable reason shown by the PWA.
+- Refresh the device page after the daemon is online.
+- Older, subagent, sidechain, or synthetic-only records may be intentionally
+  hidden. Reopen an old main thread on the host to make it active again.
+- Threads without a recognized directory appear under **Uncategorized**.
 
-## Pair code rejected
+NekoNest does not browse arbitrary folders or create nest-only ghost threads.
+Phone-side new thread creation appears only when the selected agent advertises
+it for an already discovered project.
 
-| Check | Expectation |
-|---|---|
-| Fresh code | Codes expire (~5 minutes)—run `-pair gen` |
-| Digits | 6 digits; PWA normalizes input—avoid extra spaces/letters |
-| Phone auth | Already logged in with correct phone secret |
-| Same nest | Code issued by a daemon registered to **this** server |
+## A control is disabled
 
-## No sessions / empty directory tree
+The running daemon's advertised capability is authoritative. Common causes are
+a missing CLI, a failed native probe, a compatibility-only agent path, or an
+agent request that can only be completed in the host terminal.
 
-| Check | Expectation |
-|---|---|
-| PC threads exist | Create/use sessions in the native agent **on the PC** first |
-| CLI installed | Agent on PATH; adapter not silently unavailable |
-| Native store paths | Default locations under user profile (see agents table in README) |
-| Discover interval | Initial scan starts after a few seconds; normal periodic updates may take about 30 seconds |
-| Recent window | Threads inactive for more than 7 days, and projects backed only by those threads, are hidden without deleting native data; use the thread again on the PC to restore it |
-| Ownership filters | Subagents/sidechains hidden by design |
-| Directory grouping | Orphans appear under **未分类** |
+Do not bypass the disabled state. Run `-doctor`, update the relevant agent CLI
+if appropriate, and reconnect the daemon.
 
-Phone never creates remote threads.
+## Prompt is stuck or delivery is uncertain
 
-## Prompt stuck, busy, or “still running”
-
-| Check | Expectation |
-|---|---|
-| Session status | `running` blocks overlapping sends in UI |
-| Outbox | Pending `client_msg_id` entries in localStorage; reconnect resends **same** id |
-| Outbox full | Cap 40—wait for acks |
-| Daemon journal | Fail-closed indeterminate state surfaces as error, not silent success |
-| CLI hang | Interrupt from UI if supported; else stop process on PC |
-
-Do not manually mint a new message id to “retry” the same user action if the first may have been accepted.
-
-## Duplicate or missing messages after reconnect
-
-| Check | Expectation |
-|---|---|
-| Stable ids | History merge uses message ids; optimistic locals should drop when server/native catch up |
-| SW update | After major PWA upgrade, one full close/reopen may be required |
-| fetch_history | Re-open thread to resync empty/partial views |
+1. Check whether the thread is already running or waiting for input/approval.
+2. Use Interrupt only when the PWA enables it; otherwise inspect the host
+   process and terminal.
+3. Keep the daemon running through a reconnect. Do not resend the same action
+   with a newly invented id when the first prompt may already have crossed the
+   agent boundary.
+4. If NekoNest reports an indeterminate or blocked queue item, follow the
+   explicit Resume/Skip action shown by the PWA instead of editing state files.
 
 ## Attachments fail
 
-| Check | Expectation |
+- Limit each prompt to 5 files and each file to 4 MB.
+- Use JPEG, PNG, WebP, GIF, TXT, Markdown, PDF, or JSON.
+- Check Server disk space and daemon access to the temporary download location.
+- Agent sandboxes may reject local paths even after upload succeeds. The PWA
+  shows only the attachment tier advertised by that agent.
+
+## Phone approvals or questions do not appear
+
+Only native, current agent events create approval or structured-input UI. On a
+compatibility path, finish the request in the host terminal. If the PWA had the
+control before a reconnect, run `-doctor` and wait for a fresh capability
+catalog rather than assuming it is still available.
+
+## Web Push does not arrive
+
+- Configure all three VAPID variables on the Server.
+- Use HTTPS and grant browser notification permission.
+- Reopen the PWA and recreate the subscription after rotating VAPID keys.
+- Push is optional; verify the in-app workflow separately.
+
+## Server will not start
+
+| Symptom | Likely cause |
 |---|---|
-| Count / size | ≤ 5 files, ≤ 4 MB each |
-| MIME | Images (jpeg/png/webp/gif), txt, markdown, pdf, json |
-| Upload | Phone secret valid; server disk space in `data/attachments` |
-| Daemon download | Device online; can GET attachment URL from VPS |
-| Agent wiring | Claude/Codex use native file/image mechanisms where advertised; **Kimi CLI / Grok Build** may only get local paths in the prompt—CLI sandbox may block temp paths |
+| Binds only to loopback | No admin secret; this is the safe development mode. |
+| Registration disabled | Admin secret is set but bootstrap token is empty. |
+| Transport mismatch | Environment assertion differs from the mode stored in the data directory. |
+| Permission error | The Server identity cannot privately own the data directory or secret file. |
+| Rate limits use the wrong client | Proxy trust is enabled without correct forwarding-header replacement or trusted CIDRs. |
 
-## Approvals never complete on phone
+## Collect useful logs
 
-Expected for agents whose non-interactive CLI cannot host approval UX. Finish the approval in the **PC terminal**, then continue from the phone if the session is idle again.
-
-## Web Push never arrives
-
-| Check | Expectation |
-|---|---|
-| All three VAPID env vars | Public, private, subject set on server |
-| Browser permission | Granted; subscription posted to `/api/push/subscribe` |
-| HTTPS | Required for Push API on real devices |
-
-Without VAPID, the server skips real push sends.
-
-## After upgrade: blank UI or old client
-
-1. Fully close the PWA / browser tab.
-2. Reopen once so the service worker can activate.
-3. Hard-refresh if your browser keeps a stuck worker.
-4. Confirm VPS is serving the new `pwa/dist` assets.
-
-## Server won’t start / binds wrong interface
-
-| Symptom | Cause |
-|---|---|
-| Only on 127.0.0.1 | Phone secret unset (by design) |
-| Registration 503 / disabled | Phone secret set but bootstrap token empty |
-| Proxy rate-limit weirdness | `TRUST_PROXY` on without overwriting XFF |
-
-## Windows Defender / AV kills the daemon
-
-Self-hosters sometimes add path/process exclusions (see [deploy-windows.md](./deploy-windows.md)). Understand the security tradeoff first.
-
-## Still stuck
-
-1. Capture **non-secret** logs from `journalctl -u nekonest`,
-   `docker compose logs server`, or the daemon console. Set
-   `NEKONEST_LOG_FORMAT=json` for machine parsing and use
-   `NEKONEST_LOG_LEVEL=debug` only for a bounded diagnostic window.
-2. Verify `/health` and device online state.
-3. Run [e2e-smoke.md](./e2e-smoke.md) checklist items until the first failure.
-4. For contributors, trace PWA → server → daemon → adapter end-to-end ([architecture.md](./architecture.md)).
-
-Never paste device tokens, phone secrets, or bootstrap tokens into public issues.
-JSON logs deliberately omit raw upstream errors and user content; correlate by
-`component`, `event`, and stable pseudonyms for available device/session/message identifiers. Raw identifiers are not emitted, so matching events remain correlatable without turning an attacker-controlled wire field into log content.
-
-## Protocol 1.2 controls and blockers
-
-- **History is visible but Send is disabled:** inspect the session `unavailable_reasons`. `cli_missing` is expected when only a native store remains; do not bypass the flag.
-- **A 1.2 control disappeared after reconnect:** verify the catalog producer version. Only confirmed 1.1 daemon catalogs receive legacy send/interrupt inference; an absent/unknown producer fails closed.
-- **Queue shows `blocked_failed` or `blocked_interrupted`:** Resume continues only later FIFO items and never replays the blocker. `blocked_indeterminate` requires the explicit Skip action and warning.
-- **Start remains `thread_starting`:** the daemon is still waiting for prompt outcome and native-store ownership. Do not resend or fabricate an indeterminate result from a phone timer.
+1. Reproduce once with `NEKONEST_LOG_FORMAT=json`.
+2. Use `NEKONEST_LOG_LEVEL=debug` only briefly.
+3. Record component versions, `/health`, daemon `-doctor`, and the first failing
+   boundary.
+4. Redact secrets, tokens, private keys, paths, prompts, attachments, and native
+   transcripts before sharing.
 
 ## Related
 
-- [Agent capability matrix](./agent-capability-matrix.md)
+- [Configuration](./configuration.md)
+- [Security](./security.md)
+- [Windows host](./deploy-windows.md)
+- [Linux host](./deploy-linux.md)
+- [Acceptance checklist](./e2e-smoke.md)

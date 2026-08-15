@@ -1,22 +1,27 @@
 > English | [简体中文](./release.zh-CN.md)
 
-# Release process (maintainers)
+# Release process
 
-Cutting a version for the repository. Day-to-day deploy: [deploy-vps.md](./deploy-vps.md), [deploy-windows.md](./deploy-windows.md).
+Maintainer checklist for publishing a repository release. The exact build,
+package, container-tag, and asset behavior is defined by
+`.github/workflows/release.yml`; this page does not duplicate that workflow.
 
 ## Preconditions
 
-- Clean worktree; no secrets, local `data/`, native agent stores, or build artifacts staged
-- [README.md](../README.md) product boundaries match this version’s [CHANGELOG.md](../CHANGELOG.md)
-- `LICENSE` / `LICENSE_zh` remain SATA 2.0; Project URL points at this repo
-- Doc index still accurate (`docs/README.md` and Chinese twin)
+- Explicit authorization to publish a tag and GitHub Release
+- Clean worktree based on the intended `main` commit
+- No secrets, local data, native transcripts, caches, or build artifacts staged
+- `CHANGELOG.md` and operator docs describe the release behavior
+- English and Chinese operator docs are aligned
 
 ## 1. Verify
 
-From the repo root (Windows-friendly explicit commands):
-
 ```powershell
-Set-Location server
+Set-Location relaycore
+go test -count=1 ./...
+go vet ./...
+
+Set-Location ..\server
 go test -count=1 ./...
 go vet ./...
 
@@ -32,105 +37,61 @@ pnpm build
 
 Set-Location ..
 git diff --check
+git status --short --branch
 ```
 
-If behavior or deploy paths changed, run [e2e-smoke.md](./e2e-smoke.md) on a real nest.
+Run the [acceptance checklist](./e2e-smoke.md) when the release changes runtime,
+deployment, service-worker, reconnect, native-agent, or security behavior.
 
-## 2. Changelog and version
+## 2. Align release identity
 
-1. Fold `[Unreleased]` (if any) into a new version section with a date  
-2. Align `pwa/package.json` `version`, `server/internal/buildinfo/version.go`, and `daemon/internal/buildinfo/version.go` with the tag (`0.2.0` ↔ `v0.2.0`)
-   Verify with `nekonest-server -version`, `nekonest-daemon -version`, the PWA/Server version panel, and each machine's Daemon version on its device card.
-3. If env vars, agents, deploy steps, or acceptance paths changed, update **both** English and Chinese docs (`README.md` / `README.zh-CN.md`, `docs/*.md` / `docs/*.zh-CN.md`)
+1. Add the dated release section to `CHANGELOG.md`.
+2. Set the same semantic version in:
+   - `pwa/package.json`
+   - `server/internal/buildinfo/version.go`
+   - `daemon/internal/buildinfo/version.go`
+3. Verify the built Server, daemon, and PWA report the intended version.
+4. Review all docs and examples affected by configuration or deployment changes.
 
-## 3. Commit, tag, and publish
+## 3. Tag and publish
+
+After reviewing the final commit:
 
 ```powershell
-git status --short --branch
-# review diff, then commit in repo style
-
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin main
 git push origin vX.Y.Z
+```
 
-# The tag starts .github/workflows/release.yml. Watch it, then inspect assets:
-$runId = gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId'
-gh run watch $runId --exit-status --repo klarkxy/nekonest
+The tag starts the release workflow. Wait for it to finish, then verify the
+GitHub Release, checksums, platform archives, and GHCR image directly against
+the workflow output. Do not move an already published tag.
+
+Useful inspection commands:
+
+```powershell
+gh run list --workflow release.yml --limit 3
 gh release view vX.Y.Z --repo klarkxy/nekonest
 ```
 
-The release workflow re-runs all module gates, verifies that the tag matches all
-three version surfaces, then creates or updates the GitHub Release with:
+If automation fails, repair the workflow or rerun the supported workflow path;
+do not manually assemble a different set of artifacts under the same tag.
 
-- Server + matching PWA: Linux amd64 and arm64
-- Daemon: Windows amd64, Linux amd64, and Linux arm64
-- `checksums.txt` covering all five archives
-- `ghcr.io/klarkxy/nekonest-server` multi-architecture image with SBOM and provenance
+## 4. Deploy separately
 
-Stable releases publish `vX.Y.Z`, `X.Y.Z`, `X.Y`, and `latest`. Prereleases
-publish only their exact `vX.Y.Z-suffix` and `X.Y.Z-suffix` tags. Exact tags
-are immutable: a rerun skips the same source revision and fails on any mismatch.
-Container publication is globally serialized without canceling queued releases.
-It builds or repairs the two exact tags first, pins all copies to their verified
-digest, and only then advances stable aliases. A newer alias is a successful
-no-op; same-version conflicts or invalid metadata fail closed. Registry reads
-are retried and only an explicit missing manifest is treated as absent. The
-workflow logs out and anonymously verifies both exact tags and the final stable
-alias digests, so the GHCR package must be public.
+A published release does not update a live nest.
 
-The first publication of a personal GHCR package may leave it private. In that
-case the workflow intentionally stops at anonymous verification after publishing
-the exact image. Change the package visibility to **Public** in GitHub, then
-rerun the same immutable tag; the rerun verifies the existing digest and safely
-completes aliases and Release assets without rebuilding or rewriting it.
+1. Record the live versions and preserve rollback material.
+2. Back up Server data/secrets and daemon state.
+3. Deploy the exact approved release.
+4. Verify public health, host reconnect, current PWA, and the changed workflow.
+5. Keep rollback material until live acceptance is complete.
 
-Release asset names stay version-independent so README installation links may
-use `releases/latest/download`; the immutable tag and each archive's `VERSION`
-file carry the version. Server archives include `pwa-dist`. Release notes
-should link the README quick start and deploy docs (EN + ZH).
-
-To repair missing assets on an existing immutable tag, run **Release binaries**
-manually with the exact tag. The workflow checks out that tag's source but uses
-the automation and Dockerfile from the selected workflow revision; all build
-inputs still come from the exact tagged source, and the tag itself never moves.
-Repair runs still validate version surfaces, build the tagged PWA and all five
-packages, execute same-architecture binary smoke checks, and publish checksums.
-They do not re-run an old tag's unit suites, whose runner assumptions may have
-drifted; the original tag acceptance remains authoritative. Normal tag-triggered
-runs always execute the full Server, Daemon, and PWA gates.
-
-## 4. Production update and live acceptance
-
-A tag is not a deploy.
-
-Publishing release assets does not by itself update production. For
-runtime-affecting maintenance of the configured live nest, local tests are not
-final acceptance unless the task was explicitly scoped local-only.
-
-1. Merge and push the approved commit; rebuild Server, PWA, and daemon from that
-   exact commit.
-2. Inspect the live systemd unit and daemon process/launcher before changing
-   files; sample values in deploy docs are not authoritative for an existing host.
-3. Verify artifact hashes and create rollback copies. Preserve `/opt/nekonest/data`,
-   Server environment files, and `%USERPROFILE%\.nekonest\config.json`.
-4. Update Server/PWA and the Windows daemon, then confirm public health, systemd
-   stability, daemon reconnect, and current PWA asset/version.
-5. Run the changed workflow through [e2e-smoke.md](./e2e-smoke.md). Capture
-   post-deploy CPU/I/O/memory/handle evidence when runtime load was part of the fix.
-
-Deployment does not authorize a tag, GitHub Release, or unrelated production
-change. Report the deployed commit, rollback locations, and any check that could
-not be completed.
-
-## Do not
-
-- Tag with secrets or a dirty tree  
-- Force-push or move published tags without an explicit decision  
-- Treat `docs/archive/` as the live product contract  
-- Update only one language when operator-facing behavior changes  
+Follow the [VPS](./deploy-vps.md), [Windows](./deploy-windows.md), or
+[Linux](./deploy-linux.md) upgrade section for operator steps.
 
 ## Related
 
 - [CHANGELOG.md](../CHANGELOG.md)
 - [Development](./development.md)
-- [Docs index](./README.md)
+- [Acceptance checklist](./e2e-smoke.md)

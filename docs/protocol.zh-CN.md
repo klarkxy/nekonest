@@ -1,296 +1,55 @@
 > [English](./protocol.md) | 简体中文
 
-# 协议概览
+# 线上协议
 
-NekoNest 手机 ↔ server ↔ daemon 通信的语言无关线协议。规范性 schema 文件为 [`protocol/protocol.json`](../protocol/protocol.json)。类型**手动维护**于：
+这是面向贡献者的兼容与所有权指南，刻意不复制消息目录和对象字段。
 
-- `protocol/protocol.json`
-- `server/internal/protocol/types.go`
-- `pwa/src/types/protocol.ts`
-- Daemon 分发 / payload 构造
+## 权威入口
 
-JSON 字段名、枚举、可选性、时间戳与语义须在各面保持一致。
-
-## 版本与传输模式
-
-| 字段 | 规则 |
+| 入口 | 作用 |
 |---|---|
-| `protocol_version` | `major.minor`（当前 **1.3**）。主版本不匹配则拒绝；次版本向后兼容。1.2+ PWA 仅在确认能力生产者为 1.1 或更旧时兼容推定发送/中断；来源未知时失败关闭。 |
-| `transport_mode` | 整个乐园统一为 `sealed` \| `open`。每个乐园只有一种持久化模式；**禁止** sealed→open 自动降级。新数据库默认 sealed；无元数据旧库一次性认定为 open。 |
-
-首帧（daemon 的 `register_device`、手机的 `subscribe`）**必须**带上述字段。之后每一帧都按已协商的主版本、传输模式和明确的「路由/应用正文」策略校验：sealed 模式的应用帧必须有 `sealed_payload`，open 模式拒绝它，混合正文始终拒绝。Server 在 `auth_response` / `subscribe_ack` 返回协商结果。稳定错误码：`version_mismatch`、`transport_mode_mismatch`、`invalid_envelope`。
-
-### 协议 1.3 服务错误与注册响应
-
-HTTP 失败与 WebSocket `error` 帧使用同一种公开结构：
-
-| 字段 | 必需 | 含义 |
-|---|---|---|
-| `error_code` | 是 | 稳定、机器可读的代码 |
-| `message` | 是 | 仅供人阅读的诊断，客户端不得解析文案决定行为 |
-| `retryable` | 是 | 是否允许在同一稳定服务端点重试 |
-| `retry_after_seconds` | 否 | 服务端指定的最小退避时间 |
-| `action_url` | 否 | 供用户操作的 HTTPS 页面；只展示，绝不是数据面重定向 |
-
-首批稳定代码为 `device_credential_invalid`、`phone_credential_invalid`、
-`access_suspended`、`registration_disabled`、`device_capacity_exceeded`、
-`device_identity_conflict`、`device_already_connected`、
-`protocol_upgrade_required`、`registration_rate_limited`、
-`service_provisioning`、`route_unavailable`、`region_unavailable`。未知代码
-失败关闭。客户端不能根据错误码判断是否 Cloud，也不能通过错误跳转到新的 Relay 来源。
-`device_already_connected` 允许在同一 `server_url` 重试：共享中继会拒绝第二
-条在线连接，Daemon 等待旧租约过期，而不是停止读循环。
-
-`POST /api/devices/register` 保留 `device_id`、`token`、`name`、
-`transport_mode`，增加 `connection_state: ready | provisioning` 与可选
-`retry_after_seconds`。Standalone 始终返回 `ready`。托管 Daemon 收到
-`provisioning` 后保存凭据，并在同一 `server_url` 重试 `/ws/daemon`；不轮询控制面。
-
-### 应用发行版本
-
-应用发行版本与 `protocol_version` 相互独立：只要线协议仍兼容，发行版本不一致只作为诊断信息，不会单独拒绝连接。
-
-| 字段 | 方向 / 语义 |
-|---|---|
-| `daemon_version` | Daemon 在 `register_device.payload` 上报；Server 在 `auth_response`、`subscribe_ack`、`device_online` 与在线 `Device` 快照返回当前值。缺省表示离线或旧版 Daemon 未上报。 |
-| `pwa_version` | PWA 在 `subscribe.payload` 上报构建版本；Server 在 `subscribe_ack` 回显接受的值。 |
-| `server_version` | Server 应用发行版本，出现在 `auth_response`、`subscribe_ack`、`/health` 与 `/api/devices`；它**不是**线协议版本。 |
-| `refresh_required` | `subscribe_ack` 布尔值；已上报 PWA 版本与 Server 不同时为 true。PWA 提供由用户触发的 Service Worker 更新/重载，不会因该信号自动循环刷新。 |
-| `update_required` | `auth_response` 布尔值；已上报 Daemon 版本与 Server 不同时为 true。 |
-
-当前构建使用 SemVer 发行版本。为兼容旧客户端，`pwa_version` 与 `daemon_version` 均为可选；缺失时显示“未知”，不得假定为当前版本。
-
-WebSocket 连接建立后，PWA 以实时 `subscribe_ack.server_version` 为权威值。携带版本的动态 HTTP 响应（`/health` 与 `/api/devices`）使用 `Cache-Control: no-store`，Service Worker 也不会拦截这些请求。页面顶部只比较网页与 Server；Daemon 版本和更新提示归属各自的设备卡片。
-
-## 信封
-
-每条 WebSocket 应用消息为 `NekoMessage`：
-
-| 字段 | 必需 | 说明 |
-|---|---|---|
-| `protocol_version` | 首帧必需 | `major.minor` |
-| `transport_mode` | 首帧必需 | `sealed` \| `open` |
-| `type` | 是 | `MessageType` 枚举字符串之一 |
-| `device_id` | 是 | 设备标识（daemon 身份或路由上下文） |
-| `timestamp` | 是 | Unix 时间戳，**秒** |
-| `session_id` | 否 | 会话级消息时的 agent 线程 id |
-| `client_msg_id` | 否 | prompt/start 幂等 id（中继可见） |
-| `payload` | 否 | 开放模式或明文控制载荷；有 `sealed_payload` 时**必须缺省** |
-| `sealed_payload` | 否 | 密文信封；开放模式下**必须缺省** |
-
-`payload` 与 `sealed_payload` 互斥。schema 上信封 `additionalProperties: false`。
-
-## 智能体类型标识
-
-| 线 id | 产品名 |
-|---|---|
-| `claude_code` | Claude Code |
-| `codex` | Codex |
-| `kimi_cli` | Kimi CLI |
-| `grok_build` | Grok Build |
-
-协议 1.x 还会为解析兼容接受已退役的 `kilo` 值；现行 daemon 与 PWA
-不会广告、发现、新建或显示它。
-
-新增智能体需适配器 + 注册表、server 类型、PWA 目录/资源、schema、测试与文档一致。
-
-## 核心共享对象（schema）
-
-### Device
-
-| 字段 | 说明 |
-|---|---|
-| `id`, `name` | 身份与显示名 |
-| `os` | v1 正式：`windows` \| `linux` |
-| `status` | `online` \| `offline` |
-| `last_seen` | Unix 秒 |
-| `active_agents` | 会话数量提示（不是猫娘种类数）；PWA 展示为线团数 |
-| `daemon_version` | 当前在线 Daemon 上报的发行版本；离线/未上报时省略 |
-
-### AgentSession
-
-| 字段 | 说明 |
-|---|---|
-| `id` | 公开/线会话 id |
-| `device_id` | 所属设备 |
-| `agent_type` | 线 agent id |
-| `status` | `running` \| `idle` \| `waiting_user` \| `waiting_approval` \| `error` |
-| `summary`, `last_activity` | 列表 UX |
-| `project_dir` / `project` | 目录分组 |
-| `capabilities` | 新 Daemon 显式发送全部布尔值；缺省字段按 false/unsupported |
-| `pending_approval` | 可选工具审批结构 |
-| `pending_user_input` | 可选的 Codex 结构化提问请求；与审批相互独立 |
-| `active_turn` | 当前可控制回合：daemon `generation`、`client_msg_id` 与可选原生 request id；`null` 表示清除 |
-
-### SessionCapabilities
-
-| 字段 | 说明 |
-|---|---|
-| `control_mode` | `app_server` \| `exec_resume` \| `compatibility` |
-| `send`、`approve`、`deny`、`interrupt`、`steer`、`queue`、`spawn`、`user_input` | 布尔值；缺省为 false。只有已安装并探测通过的原生 starter、且目录获准时 `spawn` 才可为 true；任何标志都不隐含其他能力。 |
-| `attachment_mode` | `native_image_and_file` \| `native_image` \| `path_best_effort` \| `unsupported` |
-| `control_path`、`control_version` | 已知时填写探测到的原生机制/版本 |
-| `unavailable_reasons` | 按 `send/approve/deny/interrupt/steer/queue/spawn/user_input/attachment` 提供稳定原因码 |
-
-各 harness 现行盖章值：[agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md)。
-
-### `session_list` 开线程能力目录
-
-`session_list.payload.start_capabilities` 是可选的设备级目录。缺省时禁用设备级新建；在 minor 版本迁移期间，旧 daemon 仅可通过会话中明确的 `capabilities.spawn=true` 保留 Codex 新建入口。每项含 `agent_type`、`available`、`spawn`、`attachment_mode`，以及可选的展示 `reason`、`control_path` / `control_version`。仅当 `available=true` 且 `spawn=true` 时，PWA 才可提供本地草稿；目录必须来自 daemon 当前原生发现项目目录的并集，绝不可输入任意路径。
-
-### 原生开线程载荷
-
-`start_thread.payload` 使用 `agent_type`、`operation_id`、`project_dir`、`prompt`；`cwd` 与 `initial_prompt` 仍是可选的遗留别名。该 prompt 是原生线程首条提示词，不是先由手机创建的会话。sealed 模式会用设备目录密钥加密整个正文；relay 只能看到路由元数据与稳定 operation id。发送前 PWA 必须把本地草稿与该 operation id 持久绑定；刷新后不得另造 operation 或重试未决新建。`thread_*` 载荷为兼容保留 `operation_id`、`session_id`、`thread_id`、`error`、`message`；sealed 模式下这些结果载荷也用设备目录密钥加密，外层仅保留状态、operation id 与原生 session id 作为路由元数据。可见的路由元数据不等于已认证的业务结果：结果密文缺失或认证失败时，PWA 必须本地降为 `thread_indeterminate`，绝不能采信外层 `thread_owned` 或 `thread_failed`。`thread_owned` 必须同时具备原生 store 所有权与首条提示词正向确认，因此其 `prompt_accepted` 必须为 true；任一证据缺失都须使用 `thread_indeterminate` 并保留本地草稿。
-
-附件属于同一个首回合：Daemon 在 `thread/start` 前完成下载与校验，随后在第一次 `turn/start` 中一并发送提示词和附件。创建前下载失败为 `thread_failed`；原生线程创建后结果未知为 `thread_indeterminate`。
-
-### 结构化用户输入
-
-`pending_user_input` 完整保留 app-server 的 `request_id`、`item_id`、过期时间以及每个问题的 `id`、header、正文、选项、`isOther`、`isSecret`。手机通过 `respond_user_input` 按 0.146 的精确形状回答：`question_id -> { "answers": ["..."] }`。`user_input_result` 返回 `accepted`、`expired`、`stale` 或 `indeterminate`。request id 幂等；app-server 是否收到无法确认时禁止自动重答。Secret 不写入草稿、历史、日志、Server 持久化或 attention event。
-
-### SessionMessage
-
-| 字段 | 说明 |
-|---|---|
-| `id` | 稳定 id，用于合并/去重 |
-| `role` | `assistant` \| `user` \| `tool` \| `system` |
-| `content` | 文本正文 |
-| `type` | `thinking` \| `text` \| `assistant` \| `tool_call` \| `tool_result` \| `error` \| `system` |
-| `timestamp` | Unix 秒 |
-| `metadata` | 可选对象 |
-
-### AttachmentRef
-
-| 字段 | 说明 |
-|---|---|
-| `url` | 必需引用 |
-| `id`, `name`, `mime`, `size`, `key` | 可选元数据 |
-
-## 消息类型目录
-
-按角色分组。关键流的 payload 形状以实现侧 Go/TS 为准；集成时请对照类型定义。schema 枚举对**类型字符串名**具权威性。
-
-### 设备生命周期
-
-| type | 典型方向 | 作用 |
-|---|---|---|
-| `device_online` | daemon → server → phone | 设备在线 |
-| `device_offline` | server → phone | 设备离线 |
-| `device_list` | server → phone | 设备快照 |
-| `register_device` | 控制面 | 注册相关 |
-| `auth_response` | server → 对端 | 鉴权结果 |
-
-### 会话
-
-| type | 作用 |
-|---|---|
-| `session_list` | 全量/批量会话快照 |
-| `session_update` | 增量会话元数据 |
-| `session_message` | 流式或已存回合内容 |
-
-### 提示词生命周期
-
-| type | 作用 |
-|---|---|
-| `send_prompt` | 手机 → … → daemon：用户提示词（+ 附件） |
-| `prompt_status_query` | 查询投递状态 |
-| `prompt_not_seen` | 对端无此 id 记录 |
-| `prompt_queued` | 已持久进入 NekoNest FIFO，但尚未越过原生 Agent 接受边界 |
-| `prompt_accepted` | 原生 agent 控制路径已正向接受（outbox 不清除） |
-| `prompt_committed` | journal 已提交；此时清除持久 outbox |
-| `prompt_failed` | 可见失败 |
-| `prompt_sent` | 已弃用的过渡别名；客户端以 `prompt_committed` 为准 |
-
-**不要**把「WebSocket 写成功」等同于 `prompt_accepted` / 业务成功。
-`prompt_queued` 单独报告 FIFO 位置，不启动接受状态轮询。只有该条目得到原生 `turn/start` 接受并收到 `prompt_committed` 后，手机才清除持久 outbox。接收端继续兼容旧版 `prompt_accepted{queued:true}` 入队形状。
-
-断线恢复/状态查询会为同一个 `client_msg_id` 重用完全相同的密封信封。明确且允许重试的 `prompt_failed` 由用户显式重试时，必须生成**新的** `client_msg_id` 和新密封命令；`indeterminate` 绝不提供普通重试入口。
-
-### 控制与生命周期（v1）
-
-| type | 作用 |
-|---|---|
-| `approve` / `deny` | 工具审批（有能力时为 Codex app-server） |
-| `interrupt` | 停止运行中的工作；payload 必须回传当前 `active_turn.generation` 与 `active_turn.client_msg_id` |
-| `steer` | 回合中修正（Codex） |
-| `respond_user_input` / `user_input_result` | Codex 结构化问答响应与终态 |
-| `queue_update` | FIFO 快照，含 `queued/running/completed` 与 `blocked_failed/blocked_interrupted/blocked_indeterminate` 状态 |
-| `cancel_prompt` / `prompt_cancelled` | 取消尚未开始的队列条目 |
-| `resume_prompt_queue` | 只恢复 failed/interrupted blocker 后续项；blocker 原提示绝不重放 |
-| `skip_prompt_queue_item` | 强警告后显式 tombstone 不确定 blocker，再继续后续项 |
-| `start_thread` / `thread_*` | agent 范围的手机本地草稿：在获准的已发现目录用首条提示词原生开线程 |
-| `pair_*` / `key_package` / `phone_revoked` | 配对与 E2E 密钥分发 |
-| `attention_event` | 通用、适合密封模式推送的事件类别 |
-
-### 历史与订阅
-
-| type | 作用 |
-|---|---|
-| `subscribe` | 手机请求设备/会话订阅 |
-| `subscribe_ack` | 服务端确认订阅就绪 |
-| `fetch_history` | 请求原生/服务端历史窗口 |
-| `session_history` | 历史载荷响应 |
-
-### 配对
-
-| type | 作用 |
-|---|---|
-| `pair_request` | 请求配对材料 |
-| `pair_confirm` | 确认配对 |
-
-（另有 HTTP 配对 generate/consume API，见 [configuration.zh-CN.md](./configuration.zh-CN.md)。）
-
-### 控制
-
-| type | 作用 |
-|---|---|
-| `approve` | 批准待处理工具（CLI 支持时） |
-| `deny` | 拒绝 |
-| `interrupt` | 中断运行中的工作 |
-| `heartbeat` | 保活 |
-| `error` | 错误信封 |
-
-## 线上明确非目标
-
-- 支持的产品合同中**没有**通用手机侧 `create_session`（或等价物）或乐园侧幽灵线程。
-- 唯一允许的手机新建路径是 agent 范围的 `start_thread`：先创建手机本地草稿；仅当所选 agent 的 starter 已安装/探测通过且宣告 `spawn=true` 时，才将首条提示词原生建线程。目录必须来自 daemon **当前原生发现项目目录并集**。
-- 生命周期为 `thread_starting → thread_owned | thread_failed | thread_indeterminate`；仅在首条提示词得到正向确认、且所选 agent 原生 store 明确认领后才发送 `thread_owned`，否则报 `thread_indeterminate`。
-- 不得发明永久乐园侧会话行。
-
-## REST 配套 API
-
-交互流量多走 WebSocket。REST（除注明外需手机密钥）：
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/health` | 无鉴权存活检查，以及 `protocol_version`、`server_version` 和权威 `transport_mode` |
-| GET | `/api/devices` | 设备列表 |
-| POST | `/api/devices/register` | Bootstrap 头 |
-| GET | `/api/devices/sessions` | 会话 |
-| GET | `/api/messages` | 消息 |
-| POST/GET | `/api/attachments`… | 上传 / 下载 |
-| POST | `/api/push/subscribe` | 推送 |
-| GET | `/api/push/vapid-public-key` | VAPID 公钥 |
-| POST | `/api/pair/generate` | 签发配对码 |
-| POST | `/api/pair/consume` | 消费配对码 |
-| GET | `/ws/phone` | 手机 WS |
-| GET | `/ws/daemon` | Daemon WS |
-
-鉴权头细节：[security.zh-CN.md](./security.zh-CN.md)、[configuration.zh-CN.md](./configuration.zh-CN.md)。
-
-## 变更检查清单
-
-线协议变更时：
-
-1. 更新 `protocol/protocol.json`
-2. 更新 `server/internal/protocol/types.go` 与 handler/持久化/测试
-3. 更新 `pwa/src/types/protocol.ts` 与 stores/API/测试
-4. 更新 daemon 消息分发与适配器边界
-5. 更新本文档与 README 智能体表（若枚举或产品行为变化）
-6. 跑 **server**、**daemon**、**pwa** 全套测试
+| `protocol/protocol.json` | 语言无关的线上 schema 与枚举值 |
+| `relaycore/protocol/` | 共享 Go 协议行为 |
+| `server/internal/protocol/` | Server 侧 Go 别名与兼容 |
+| `pwa/src/types/protocol.ts` | 浏览器线上类型 |
+| Daemon 分发与适配器测试 | 主机载荷构造与原生边界 |
+
+JSON schema 是手工维护的。任何文档示例都不能替代对这些入口的共同检查。
+
+## 兼容规则
+
+- 版本格式为 `major.minor`。
+- major 不一致时拒绝连接。
+- minor 变更可以增加可选字段或消息类型，但不能改变既有必需数据的含义。
+- 未知可选数据应安全忽略；缺失能力标志一律为 false。
+- 应用发行版本与线上协议版本相互独立。
+- 每个实例只有一种持久化传输模式：`sealed` 或 `open`。客户端必须一致，不自动
+  降级。
+
+## 稳定产品不变量
+
+- 现行智能体标识是 `claude_code`、`codex`、`kimi_cli` 和 `grok_build`。
+- 原生智能体存储是线程所有权与历史的事实来源。
+- 手机控制按能力开放；能力缺失或未知时失败关闭。
+- 稳定的设备、线程、消息与客户端操作身份防止重放和重连造成重复工作。
+- 传输成功、Daemon 接受和持久化完成是不同结果。
+- 线上不包含手机通用新建或只存在于猫娘乐园的会话。原生新建必须绑定智能体、
+  已发现项目，并由原生所有权确认。
+- sealed 重试保留原加密命令身份，不把同一操作重新加密成另一份副本。
+
+## 修改协议
+
+1. 先判断是否向后兼容，仅在必要时更新版本。
+2. 先改 `protocol/protocol.json`。
+3. 更新所有适用的 Go、Daemon 与 PWA 入口。
+4. 为变更行为增加正向、负向、混合版本、重连和持久化测试。
+5. 只有用户可见行为、配置或恢复路径变化时，才更新运维文档。
+6. 运行完整 Server、Daemon 与 PWA 验证套件。
+
+不要在本页再手抄新枚举或载荷字段；应链接 schema 或针对性测试。
 
 ## 相关文档
 
 - [架构](./architecture.zh-CN.md)
-- [开发](./development.zh-CN.md)
+- [本地开发](./development.zh-CN.md)
 - [AGENTS.md](../AGENTS.md)

@@ -1,10 +1,14 @@
 > English | [简体中文](./v1-product.zh-CN.md)
+>
+> **Archived.** This is a frozen v1.0.0 target snapshot, not the live product
+> contract. Live behavior is [README.md](../../README.md) and the operator
+> guides under `docs/` (except this archive).
 
 # NekoNest v1.0.0 — Product feature contract
 
 **Status:** frozen target product contract for the first complete release  
 **Audience:** maintainers, contributors, coding agents  
-**Relationship to v0.1:** v0.1.0 was a *launch slice* optimized for shipping. Operator docs under `docs/*.md` (except this file), `README.md` boundaries, and `docs/archive/` describe that slice. **They are reference only.** This document defines what v1.0.0 must be when it ships.
+**Relationship to live docs:** v0.1.0 was the first *launch slice*. Live operator docs under `docs/*.md` (except this file) and `README.md` now describe **v0.2**. `docs/archive/` is frozen construction history. Those sources are **not** this contract. This document still defines what v1.0.0 must be when it ships.
 
 When implementation and this contract disagree during the v1 effort, **update the contract deliberately** — do not silently re-shrink to v0.1 limits. Any change to frozen decisions must update **both** language mirrors before implementation continues.
 
@@ -202,7 +206,7 @@ Priority tags:
 
 Wire ids remain stable; adding an agent is a full-stack change (schema, server, daemon, PWA, tests, docs).
 
-Detailed **live** vs target cards for each harness: [agent-capability-matrix.md](./agent-capability-matrix.md). This §7.3 remains the frozen v1 release bar.
+Detailed **live** vs target cards for each harness: [agent-capability-matrix.md](../agent-capability-matrix.md). This §7.3 remains the frozen v1 release bar.
 
 #### 7.3.1 Full-control agent (MUST)
 
@@ -563,11 +567,11 @@ Changing any row requires updating this file and `v1-product.zh-CN.md` before fu
 | | |
 |---|---|
 | **Canonical product contract for v1.0.0** | This file + `v1-product.zh-CN.md` |
-| **Live engineering invariants** | [AGENTS.md](../AGENTS.md) (includes agent-scoped first-prompt `start_thread`; forbids generic `create_session`) |
-| **v0.1 operator docs** | `docs/*.md` until rewritten at release — **reference only** during v1 build |
-| **Shipped root README** | Describes **live v0.1** behavior until release rewrite — do not treat as v1 contract |
-| **Frozen history** | `docs/archive/` — never treat as contract |
-| **User-visible history** | [CHANGELOG.md](../CHANGELOG.md) |
+| **Live engineering invariants** | [AGENTS.md](../../AGENTS.md) (includes agent-scoped first-prompt `start_thread`; forbids generic `create_session`) |
+| **Live operator docs** | `docs/*.md` (except this archive) describe **v0.2** |
+| **Shipped root README** | Describes **live v0.2** behavior |
+| **This file** | Archived frozen v1.0.0 snapshot — not the live contract |
+| **User-visible history** | [CHANGELOG.md](../../CHANGELOG.md) |
 
 ### Change process
 
@@ -575,7 +579,7 @@ Changing any row requires updating this file and `v1-product.zh-CN.md` before fu
 2. Mirror Simplified Chinese with parity.  
 3. Update `AGENTS.md` when invariants change.  
 4. Implement with tests.  
-5. At v1.0.0 release: rewrite README + operator docs to match this contract; move obsolete “v0.1 boundaries” language out of the live README.
+5. At v1.0.0 release: rewrite README + operator docs to match this contract; move obsolete “v0.2 boundaries” language out of the live README.
 
 ---
 

@@ -2,65 +2,57 @@
 
 # NekoNest documentation
 
-Live operator and contributor docs for NekoNest. Product overview: [../README.md](../README.md) · [../README.zh-CN.md](../README.zh-CN.md).
+These are the live docs for the current self-hosted product. Historical target
+contracts and unused migration notes are frozen under [archive/](./archive/).
 
-English files use the short path (`docs/foo.md`). Simplified Chinese mirrors use the `.zh-CN.md` suffix.
+## Choose your path
 
-## Start here
-
-| Doc | Description |
+| Goal | Read |
 |---|---|
-| [../README.md](../README.md) | Product, quick start, **v0.2 live boundaries** |
-| [v1-product.md](./v1-product.md) | **v1.0.0 frozen target contract** (Codex-first E2E; beyond the live v0.2 milestone) |
-| [deploy-vps.md](./deploy-vps.md) | Build and run the VPS server |
-| [deploy-windows.md](./deploy-windows.md) | Register and run the Windows daemon |
-| [deploy-linux.md](./deploy-linux.md) | Register and run the Linux daemon (systemd user) |
-| [migration-v1.md](./migration-v1.md) | Breaking v0.1 → v1.0 offline migration |
-| [e2e-smoke.md](./e2e-smoke.md) | Post-deploy acceptance checklist |
-| [troubleshooting.md](./troubleshooting.md) | Symptom → fix guide |
+| Understand NekoNest and try it | [Project README](../README.md) |
+| Install a public nest | [VPS](./deploy-vps.md) → [Windows host](./deploy-windows.md) or [Linux host](./deploy-linux.md) → [acceptance](./e2e-smoke.md) |
+| Operate an existing nest | [Configuration](./configuration.md), [security](./security.md), and [troubleshooting](./troubleshooting.md) |
+| Change the project | [Development](./development.md), [architecture](./architecture.md), and [protocol](./protocol.md) |
+| Cut a release | [Release process](./release.md) |
 
-## Reference
+## User and operator guides
 
-| Doc | Description |
+| Document | Purpose |
 |---|---|
-| [v1-product.md](./v1-product.md) | Frozen v1.0.0 catalog: Windows+Linux, Codex full-control, sealed default |
-| [configuration.md](./configuration.md) | Env vars, flags, config files, limits |
-| [security.md](./security.md) | Trust model, secrets, hardening |
-| [agent-capability-matrix.md](./agent-capability-matrix.md) | **Per-harness live capability matrix** (Codex / Claude / Kimi / Grok) |
-| [architecture.md](./architecture.md) | Components, discovery, prompt path |
-| [relay-core.md](./relay-core.md) | Shared Relay Core, stable endpoint, and managed-service boundary |
-| [protocol.md](./protocol.md) | Wire envelope, message types, REST |
-| [development.md](./development.md) | Local dev and tests |
-| [release.md](./release.md) | Maintainer release cut |
-| [brand-art.md](./brand-art.md) | Rebuild PWA brand assets |
-| [../CHANGELOG.md](../CHANGELOG.md) | User-visible history |
-| [../AGENTS.md](../AGENTS.md) | Engineering invariants (EN) |
+| [VPS deploy](./deploy-vps.md) | Run the Server and PWA behind HTTPS |
+| [Windows host](./deploy-windows.md) | Install, register, and autostart the host daemon |
+| [Linux host](./deploy-linux.md) | Install, register, and run the host daemon with systemd |
+| [Configuration](./configuration.md) | Supported operator settings and data locations |
+| [Security](./security.md) | Trust model, secrets, backups, and hardening |
+| [Troubleshooting](./troubleshooting.md) | Symptom-first recovery steps |
+| [Acceptance checklist](./e2e-smoke.md) | Verify an installed or upgraded nest |
+| [Agent support](./agent-capability-matrix.md) | Stable support tiers and runtime capability rules |
 
-## Chinese mirrors
+## Contributor and maintainer references
 
-| English | 简体中文 |
+| Document | Purpose |
 |---|---|
-| [README.md](../README.md) | [README.zh-CN.md](../README.zh-CN.md) |
-| [v1-product.md](./v1-product.md) | [v1-product.zh-CN.md](./v1-product.zh-CN.md) |
-| [deploy-vps.md](./deploy-vps.md) | [deploy-vps.zh-CN.md](./deploy-vps.zh-CN.md) |
-| [deploy-linux.md](./deploy-linux.md) | [deploy-linux.zh-CN.md](./deploy-linux.zh-CN.md) |
-| [migration-v1.md](./migration-v1.md) | [migration-v1.zh-CN.md](./migration-v1.zh-CN.md) |
-| [deploy-windows.md](./deploy-windows.md) | [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md) |
-| [e2e-smoke.md](./e2e-smoke.md) | [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) |
-| [configuration.md](./configuration.md) | [configuration.zh-CN.md](./configuration.zh-CN.md) |
-| [security.md](./security.md) | [security.zh-CN.md](./security.zh-CN.md) |
-| [agent-capability-matrix.md](./agent-capability-matrix.md) | [agent-capability-matrix.zh-CN.md](./agent-capability-matrix.zh-CN.md) |
-| [architecture.md](./architecture.md) | [architecture.zh-CN.md](./architecture.zh-CN.md) |
-| [relay-core.md](./relay-core.md) | [relay-core.zh-CN.md](./relay-core.zh-CN.md) |
-| [protocol.md](./protocol.md) | [protocol.zh-CN.md](./protocol.zh-CN.md) |
-| [development.md](./development.md) | [development.zh-CN.md](./development.zh-CN.md) |
-| [troubleshooting.md](./troubleshooting.md) | [troubleshooting.zh-CN.md](./troubleshooting.zh-CN.md) |
-| [release.md](./release.md) | [release.zh-CN.md](./release.zh-CN.md) |
-| [brand-art.md](./brand-art.md) | [brand-art.zh-CN.md](./brand-art.zh-CN.md) |
-| [README.md](./README.md) (this index) | [README.zh-CN.md](./README.zh-CN.md) |
+| [Architecture](./architecture.md) | Stable component and data-ownership boundaries |
+| [Protocol](./protocol.md) | Compatibility rules and authoritative schema locations |
+| [Development](./development.md) | Local setup and verification commands |
+| [Release](./release.md) | Maintainer release gates |
+| [Relay Core](./relay-core.md) | Shared self-hosted/managed data-plane boundary |
+| [Brand assets](./brand-art.md) | Rebuild shipped images from approved source art |
 
-## Archive and contracts
+The [Chinese community introduction](./zhihu-intro.zh-CN.md) is publication
+copy, not an operational reference.
 
-- **Live v0.2 product boundaries:** [../README.md](../README.md) “Current boundaries (v0.2)” and today’s operator guides.
-- **Target v1.0.0 product contract:** [v1-product.md](./v1-product.md) — supersedes v0.x compromises when building toward the complete release.
-- **Frozen construction snapshots:** [archive/](./archive/). **Not** a product contract. Verify any claim there against current code, README, AGENTS.md, and (for v1 work) `v1-product.md`.
+## Sources of truth
+
+| Subject | Authority |
+|---|---|
+| Product behavior | Root README and the running UI |
+| Available controls | PWA capability state and `nekonest-daemon -doctor` |
+| Server/daemon flags | The installed binary's `-help` output |
+| Container settings | `compose.yaml` and `docker.env.example` |
+| Wire fields and messages | `protocol/protocol.json` |
+| Release automation | `.github/workflows/release.yml` |
+
+Docs explain how to use those surfaces; they do not duplicate every internal
+field or implementation branch. English files are primary. Operator-facing
+changes must update the matching `.zh-CN.md` mirror in the same change.

@@ -3,14 +3,13 @@
 
   <h1>NekoNest · 猫娘乐园</h1>
 
-  <p><strong>在手机上，安全续写 Windows 或 Linux 主机中的编码智能体线程。</strong></p>
-  <p>自托管 · 主机仅出站连接 · 原生会话存储 · 移动端 PWA</p>
+  <p><strong>在手机上继续运行 Windows 或 Linux 主机里的编码智能体线程。</strong></p>
+  <p>自托管 · 主机只出站连接 · 使用原生会话存储 · 移动端 PWA</p>
 
   <p>
     <a href="./README.md">English</a> ·
     <a href="#快速开始">快速开始</a> ·
-    <a href="#支持的智能体">支持的智能体</a> ·
-    <a href="#文档">文档</a> ·
+    <a href="./docs/README.zh-CN.md">文档</a> ·
     <a href="#许可证">许可证</a>
   </p>
   <p>
@@ -20,339 +19,93 @@
 
 ---
 
-NekoNest 是一个自托管的远程续写桥梁：VPS 负责认证、配对、消息中转与持久化；Windows/Linux Daemon 主动连接 VPS，并从各智能体的本地**原生**存储中发现线程；手机 PWA 用于查看历史、发送提示词和附件、接收流式输出，并通过原生 app-server 完整控制 Codex。
+NekoNest 把手机 PWA 与你自己电脑上的编码智能体连接起来。主机 Daemon
+主动连接 VPS，发现智能体的原生线程，并转发提示词、附件、输出及当前支持的
+控制操作；家用电脑不需要开放入站端口。
 
-> [!IMPORTANT]
-> NekoNest 主要**续写**主机上已经存在的线程。手机可先打开 agent 范围的本地草稿；仅当该 agent 的 starter 已安装、探测通过并宣告 `spawn=true` 时，发送首条提示词才会创建原生线程，且目标只能是 daemon 当前由原生会话发现的项目目录并集。禁止任意路径与通用 `create_session`。创建结果仅在首条提示词得到正向确认、且该 agent 的权威原生存储确认所有权后显示为 owned。
+原生智能体存储始终是会话事实来源。NekoNest 通常用于继续已有线程。只有当
+已安装的智能体明确提供新建能力，而且目标项目已在主机上被发现时，手机才能
+新建原生线程。
 
 ## 工作方式
 
-```text
-┌─────────────┐       HTTPS / WSS       ┌──────────────────┐
-│  手机 PWA   │ ◄─────────────────────► │  VPS Server      │
-│ Vue 3 + PWA │                         │  Go + SQLite     │
-└─────────────┘                         └────────┬─────────┘
-                                                 │ WSS
-                                                 │ 由 PC 主动发起
-                                        ┌────────▼─────────┐
-                                        │ 主机 Daemon      │
-                                        │ Windows / Linux  │
-                                        │ 发现 / 历史 / 执行 │
-                                        └────────┬─────────┘
-                                                 │ 本地存储与 CLI
-                    ┌────────────┬───────────┬───┴────────┬────────────┐
-                    │Claude Code │   Codex   │ Kimi CLI   │ Grok Build │
-                    └────────────┴───────────┴────────────┴────────────┘
-```
-
-家中电脑不需要公网 IP，也不需要开放入站端口。Daemon 通过出站 WebSocket 连接 VPS；手机只访问启用 HTTPS/WSS 的 VPS。
-
-## 核心能力
-
-- **近期原生线程发现**：按 `目录 → 智能体 → 线程` 展示最近 7 天有活动的线程；仍在运行/等待处理的线程始终可见，没有可识别目录的线程归入「**未分类**」，隐藏旧线程不会删除原生数据。
-- **可靠续写**：提示词具有独立的接受、提交与失败状态；断线重连不会把“传输成功”误当作“智能体已接收”。
-- **历史与流式输出**：合并原生历史、服务端持久化与实时输出，并保持稳定消息标识；CLI 标准错误只作本机诊断，不进入对话正文。
-- **图片与文档附件**：手机上传后由 Daemon 下载到本次任务临时目录，再按各 CLI 能力传入（最多 5 个、单个 ≤ 4 MB）。
-- **按能力控制 Agent**：Codex 仍是唯一全控制 Agent。每条可靠且已安装的发送路径都可使用 NekoNest 持久 FIFO（不是 Agent 原生队列）；审批、用户提问、新建、中断与附件均独立探测，缺失即关闭。
-- **持久传输模式**：每个乐园只能固定为 `open` 或 `sealed`。新数据库默认 sealed；缺少模式元数据的旧数据库一次性认定并持久化为 open；不匹配时失败关闭。
-- **手机端降级防护**：PWA 按来源钉扎模式；sealed 来源不能静默变成 open，首次使用管理员明确选择的开放中继必须显式确认。
-- **手机端新鲜目录**：PWA 先显示缓存目录，再要求在线 Daemon 重新扫描原生存储。只有存在线程的智能体显示为分组；已启用但尚无线程的智能体保留在项目级「**新建**」菜单中。
-- **移动端体验**：可安装 PWA、会话草稿、线程级或整项目的手机本地收起、经清理的 Markdown、断线恢复与可选 Web Push。
-- **版本诊断**：页面顶部对比当前网页与实时 Server 版本；每台机器在自己的设备卡片上报告 Daemon 版本及更新状态。
-- **安全默认值**：管理员引导、可撤销手机身份、Daemon 注册令牌、来源校验、附件校验、消息大小限制与受控代理信任。
+<div align="center">
+  <img src="./docs/images/how-it-works.zh-CN.jpg" width="920" alt="手机连接 VPS，Windows 或 Linux 主机上的 Daemon 主动出站连接并控制本地编码智能体">
+</div>
 
 ## 支持的智能体
 
-| 智能体 | 本地会话来源 | 控制方式 | 附件处理 |
-|---|---|---|---|
-| Claude Code | `~/.claude/projects` | `claude --resume` 兼容续写 | 授权本次临时目录，并在提示词中提供本地路径 |
-| Codex | `~/.codex/sessions` | 通过 `codex app-server` **全控制**；`exec resume` 降级 | app-server 健康时原生图片 + 同回合落地文件路径 |
-| Kimi CLI | `.kimi-code`，兼容 `.kimi` 旧布局 | `kimi --session` 兼容续写 | 在提示词中提供本地路径，能否读取取决于 CLI 文件权限 |
-| Grok Build | `~/.grok/sessions` | `grok --resume` 兼容续写 | 在提示词中提供本地路径；非交互安全模式 |
+| 智能体 | 支持级别 |
+|---|---|
+| Claude Code | 继续已有线程；具体控制取决于已安装的 CLI 路径 |
+| Codex | `codex app-server` 可用时支持手机完整控制，否则使用兼容回退 |
+| Kimi CLI | 兼容继续 |
+| Grok Build | 兼容继续 |
 
-### 能力实现进度（现行 v0.2）
-
-图例：✅ 已实现并对手机端广告 · ⚙️ 已实现，但受运行状态、探测结果或降级路径限制 · ❌ 手机端未实现或不广告。
-
-| 能力 | Claude Code | Codex | Kimi CLI | Grok Build |
-|---|---|---|---|---|
-| 发现 / 列表 | ✅ | ✅ | ✅ | ✅ |
-| 所有权门槛 | ✅ | ✅ | ✅ | ✅ |
-| 历史记录 | ✅ | ✅ | ✅ | ✅ |
-| 发送 + 流式输出 | ✅ | ✅ | ✅ | ✅ |
-| 中断 | ✅ | ✅ | ✅ | ✅ |
-| 新建原生线程 | ⚙️ starter 探测 | ⚙️ app-server 健康 | ⚙️ ACP starter 探测 | ⚙️ starter 探测 |
-| 图片 / 文件附件 | ⚙️ 路径尽力读取 | ⚙️ 原生图片 + 同回合落地文件路径；降级时仅原生图片 | ⚙️ 路径尽力读取 | ⚙️ 路径尽力读取 |
-| 批准 / 拒绝 | ❌ | ⚙️ 仅 app-server | ❌ | ❌ |
-| 转向当前回合 | ❌ | ⚙️ 仅 app-server | ❌ | ❌ |
-| NekoNest 持久 FIFO | ⚙️ CLI + 可写队列日志 | ⚙️ app-server 或 exec 降级 + 可写日志 | ⚙️ 已安装 CLI + 可写日志 | ⚙️ 已安装 CLI + 可写日志 |
-| 等待状态信号 | ❌ 无桥接正向信号时关闭 | ⚙️ app-server 审批 + 结构化问答 | ❌ 除非观察到合法 ACP 事件 | ❌ 除非观察到合法厂商事件 |
-
-受运行时限制的能力，只有在已安装 CLI / 控制路径通过探测后才会对手机端广告。新建原生线程属于带独立 `attachment_mode` 的设备级 `start_capabilities`，并不表示每个现有会话都有 `capabilities.spawn=true`。协议 1.2 显式发送全部布尔能力与稳定 `unavailable_reasons`；新 PWA 只对确认来自 1.1 daemon 的能力表兼容推定发送/中断，来源未知时失败关闭。Codex app-server 不健康时降级为 `exec resume`；非 Codex `steer` 始终关闭。
-
-未安装某个 CLI，或本机没有该智能体的有效主线程时，不会影响其他智能体。
-
-现行线协议标识：`claude_code`、`codex`、`kimi_cli`、`grok_build`。协议 1.x 仍解析已退役的 `kilo` id，使混合版本节点失败关闭而不是断开连接；现行目录不会再广告它。
-
-**完整分 harness 能力矩阵**（现行标志、建线探测、附件接线、现行 vs v1）：[docs/agent-capability-matrix.zh-CN.md](docs/agent-capability-matrix.zh-CN.md) · [English](docs/agent-capability-matrix.md)。
+能力由运行时检测。PWA 只启用当前 Daemon 明确声明的控制；某项操作不可用时，
+先运行 `nekonest-daemon -doctor`。稳定的支持边界见
+[智能体支持说明](./docs/agent-capability-matrix.zh-CN.md)。
 
 ## 快速开始
 
-### 1. 在 VPS 安装并启动 Server
+### 1. 在 VPS 运行 Server
 
-[GHCR](https://github.com/klarkxy/nekonest/pkgs/container/nekonest-server)
-提供同时包含 Server 与匹配 PWA 的非 root `linux/amd64` + `linux/arm64`
-镜像。Daemon 为了直接访问主机 CLI，明确**不做容器化**。
+GHCR 镜像已经包含匹配的 PWA：
 
 ```bash
-git clone https://github.com/klarkxy/nekonest.git
-cd nekonest
-cp docker.env.example .env
-# 编辑 .env 后限制权限。
-chmod 600 .env
-sudo install -d -m 700 -o 10001 -g 10001 data
-docker compose pull
-docker compose up -d
-docker compose logs -f server
+sudo install -d -m 700 -o 10001 -g 10001 /var/lib/nekonest
+docker run -d --name nekonest --restart unless-stopped \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1770 \
+  -p 127.0.0.1:8080:8080 \
+  -v /var/lib/nekonest:/data \
+  -e NEKONEST_ADMIN_SECRET='long-random-string' \
+  -e NEKONEST_BOOTSTRAP_TOKEN='different-long-random-string' \
+  -e NEKONEST_ALLOWED_ORIGINS='https://nekonest.example.com' \
+  -e NEKONEST_TRUST_PROXY=1 \
+  ghcr.io/klarkxy/nekonest-server:latest
 ```
 
-Compose 不会自动创建缺失的宿主机数据路径。Linux 上 Server 会把数据根目录
-保持为 `0700`，SQLite DB/WAL/SHM 文件保持为 `0600`；若无法落实这些私有
-权限，会在监听端口前停止启动。
+用反向代理终止公网 HTTPS/WSS，并保持 8080 端口不对公网开放。Compose、
+Caddy/Nginx、备份和升级步骤见 [VPS 部署](./docs/deploy-vps.zh-CN.md)。
 
-[GitHub Releases](https://github.com/klarkxy/nekonest/releases/latest) 提供
-Linux amd64 与 arm64 的 Server 压缩包。包内已经包含同版本的
-`pwa-dist`、中英文 README、许可证和版本标记；使用预编译包不需要安装
-Node.js 或 Go 工具链。
+### 2. 安装主机 Daemon
 
-```bash
-# ARM VPS 请把 amd64 换成 arm64。
-asset=nekonest-server-linux-amd64.tar.gz
-base=https://github.com/klarkxy/nekonest/releases/latest/download
-curl -fLO "$base/$asset"
-curl -fLO "$base/checksums.txt"
-grep "  $asset$" checksums.txt | sha256sum -c -
-
-mkdir -p nekonest-server
-tar -xzf "$asset" -C nekonest-server
-cd nekonest-server
-./nekonest-server -version
-
-export NEKONEST_ADMIN_SECRET='换成足够长的随机串'
-export NEKONEST_BOOTSTRAP_TOKEN='换成另一段足够长的随机串'
-./nekonest-server -port 8080 -data ./data -pwa ./pwa-dist
-```
-
-如果要从源码构建，先安装 Go 1.22+、Node.js 和 pnpm：
-
-```bash
-git clone https://github.com/klarkxy/nekonest.git
-cd nekonest/pwa
-pnpm install --frozen-lockfile
-pnpm build
-
-cd ../server
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/server
-export NEKONEST_ADMIN_SECRET='换成足够长的随机串'
-export NEKONEST_BOOTSTRAP_TOKEN='换成另一段足够长的随机串'
-./nekonest-server -port 8080 -data ./data -pwa ../pwa/dist
-```
-
-全新数据目录会初始化为 `sealed`。只有在首次启动时明确要创建管理员选定的 open 乐园，才设置 `NEKONEST_TRANSPORT_MODE=open`；后续该变量只是断言，必须与持久化模式一致。
-
-用 Caddy 或 Nginx 把公网 HTTPS/WSS 反向代理到 `127.0.0.1:8080`。完整示例见 [docs/deploy-vps.zh-CN.md](docs/deploy-vps.zh-CN.md)。
-
-### 2. 在 Windows/Linux 安装、注册并运行 Daemon
-
-先安装并正常使用至少一个受支持的智能体 CLI，使其本地存储中存在可续写线程。
-
-Windows 使用 `nekonest-daemon-windows-amd64.zip`；Linux 使用
-`nekonest-daemon-linux-amd64.tar.gz` 或
-`nekonest-daemon-linux-arm64.tar.gz`。
+先安装并使用至少一个受支持的智能体 CLI，让 NekoNest 有原生线程可发现。
+Windows 示例：
 
 ```powershell
 $asset = "nekonest-daemon-windows-amd64.zip"
 $base = "https://github.com/klarkxy/nekonest/releases/latest/download"
 Invoke-WebRequest "$base/$asset" -OutFile $asset
 Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
-
-$line = Get-Content .\checksums.txt | Where-Object { $_.EndsWith("  $asset") }
-$expected = ($line -split '\s+')[0].ToLowerInvariant()
-$actual = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $expected) { throw "SHA-256 校验失败" }
-
+# 解压前先用 checksums.txt 校验压缩包。
 Expand-Archive $asset -DestinationPath .\nekonest-daemon -Force
 Set-Location .\nekonest-daemon
-.\nekonest-daemon.exe -version
-
 $env:NEKONEST_SERVER = "https://nekonest.example.com"
-$env:NEKONEST_BOOTSTRAP_TOKEN = "与 VPS 相同的注册令牌"
-.\nekonest-daemon.exe -register -name "书房电脑"
+$env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
+.\nekonest-daemon.exe -register -name "Study PC"
 .\nekonest-daemon.exe
 ```
 
-Linux 使用相同的校验文件和目录结构：
+安装与自启动请分别看 [Windows](./docs/deploy-windows.zh-CN.md) 或
+[Linux](./docs/deploy-linux.zh-CN.md) 指南。
 
-```bash
-# ARM 主机请把 amd64 换成 arm64。
-asset=nekonest-daemon-linux-amd64.tar.gz
-base=https://github.com/klarkxy/nekonest/releases/latest/download
-curl -fLO "$base/$asset"
-curl -fLO "$base/checksums.txt"
-grep "  $asset$" checksums.txt | sha256sum -c -
-mkdir -p nekonest-daemon
-tar -xzf "$asset" -C nekonest-daemon
-cd nekonest-daemon
-./nekonest-daemon -version
-export NEKONEST_SERVER='https://nekonest.example.com'
-export NEKONEST_BOOTSTRAP_TOKEN='与 VPS 相同的注册令牌'
-./nekonest-daemon -register -name '书房电脑'
-./nekonest-daemon
-```
+### 3. 配对手机
 
-若要从源码构建，请克隆仓库，在 `daemon/` 下运行
-`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-daemon ./cmd/daemon`。
+1. 打开 NekoNest 网址，用管理员密钥完成初始化。
+2. 选择**配对电脑**，输入 Daemon 打印的配对码。
+3. 打开**目录 → 智能体 → 线程**并发送提示词。
 
-注册成功后只会把一个稳定服务地址写入主机配置。自部署时该地址是 Standalone
-Server；托管服务即使仍在准备 placement，也继续使用同一个地址。Daemon 不再
-轮询第二个控制面，也不会接受替换用中继地址。需要新码时，Windows 运行
-`.\nekonest-daemon.exe -pair gen`，Linux 运行
-`./nekonest-daemon -pair gen`。常驻运行见
-[Windows](docs/deploy-windows.zh-CN.md) · [Linux](docs/deploy-linux.zh-CN.md)。
-
-Daemon 还会使用长期 Ed25519 身份为每次注册请求签名。托管 Cloud 只在恢复
-已撤销主机记录时强制验证该证明：保留 `identity.json`、删除已失效的
-`config.json`，再使用新的 Cloud 一次性凭证注册。若 `identity.json` 丢失，
-系统会建立新的主机身份，不会静默接管旧记录。
-
-开放的 Standalone Server 对 Cloud 完全无感知，不读取账号、订阅、席位、
-placement 或租户清单状态。托管部署在自己的授权与 placement 层之后组合相同的
-开放 Relay Core；详见 [Relay Core 边界](docs/relay-core.zh-CN.md)。
-
-### 3. 在手机上配对
-
-1. 打开 `https://nekonest.example.com`，输入 `NEKONEST_ADMIN_SECRET`。PWA 会先用 `GET /api/devices` 探针，错钥匙停在设置页。有意使用开放中继时会要求明确确认。
-2. 进入「配对电脑」，输入 Daemon 打印的 6 位配对码。
-3. 确认设备在线，按「目录 → 智能体 → 线程」进入已有线程。
-4. 发送提示词，或选择图片、TXT、Markdown、PDF、JSON 等附件后发送。
-
-验收清单：[docs/e2e-smoke.zh-CN.md](docs/e2e-smoke.zh-CN.md)。
-
-## 配置（摘要）
-
-| 变量 | 用途 |
-|---|---|
-| `NEKONEST_ADMIN_SECRET` | 管理员引导与签发手机令牌；**公网必须设置** |
-| `NEKONEST_ADMIN_SECRET_FILE` | Cloud 托管环境替代内联管理员密钥的私有文件路径 |
-| `NEKONEST_PHONE_SECRET` | 管理员密钥的弃用兼容别名 |
-| `NEKONEST_BOOTSTRAP_TOKEN` | 保护 Daemon 注册；**公网必须设置**，且应与手机密钥不同 |
-| `NEKONEST_TRANSPORT_MODE` | 可选的首次模式选择 / 后续断言；新 DB 默认 `sealed`，旧 DB 固定为 `open` |
-| `NEKONEST_ALLOWED_ORIGINS` | 浏览器来源白名单，逗号分隔 |
-| `NEKONEST_TRUST_PROXY` | 仅在反代**覆盖**转发头时设为 `1` |
-| `NEKONEST_TRUSTED_PROXY_CIDRS` | 反代不在 loopback 时声明可信网段 |
-| `NEKONEST_VAPID_*` | 可选 Web Push |
-| `NEKONEST_SERVER` | Daemon 注册时使用的 VPS 地址 |
-| `NEKONEST_LOG_FORMAT` | `text`（默认）或每行一个对象的 `json` |
-| `NEKONEST_LOG_LEVEL` | `debug`、`info`（默认）、`warn`、`error` |
-
-> [!WARNING]
-> 未设置管理员密钥时，Server 只绑定 loopback，用于本地开发。不要把未鉴权模式暴露到公网。
-
-完整 flags、`config.json`、路由与限额见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md)。信任模型见 [docs/security.zh-CN.md](docs/security.zh-CN.md)。
-
-Server 会把模式持久化到 SQLite，并通过 `/health` 暴露；PWA 在建立 WebSocket 前读取这个运行时值。已有 open 乐园继续 open。迁移到 sealed 必须执行离线备份与明文清理并重新配对；仅修改环境变量不能静默转换。
+安装后运行[验收清单](./docs/e2e-smoke.zh-CN.md)。公网 VPS 必须使用不同的
+管理员密钥与注册令牌，并阅读[安全指南](./docs/security.zh-CN.md)。
 
 ## 文档
 
-| 文档 | 用途 |
-|---|---|
-| [docs/README.zh-CN.md](docs/README.zh-CN.md) | 文档总索引（中英对照） |
-| [docs/deploy-vps.zh-CN.md](docs/deploy-vps.zh-CN.md) | Server、systemd、反代 |
-| [docs/deploy-windows.zh-CN.md](docs/deploy-windows.zh-CN.md) | Daemon 注册、常驻、开机启动 |
-| [docs/deploy-linux.zh-CN.md](docs/deploy-linux.zh-CN.md) | Linux Daemon 与 systemd 用户服务 |
-| [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md) | 环境变量、flags、限额 |
-| [docs/security.zh-CN.md](docs/security.zh-CN.md) | 密钥、信任边界、加固 |
-| [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) | 架构与投递语义 |
-| [docs/protocol.zh-CN.md](docs/protocol.zh-CN.md) | 线协议与 REST/WS |
-| [docs/development.zh-CN.md](docs/development.zh-CN.md) | 本地开发与测试 |
-| [docs/troubleshooting.zh-CN.md](docs/troubleshooting.zh-CN.md) | 常见故障 |
-| [docs/e2e-smoke.zh-CN.md](docs/e2e-smoke.zh-CN.md) | 部署验收 |
-| [docs/release.zh-CN.md](docs/release.zh-CN.md) | 维护者发版 |
-| [docs/v1-product.zh-CN.md](docs/v1-product.zh-CN.md) | 冻结 v1.0.0 目标合同 |
-| [docs/brand-art.zh-CN.md](docs/brand-art.zh-CN.md) | 品牌资源重建 |
-| [CHANGELOG.md](CHANGELOG.md) | 用户可见版本历史（英文） |
-| [docs/archive/](docs/archive/) | 历史施工快照（**非**现行合同） |
-
-English: [README.md](README.md) and `docs/*.md` short paths.
-
-贡献者与编码智能体请先读 [AGENTS.md](AGENTS.md)（英文）。
-
-## 项目结构
-
-```text
-nekonest/
-├── protocol/   # 语言无关的 JSON 协议 schema
-├── server/     # VPS：认证、配对、中转、SQLite、附件与 Web Push
-├── daemon/     # Windows/Linux：发现、历史、提示词日志与智能体进程控制
-├── pwa/        # Vue 3 + TypeScript + Pinia 移动端
-├── docs/       # 运维与贡献者文档（英文短路径 + .zh-CN 中文）
-├── CHANGELOG.md
-├── LICENSE / LICENSE_zh
-└── tools/      # 可复现的品牌资源构建工具
-```
-
-三个独立 Go module（`relaycore/`、`server/`、`daemon/`）通过根目录 Go workspace 联调，另有一个 pnpm 项目（`pwa/`）；没有根 Go module。协议类型手动维护——见 [docs/protocol.zh-CN.md](docs/protocol.zh-CN.md)。
-
-## 开发与验证
-
-```powershell
-# Server
-Set-Location server
-go test -count=1 ./...
-go vet ./...
-
-# Daemon
-Set-Location ..\daemon
-go test -count=1 ./...
-go vet ./...
-
-# PWA
-Set-Location ..\pwa
-pnpm install --frozen-lockfile
-pnpm test
-pnpm type-check
-pnpm build
-# 可选：Windows/Chromium 截图回归
-pnpm test:visual
-```
-
-本地运行示意：
-
-```text
-server:  go run ./cmd/server -port 8080 -pwa ../pwa/dist
-daemon:  go run ./cmd/daemon
-pwa:     pnpm dev
-```
-
-详见 [docs/development.zh-CN.md](docs/development.zh-CN.md)。
-
-## 当前边界（v0.2）
-
-以下为稳定产品边界，不是待办清单：
-
-- 手机主要续写原生线程。任何受支持 agent 都只有在其原生 starter 已安装/探测通过时才可提供 agent 范围的 `start_thread`；手机在首条提示词创建原生线程前仅保留本地草稿，目标只能是 daemon 当前已发现项目目录并集。
-- Codex 是唯一全控制智能体（发送、批准/拒绝、中断、转向与完整原生附件）；其余三种即使宣告原生新建能力，也仍是兼容续写适配器。
-- 新乐园默认 sealed；缺少模式元数据的旧数据库/配置一次性认定为 open。每个乐园只有一种持久化模式，禁止自动降级。
-- Kimi CLI 与 Grok Build 当前只接收附件的本地路径，读取能力取决于对应 CLI 的文件权限。
-- Web Push 需要额外配置 VAPID；未配置时不发送真实推送。
-- Daemon 支持 **Windows 与 Linux**；macOS 后续再做。
-- open 模式下 VPS 会持久化应用明文，请按敏感系统管理。
+[文档索引](./docs/README.zh-CN.md) 已将安装运维与贡献者参考分开。
+用户可见的版本历史见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 许可证
 
-本项目采用 **Star And Thank Author License (SATA) 2.0**。
-
-- 法律文本以英文 [LICENSE](LICENSE) 为准
-- 简体中文译本 [LICENSE_zh](LICENSE_zh) 仅供方便理解，不具独立法律效力
-
-使用、分发或修改本软件前，请先 star 本仓库并感谢作者。
+**Star And Thank Author License (SATA) 2.0**。英文 [LICENSE](./LICENSE)
+为准，[LICENSE_zh](./LICENSE_zh) 是便于阅读的中文翻译。

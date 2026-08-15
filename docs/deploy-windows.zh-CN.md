@@ -1,139 +1,100 @@
 > [English](./deploy-windows.md) | 简体中文
 
-# Windows Daemon 部署
+# 安装 Windows 主机 Daemon
 
-在家用 PC 上运行出站 NekoNest Daemon，使手机可续写已有智能体线程。
+Daemon 运行在保存原生编码智能体线程的电脑上，主动连接 VPS，不需要开放入站
+端口。
 
-配置参考：[configuration.zh-CN.md](./configuration.zh-CN.md)。
+## 前置条件
 
-## 前置
+- Windows amd64
+- 可访问的 NekoNest HTTPS 地址及其注册令牌
+- 至少安装并使用过一次某个受支持的智能体 CLI
 
-- 已在使用至少一个受支持 agent CLI 的 Windows PC
-- 至少已有一个原生线程，用于构成 daemon 的已发现项目集合；已安装且探测通过的 starter 之后也只能在该集合内新建线程
-- 可达的乐园地址（`https://…`）以及与 VPS 相同的 `NEKONEST_BOOTSTRAP_TOKEN`
-- 从源码构建时需要 Go 1.22+
-
-支持的智能体（摘要）：
-
-| 智能体 | 原生存储（典型） | 续写入口 | 附件 |
-|---|---|---|---|
-| Claude Code | `~/.claude/projects` | `claude --resume` | 授权临时目录；路径写入提示词 |
-| Codex | `~/.codex/sessions` | `codex exec resume` | 原生图片参数；其他文件经受限目录 + 路径 |
-| Kimi CLI | `.kimi-code`（旧 `.kimi`） | `kimi --session` | 提示词中的本地路径；受 CLI 权限约束 |
-| Grok Build | `~/.grok/sessions` | `grok --resume` | 提示词路径；非交互安全模式 |
-
-缺少某一 CLI 或空存储不影响其他智能体。
-
-## 1. 编译
+## 1. 下载并校验
 
 ```powershell
-git clone https://github.com/klarkxy/nekonest.git
-Set-Location nekonest\daemon
-$env:CGO_ENABLED = "0"
-go build -trimpath -ldflags="-s -w" -o nekonest-daemon.exe ./cmd/daemon
+$asset = "nekonest-daemon-windows-amd64.zip"
+$base = "https://github.com/klarkxy/nekonest/releases/latest/download"
+Invoke-WebRequest "$base/$asset" -OutFile $asset
+Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
+
+$line = Get-Content checksums.txt | Where-Object { $_ -match "  $([regex]::Escape($asset))$" }
+if (-not $line) { throw "Checksum entry not found" }
+$expected = ($line -split '\s+')[0].ToLowerInvariant()
+$actual = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "Checksum mismatch" }
+
+Expand-Archive $asset -DestinationPath D:\NekoNest -Force
+D:\NekoNest\nekonest-daemon.exe -version
 ```
 
-将 exe 放到稳定路径，例如 `D:\nekonest\bin\nekonest-daemon.exe`。
+把可执行文件放在稳定目录。从源码构建见
+[development.zh-CN.md](./development.zh-CN.md)。
 
-## 2. 注册到 VPS
+## 2. 注册并配对
 
 ```powershell
 $env:NEKONEST_SERVER = "https://nekonest.example.com"
-$env:NEKONEST_BOOTSTRAP_TOKEN = "与-vps-相同的-bootstrap"
-.\nekonest-daemon.exe -register -name "书房电脑"
+$env:NEKONEST_BOOTSTRAP_TOKEN = "same-bootstrap-token-as-vps"
+D:\NekoNest\nekonest-daemon.exe -register -name "Study PC"
+D:\NekoNest\nekonest-daemon.exe -doctor
 ```
 
-成功后 daemon 会：
-
-- 写入 `%USERPROFILE%\.nekonest\config.json`（`server_url`、`device_id`、`token` 等）
-- 打印 **6 位**手机配对码（短 TTL，约 5 分钟）
-
-在 PWA「配对电脑」中输入该码。
-
-之后需要新码：
+注册会把私有状态保存到 `%USERPROFILE%\.nekonest`，并打印手机配对材料。
+打开 PWA，选择**配对电脑**，输入打印的配对码。以后需要新码时运行：
 
 ```powershell
-.\nekonest-daemon.exe -pair gen
+D:\NekoNest\nekonest-daemon.exe -pair gen
 ```
 
-自定义配置路径：`-config C:\path\to\config.json`。
+正常运行不需要保留注册时使用的环境变量。
 
-## 3. 常驻运行
+## 3. 登录后自动运行
+
+先交互测试：
 
 ```powershell
-.\nekonest-daemon.exe
+D:\NekoNest\nekonest-daemon.exe
 ```
 
-日志应出现针对你的 `device_…` 的鉴权信息。同一配置路径只允许**一个**进程（`.daemon.lock`）；第二实例会退出。
-
-### 开机启动 — 任务计划程序
-
-1. 任务计划程序 → 创建基本任务  
-2. 触发器：**登录时**  
-3. 操作：启动 `D:\path\to\nekonest-daemon.exe`  
-4. 起始于：exe 所在目录  
-
-PowerShell（当前用户登录时）：
+用 Ctrl+C 停止，再注册当前用户的计划任务：
 
 ```powershell
-$exe = "D:\path\to\nekonest-daemon.exe"
+$exe = "D:\NekoNest\nekonest-daemon.exe"
 $action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory (Split-Path $exe)
 $trigger = New-ScheduledTaskTrigger -AtLogOn
-Register-ScheduledTask -TaskName "NekoNestDaemon" -Action $action -Trigger $trigger -Description "NekoNest"
+Register-ScheduledTask -TaskName "NekoNestDaemon" -Action $action -Trigger $trigger -Description "NekoNest host daemon"
+Start-ScheduledTask -TaskName "NekoNestDaemon"
 ```
 
-### 开机启动 — 启动文件夹备用
+同一份 Daemon 配置只能由一个进程使用。计划任务退出时，先检查是否还有手工
+启动的进程，不要直接修改配置。
 
-任务计划无权限时，在用户 Startup 文件夹建快捷方式：
+## 验证
 
-```text
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\
-```
+- `nekonest-daemon.exe -doctor` 没有关键配置或网络错误。
+- 手机上主机显示在线。
+- 最近的原生线程出现在对应项目与智能体下。
+- 发送短提示词后能看到流式响应。
 
-指向 `nekonest-daemon.exe`，并将“起始位置”设为 exe 目录。
+控制和附件能力取决于已安装智能体。PWA 当前启用的控制是权威结果；见
+[智能体支持](./agent-capability-matrix.zh-CN.md)。
 
-## 4. 可选：Windows Defender 排除
+## 升级与回滚
 
-仅当杀软误杀你自行构建的自托管二进制时：
+1. 停止当前 Daemon 前，先下载并校验目标版本。
+2. 备份 `%USERPROFILE%\.nekonest`，记录当前可执行文件哈希。
+3. 停止计划任务，确认没有 Daemon 进程残留。
+4. 把旧可执行文件改为唯一的回滚文件名，再将新文件放到原路径。
+5. 启动任务，运行 `-doctor`，并验证手机在线和一次真实提示词。
 
-```powershell
-# 管理员
-Add-MpPreference -ExclusionPath "D:\path\to\daemon-or-bin"
-Add-MpPreference -ExclusionProcess "nekonest-daemon.exe"
-```
+新 Daemon 无法保持连接时，停止它，恢复旧可执行文件，再启动同一计划任务。
+升级期间不要替换或编辑原生智能体存储。
 
-会扩大本机攻击面——请有意使用。
-
-## 5. 日常用法
-
-1. 在 PC 上正常使用 Claude Code / Codex / Kimi CLI / Grok Build，产生线程。
-2. Daemon 上报最近 7 天有活动的原生线程，运行/等待线程始终可见；常规 Discover 在上一轮完成约 30 秒后执行。
-3. 手机：按 **目录 → 智能体 → 线程** 打开，发送提示词或附件。  
-4. 无可识别项目目录的线程进入「**未分类**」。  
-5. 非交互 CLI 无法承载的审批须在 **PC 终端**完成。  
-
-附件限额：最多 **5** 个、每个 **4 MB**；见 [configuration.zh-CN.md](./configuration.zh-CN.md)。
-
-## 6. 升级
-
-1. 合并/推送已批准改动，并从这个确切提交构建新的 `nekonest-daemon.exe`；记录
-   SHA-256 并核验 `-version`。
-2. 读取正在运行进程的真实路径、命令行/配置路径以及启动器或计划任务；不得假定文档
-   示例路径或默认 profile 就是现状。
-3. 确认只有一个 daemon 占用该配置，停止这个 PID；放入新二进制前，把旧 EXE 移到
-   唯一回滚文件名。
-4. **保持**实际 `config.json`、prompt journal、lock 同目录文件和原生 agent 存储不变；
-   替换前后比较配置哈希。
-5. 通过原有启动器启动；若新进程不能持续运行，恢复回滚 EXE 并用同一启动器重启。
-6. 确认新 PID、部署哈希、出站 WSS 连接、Server 侧 daemon 重连及手机端**在线**，
-   再跑 [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md)。
-7. 若改动涉及发现/缓存/调度，须跨多个发现周期采样 CPU、原生存储读取吞吐、工作集与
-   句柄，并与部署前基线比较，不能只凭构建或测试成功验收。
-
-更改 `device_id` / `token` 需重新注册（新凭据）并重启进程；热更不会在进程中途切换身份。
-
-## 相关
+## 相关文档
 
 - [VPS 部署](./deploy-vps.zh-CN.md)
+- [配置](./configuration.zh-CN.md)
 - [排障](./troubleshooting.zh-CN.md)
-- [架构](./architecture.zh-CN.md)
+- [验收清单](./e2e-smoke.zh-CN.md)

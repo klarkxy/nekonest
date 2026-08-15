@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Align operator docs with current behavior: new nests default to sealed, Windows and
+  Linux hosts are first-class, and the three Go modules plus `go.work` are
+  described consistently. Linux daemon packaging no longer forces
+  `NEKONEST_TRANSPORT_MODE=open`.
+- Keep live documentation under `docs/` (plus the root landing files). Move the
+  frozen v1.0.0 target contract and unused v0.1→v1.0 migration runbook into
+  `docs/archive/`.
+- Replace the README and architecture ASCII topology with a labeled catgirl
+  illustration (`docs/images/how-it-works.*.jpg`).
+- Reorganize live docs by audience, keep only supported operator actions, and
+  make runtime capabilities, binary help, the wire schema, and release workflow
+  authoritative instead of copying version-sensitive internals into prose.
+
+### Added
+
+- Add a single Chinese Zhihu intro draft under `docs/zhihu-intro.zh-CN.md`.
+
 ## [0.2.6] - 2026-08-14
 
 ### Added
@@ -189,7 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   locale persisted in `localStorage`
 - PWA light/dark/system theme preference with CSS tokens and Naive dark theme
 - Thread list local search (summary, folder, agent)
-- v1.0.0 target product contract (`docs/v1-product.md` + zh-CN): Codex-first
+- v1.0.0 target product contract (`docs/archive/v1-product.md` + zh-CN): Codex-first
   full control, sealed E2E default, Windows+Linux hosts, frozen decisions
 - Protocol v1 scaffolding: `protocol_version` / `transport_mode` handshake,
   `sealed_payload` shape, expanded statuses (`waiting_user`, `error`),

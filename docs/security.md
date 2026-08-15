@@ -1,170 +1,95 @@
 > English | [简体中文](./security.zh-CN.md)
 
-# Security model
+# Security
 
-How NekoNest trusts components, what secrets protect which surfaces, and what operators must assume about the VPS. This is an operator guide, not a formal threat model paper.
+NekoNest is a single-operator, self-hosted bridge. It lets a phone send work to
+coding agents that already run with the host user's permissions. Treat access
+to the PWA as access to those agents and their reachable files.
 
-## Trust topology
+## Trust path
 
 ```text
-Phone PWA  ──HTTPS/WSS──►  VPS Server  ◄──outbound WSS──  Host Daemon (Win/Linux)  ──►  local agent CLIs/stores
+Phone PWA  ⇄  HTTPS/WSS  ⇄  VPS Server  ⇄  outbound daemon  ⇄  local agent CLI
 ```
 
-| Component | Trust role |
+- The host daemon initiates the connection; the home network needs no inbound
+  port.
+- The Server authenticates phones and hosts, relays traffic, and stores required
+  state.
+- Native agent stores and credentials remain on the host.
+- TLS is required on public networks in every transport mode.
+
+## Transport modes
+
+| Mode | What the VPS can read |
 |---|---|
-| **Phone** | Holds admin bootstrap secret (setup) and/or independent phone token; E2E private keys in IndexedDB |
-| **VPS** | Authenticates phone and daemons; relays WebSocket traffic; persists devices and (mode-dependent) messages/attachments |
-| **Home PC / Daemon** | Initiates outbound connection only; holds E2E identity + content keys; reads native agent stores; runs headless CLIs |
-| **Agent CLIs** | Authoritative session/history stores; execute tools with the user’s local privileges |
+| `sealed` | Routing metadata and encrypted application bodies. Prompt, response, approval, path, title, and attachment bodies are encrypted between phone and daemon. |
+| `open` | Application bodies stored or relayed by the Server are plaintext to the VPS operator. |
 
-### Transport modes (v0.2)
+New data directories default to `sealed`. One data directory has one persisted
+mode; changing an environment variable later does not convert it. Use `open`
+only when you explicitly trust the VPS with application content.
 
-| Mode | Default | VPS sees |
+Sealed mode reduces VPS exposure but does not hide connection timing, sizes,
+device/session routing identifiers, or service availability. It also does not
+protect against a compromised phone or host.
+
+## Credentials
+
+| Credential | Scope | Handling |
 |---|---|---|
-| **sealed** | Opt-in preview | Ciphertext bodies; routing metadata (device ID, session ID, timestamps, sizes, connection state). **Not** prompt/response/tool plaintext when fully sealed. |
-| **open** | Yes in v0.2 | Application plaintext — treat VPS as sensitive |
+| Admin secret | Initial administration and phone bootstrap | Long, random, distinct from every other secret; prefer a private secret file where available. |
+| Bootstrap token | New host registration | Keep off phones and rotate after suspected disclosure. |
+| Phone token and keys | One phone identity and its paired hosts | Revoke a lost phone and pair a new identity. |
+| Daemon token and identity | One registered host | Keep `~/.nekonest` private; revoke and re-register after compromise. |
+| Agent credentials | Native CLI access on the host | Never copy them to the VPS or NekoNest config. |
 
-One nest has one fixed mode; clients must match; **no** automatic sealed→open downgrade. The v1.0.0 contract changes new nests to sealed-by-default after the sealed acceptance gate is complete.
+Never commit or paste credentials, private keys, databases, attachments, native
+transcripts, or daemon config into issues or logs.
 
-Pairing trust: QR carries daemon public-key fingerprint; six-digit code alone is a lower-assurance fallback (compare fingerprint on PC screen).
+## Public deployment checklist
 
-## Product boundaries that affect security
+- [ ] HTTPS/WSS terminates at a maintained reverse proxy.
+- [ ] Only ports 80/443 are public; the NekoNest application port stays private.
+- [ ] Admin secret and bootstrap token are long, random, and different.
+- [ ] `NEKONEST_ALLOWED_ORIGINS` contains only the intended HTTPS origin.
+- [ ] `NEKONEST_TRUST_PROXY=1` is used only with a proxy that overwrites client
+      forwarding headers.
+- [ ] The Server runs as an unprivileged user or the hardened non-root container.
+- [ ] The Server data directory and secret files are private to that identity.
+- [ ] Backups are encrypted, access-controlled, and restoration-tested.
+- [ ] Daemon config and identity files are readable only by the host user.
+- [ ] Debug logging is temporary and logs are access-controlled.
+- [ ] Web Push keys are generated and stored like other service credentials.
 
-- The phone primarily **resumes** native threads. Each supported agent may advertise `start_thread` only after its native starter is installed and positively probed; targets remain limited to the daemon's **currently discovered** project directories.
-- The daemon **never requires inbound** ports on the home PC.
-- Each agent’s **native local store** is authoritative for discovery and history.
-- Codex app-server is the only full-control approval path; other agents advertise honest capability flags and native start does not imply approval or steer support.
+The supplied Compose file uses a non-root image, read-only root filesystem,
+dropped capabilities, and a private data mount. Preserve those controls when
+customizing it.
 
-## Secrets and credentials
+## Data and content
 
-| Secret | Who holds it | Protects |
-|---|---|---|
-| `NEKONEST_ADMIN_SECRET` (alias `NEKONEST_PHONE_SECRET`) | Operator | Admin bootstrap / mint phone tokens; legacy full phone access |
-| Phone token | Each phone | Day-to-day REST/WS; scoped by device grants; revocable |
-| `NEKONEST_BOOTSTRAP_TOKEN` | Operator + daemon at register time | `POST /api/devices/register` (`X-Neko-Bootstrap`) |
-| Device `token` in daemon `config.json` | Home PC only | Daemon WebSocket identity after registration |
-| Daemon `identity.json` / sealed keys | Home PC only | E2E long-term keys and content keys |
-| Pair code + QR fingerprint | Short-lived | Binding a phone to a registered device |
-| VAPID keys | Operator | Optional Web Push |
+- The Server data directory contains security-sensitive database and attachment
+  state even in sealed mode. Back it up as one unit.
+- Uploaded files and rendered Markdown are untrusted input. The PWA sanitizes
+  Markdown, but operators must still keep browsers and dependencies updated.
+- Agent tools execute on the host with the daemon user's permissions. Use a
+  dedicated OS account or restricted agent sandbox when the project requires a
+  smaller filesystem boundary.
+- A missing or unsupported control must stay disabled. Do not bypass capability
+  checks to force approval, steering, interruption, or file access.
 
-Cloud account, entitlement, placement, and regional routing policy live outside
-the public Server and Relay Core. A managed Relay resolves an authenticated
-credential to an internal tenant before selecting an Engine; clients never
-choose a raw tenant ID. Standalone registration remains protected by the local
-bootstrap token and does not contact Cloud.
+## If a credential is exposed
 
-### Rules
+1. Remove public access or stop the affected component.
+2. Revoke the affected phone or host identity where possible.
+3. Rotate the admin secret or bootstrap token as applicable and restart the
+   Server.
+4. Re-register and re-pair affected devices.
+5. Review access-controlled logs and restore only from a known-good backup.
 
-1. **Phone secret ≠ bootstrap token.** Use two independent long random strings.
-2. **Never commit** secrets, `config.json`, `data/`, attachment blobs, or native agent transcripts.
-3. **Do not log** device tokens, phone secrets, bootstrap tokens, or full prompt bodies in shared logs.
-4. Rotate phone secret and bootstrap token by coordinated redeploy; rotating device tokens means re-registering the daemon (new `config.json`).
-5. Pair codes expire quickly (~5 minutes server-side). Prefer `-pair gen` over leaving old codes around.
+## Related
 
-## Development vs public mode
-
-| Mode | When | Bind | Registration |
-|---|---|---|---|
-| **Local dev** | `NEKONEST_PHONE_SECRET` empty | Loopback only (`127.0.0.1`) | May be open if bootstrap also empty |
-| **Public** | Phone secret set | All interfaces (behind TLS proxy) | Bootstrap token **required**; without it registration is disabled |
-
-> [!WARNING]
-> Never expose unauthenticated / open-registration mode to a public interface by forcing a non-loopback bind or by proxying loopback carelessly without auth.
-
-## Authentication surfaces
-
-### Phone
-
-- REST: `Authorization: Bearer <NEKONEST_PHONE_SECRET>` or `X-Neko-Secret: <secret>`
-- WebSocket: same secret (query `secret=` supported in client flows)
-- Origin checks: when `NEKONEST_ALLOWED_ORIGINS` is set, only listed origins are accepted
-
-### Daemon registration
-
-- `POST /api/devices/register` with JSON body `{"name":"…"}` and header `X-Neko-Bootstrap: <token>` on public servers
-- Response yields `device_id` + device token stored under `%USERPROFILE%\.nekonest\config.json`
-- The daemon signs a domain-separated registration transcript with its long-term Ed25519 key. Managed Cloud requires this proof before reusing a revoked host ID; a public fingerprint or old bearer token is insufficient.
-
-### Daemon runtime
-
-- Outbound WebSocket to `/ws/daemon` authenticates with the stored device token
-- Single-instance lock on the config path reduces accidental double daemons sharing one identity
-
-### Pairing
-
-1. Daemon obtains a 6-digit code (register or `-pair gen`).
-2. Phone user enters the code while authenticated with the phone secret.
-3. Server associates the phone session with that device for listing and messaging.
-
-## Reverse proxy and client IP
-
-Rate limiting and related logic use `clientIP` helpers:
-
-- By default, **`X-Forwarded-For` is ignored** (uses the direct connection address).
-- Set `NEKONEST_TRUST_PROXY=1` **only** when the reverse proxy **overwrites** forwarded headers with the real client address (do not append untrusted client-supplied chains blindly).
-- Prefer taking a **single trusted hop** (rightmost / proxy-controlled value as implemented).
-- If the proxy is not on loopback, declare it with `NEKONEST_TRUSTED_PROXY_CIDRS`.
-
-Caddy/Nginx examples: [deploy-vps.md](./deploy-vps.md).
-
-## Attachments
-
-- Phone upload authenticated with phone secret.
-- Server enforces **4 MB** max and an allowlist of image/text/PDF/JSON MIME types.
-- Client allows at most **5** files per send.
-- Daemon downloads into a **per-run temporary directory** on Windows, then passes paths or native flags to the agent CLI.
-- Attachment bytes reside on the VPS until cleaned up by operators/process lifecycle—assume durable exposure on disk.
-
-## WebSocket and abuse controls
-
-- Message size limits on authenticated frames (on the order of a few MiB for history-heavy payloads).
-- REST bodies capped (e.g. ~1 MiB on general handlers; attachments have their own limit).
-- One concurrent reader and one writer per gorilla/websocket connection (server design).
-- Do not weaken body/frame limits without a deliberate capacity review.
-
-## Prompt delivery integrity
-
-Security-relevant delivery properties (not cryptography):
-
-- `client_msg_id` plus accepted / committed / failed states give **at-most-once** semantics across reconnects.
-- Transport success is **not** the same as agent acceptance.
-- Daemon prompt journal **fail-closes** when it cannot safely tell whether a prompt was already accepted—prefer a visible failure over silent double execution.
-
-Details: [architecture.md](./architecture.md).
-
-## Home PC surface
-
-- Daemon runs as the logged-in user and inherits that user’s access to agent stores and project directories.
-- Headless CLIs may run tools with full local privileges of that user.
-- Windows Job Objects are used so stop/interrupt can kill the process tree and avoid orphans.
-- Optional Defender exclusions are a convenience for self-hosters; they **widen** local attack surface—use only if you understand the tradeoff.
-
-## Operational hardening checklist
-
-- [ ] TLS terminated at Caddy/Nginx; HSTS as appropriate for your domain
-- [ ] `NEKONEST_PHONE_SECRET` and `NEKONEST_BOOTSTRAP_TOKEN` set, long, distinct
-- [ ] `NEKONEST_ALLOWED_ORIGINS` set to the public HTTPS origin
-- [ ] `NEKONEST_TRUST_PROXY=1` only with header-overwriting proxy config
-- [ ] systemd (or equivalent) runs as a dedicated user; Linux `data/` is `0700` and DB/WAL/SHM files are `0600`
-- [ ] Docker uses the non-root image user, read-only root filesystem, dropped capabilities, and a pre-created `0700` `/data` bind mount owned by uid/gid `10001`
-- [ ] Secrets via `EnvironmentFile` with restricted permissions, not world-readable unit files
-- [ ] Firewall: only 80/443 public; app port (e.g. 8080) localhost-only
-- [ ] Backups of `data/` encrypted and access-controlled
-- [ ] Daemon `config.json` ACL limited to the PC user
-- [ ] VAPID keys generated offline if Web Push is enabled
-- [ ] No debug builds or open registration on the public host
-- [ ] Shared operator logs contain stable identifier pseudonyms/status only—never raw identifiers, credentials, prompt/response bodies, approval/input details, attachment paths, push text, or raw CLI stderr
-
-## What NekoNest does not claim
-
-- End-to-end encryption phone ↔ PC
-- Zero-trust isolation between co-tenants on one VPS (single-operator self-host design)
-- Perfect hiding of prompts from the VPS operator
-- Phone-side sandboxing of agent tool execution (tools run on the PC)
-
-## Related docs
-
-- [Configuration](./configuration.md)
 - [VPS deploy](./deploy-vps.md)
+- [Configuration](./configuration.md)
 - [Troubleshooting](./troubleshooting.md)
-- [Protocol overview](./protocol.md)
+- [Acceptance checklist](./e2e-smoke.md)

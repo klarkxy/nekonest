@@ -1,22 +1,26 @@
 > [English](./release.md) | 简体中文
 
-# 发版流程（维护者）
+# 发版流程
 
-面向仓库维护者切割版本。日常部署见 [deploy-vps.zh-CN.md](./deploy-vps.zh-CN.md)、[deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md)。
+这是维护者发布仓库版本的清单。准确的构建、打包、容器标签和资产行为由
+`.github/workflows/release.yml` 定义；本页不重复工作流算法。
 
-## 前置
+## 前置条件
 
-- 工作树干净；未暂存密钥、本地 `data/`、原生 agent 存储或构建产物
-- [README.md](../README.md) / [README.zh-CN.md](../README.zh-CN.md) 产品边界与本版 [CHANGELOG.md](../CHANGELOG.md) 一致
-- `LICENSE` / `LICENSE_zh` 仍为 SATA 2.0；Project URL 指向本仓库
-- 文档索引仍准确（`docs/README.md` 与中文镜像）
+- 已明确授权发布 tag 与 GitHub Release
+- 工作树干净，基于预期的 `main` 提交
+- 暂存区没有密钥、本地数据、原生转录、缓存或构建产物
+- `CHANGELOG.md` 与运维文档已经描述本版本行为
+- 中英文运维文档一致
 
 ## 1. 验证
 
-仓库根目录（Windows 推荐显式命令）：
-
 ```powershell
-Set-Location server
+Set-Location relaycore
+go test -count=1 ./...
+go vet ./...
+
+Set-Location ..\server
 go test -count=1 ./...
 go vet ./...
 
@@ -32,96 +36,61 @@ pnpm build
 
 Set-Location ..
 git diff --check
+git status --short --branch
 ```
 
-行为或部署路径有变时，按 [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) 对真实链路验收。
+版本改变运行时、部署、Service Worker、重连、原生智能体或安全行为时，运行
+[验收清单](./e2e-smoke.zh-CN.md)。
 
-## 2. 变更记录与版本号
+## 2. 对齐发行身份
 
-1. 将 `[Unreleased]`（若有）整理为新版本小节并填日期  
-2. 确认 `pwa/package.json`、`server/internal/buildinfo/version.go` 与 `daemon/internal/buildinfo/version.go` 的版本均与即将打的 tag 一致（如 `0.2.0` ↔ `v0.2.0`）
-   用 `nekonest-server -version`、`nekonest-daemon -version`、PWA/Server 版本面板及每台机器卡片上的 Daemon 版本核验。
-3. 若环境变量、支持的智能体、部署步骤或验收路径有变，同步更新**中英**文档（`README.md` / `README.zh-CN.md`，`docs/*.md` / `docs/*.zh-CN.md`）  
+1. 在 `CHANGELOG.md` 增加带日期的版本小节。
+2. 在以下位置设置同一个语义版本：
+   - `pwa/package.json`
+   - `server/internal/buildinfo/version.go`
+   - `daemon/internal/buildinfo/version.go`
+3. 验证构建后的 Server、Daemon 与 PWA 报告预期版本。
+4. 审查所有受配置或部署变化影响的文档与示例。
 
-## 3. 提交、打标签并发布
+## 3. 打标签并发布
+
+审查最终提交后：
 
 ```powershell
-git status --short --branch
-# 审查 diff 后按仓库风格提交
-
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin main
 git push origin vX.Y.Z
+```
 
-# tag 会启动 .github/workflows/release.yml；等待并检查产物：
-$runId = gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId'
-gh run watch $runId --exit-status --repo klarkxy/nekonest
+tag 会启动发布工作流。等待完成后，根据工作流输出直接验证 GitHub Release、
+checksums、平台压缩包和 GHCR 镜像。不要移动已经发布的 tag。
+
+常用检查命令：
+
+```powershell
+gh run list --workflow release.yml --limit 3
 gh release view vX.Y.Z --repo klarkxy/nekonest
 ```
 
-发布工作流会重新执行全部模块门禁，确认 tag 与三处版本号一致，然后创建或
-更新 GitHub Release，包含：
+自动化失败时，修复工作流或重跑受支持的工作流路径；不要在同一 tag 下手工拼装
+另一套资产。
 
-- Server + 同版本 PWA：Linux amd64、Linux arm64
-- Daemon：Windows amd64、Linux amd64、Linux arm64
-- 覆盖以上五个压缩包的 `checksums.txt`
-- 带 SBOM/provenance 的 `ghcr.io/klarkxy/nekonest-server` 多架构镜像
+## 4. 单独部署
 
-稳定版发布 `vX.Y.Z`、`X.Y.Z`、`X.Y`、`latest`；预发布只发布精确的
-`vX.Y.Z-suffix` 与 `X.Y.Z-suffix`。精确标签不可变：同源码 revision 的重跑跳过，
-不一致则失败。容器发布会全局串行且不取消排队版本：先构建或修复两个精确标签，
-后续复制固定使用已验证 digest，再按版本推进稳定别名。别名已指向更新版本时成功
-保持不动；同版本冲突或非法元数据会失败关闭。Registry 读取会重试，只有明确的
-manifest 缺失才视为不存在。工作流退出登录后会匿名验证两个精确标签及最终稳定
-别名 digest，因此 GHCR 包必须公开。
+发布版本不会自动更新线上实例。
 
-个人账号下的 GHCR 包首次发布后可能仍是私有。此时工作流会在已发布精确镜像后，
-于匿名验证阶段按设计中止。请在 GitHub 中将该包的可见性改为 **Public**，再对同一
-不可变 tag 重跑；重跑会核验既有 digest，并安全完成别名与 Release 附件，不会重建
-或覆写该镜像。
+1. 记录线上版本并保留回滚材料。
+2. 备份 Server 数据/密钥和 Daemon 状态。
+3. 部署准确的已批准版本。
+4. 验证公网健康、主机重连、当前 PWA 与本次变更流程。
+5. 线上验收完成前保留回滚材料。
 
-Release 附件名不含版本号，因此 README 可以使用
-`releases/latest/download` 稳定链接；不可变 tag 与每个压缩包内的
-`VERSION` 文件记录版本。Server 压缩包内含 `pwa-dist`。Release 说明应链接
-README 快速开始与中英文部署文档。
+运维步骤见 [VPS](./deploy-vps.zh-CN.md)、
+[Windows](./deploy-windows.zh-CN.md) 或 [Linux](./deploy-linux.zh-CN.md)
+升级小节。
 
-若要补齐既有不可变 tag 缺失的附件，可手动运行 **Release binaries** 并填写
-该 tag。工作流会检出该 tag 的源码，同时使用所选工作流版本中的发布自动化，
-包括当前可信 Dockerfile；所有构建输入仍来自精确 tag 源码，且不会移动 tag。
-修复运行仍会校验各处版本号、构建该 tag 的 PWA 与全部五个包、
-执行同架构二进制 smoke，并发布校验和；但不会重跑可能已随 runner 环境漂移的
-旧 tag 单测，原 tag 的既有验收仍是依据。正常由 tag 触发的发布始终执行
-Server、Daemon、PWA 全部门禁。
-
-## 4. 生产更新与线上验收
-
-标签不等于已部署。
-
-发布附件本身不会更新生产环境。但对于当前配置线上猫娘乐园的运行时维护，只要任务没有
-明确限定 local-only，本地测试就不算最终验收。
-
-1. 合并并推送已批准提交；从这个确切提交重新构建 Server、PWA 与 daemon。
-2. 改文件前先读取线上 systemd unit 与 daemon 进程/启动器；部署文档示例值不代表
-   已有主机的真实配置。
-3. 核对产物哈希并建立回滚副本；保留 `/opt/nekonest/data`、Server 环境文件和
-   `%USERPROFILE%\.nekonest\config.json`。
-4. 更新 Server/PWA 与 Windows daemon，然后确认公网健康、systemd 稳定、daemon
-   重连以及当前 PWA 资源/版本。
-5. 按 [e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md) 跑此次改动路径；若修复涉及运行
-   负载，还须采集部署后 CPU/I/O/内存/句柄证据。
-
-部署不代表有权打 tag、发布 GitHub Release 或执行无关生产变更。交付时须报告部署
-提交、回滚位置以及未完成的检查。
-
-## 不要
-
-- 在含密钥或脏工作树时打 tag  
-- 未经明确决定 force-push 或移动已发布 tag  
-- 把 `docs/archive/` 当作现行产品合同  
-- 运维向行为变更时只更新一种语言  
-
-## 相关
+## 相关文档
 
 - [CHANGELOG.md](../CHANGELOG.md)
-- [开发](./development.zh-CN.md)
-- [文档索引](./README.zh-CN.md)
+- [本地开发](./development.zh-CN.md)
+- [验收清单](./e2e-smoke.zh-CN.md)

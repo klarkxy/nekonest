@@ -1,154 +1,66 @@
 > English | [简体中文](./deploy-vps.zh-CN.md)
 
-# VPS deploy (NekoNest Server)
+# Deploy the VPS Server
 
-Goal: public HTTPS + WSS so the phone PWA and home daemon can both reach the nest.
-
-Full env/flag reference: [configuration.md](./configuration.md). Security: [security.md](./security.md).
+This guide installs the Server and matching PWA with Docker Compose, keeps the
+application port private, and publishes only HTTPS/WSS through a reverse proxy.
 
 ## Prerequisites
 
-- Linux VPS (or any host you control) with a public DNS name
-- Go **1.22+** on the build machine
-- Node.js + **pnpm** to build the PWA
-- Reverse proxy with TLS (Caddy or Nginx recommended)
-- Two long random secrets: admin secret and bootstrap token (**different**)
+- A Linux VPS with Docker Compose
+- A DNS name pointing to the VPS
+- Caddy, Nginx, or another WebSocket-capable TLS proxy
+- Two different long random secrets
 
-## Docker Compose (recommended)
-
-The published image is `ghcr.io/klarkxy/nekonest-server`. It contains the
-matching PWA, runs as uid/gid `10001`, keeps the root filesystem read-only, and
-writes durable SQLite/attachment state only under `/data`.
+## 1. Prepare the deployment
 
 ```bash
 git clone https://github.com/klarkxy/nekonest.git
 cd nekonest
 cp docker.env.example .env
-# Replace every placeholder in .env.
-chmod 600 .env
-sudo install -d -m 700 -o 10001 -g 10001 data
+sudo install -d -m 700 -o 10001 -g 10001 /var/lib/nekonest
+```
+
+Edit `.env` and replace every placeholder. Add:
+
+```dotenv
+NEKONEST_DATA_DIR=/var/lib/nekonest
+# Recommended for a controlled production upgrade:
+# NEKONEST_IMAGE=ghcr.io/klarkxy/nekonest-server:vX.Y.Z
+```
+
+Use distinct values for `NEKONEST_ADMIN_SECRET` and
+`NEKONEST_BOOTSTRAP_TOKEN`. Set `NEKONEST_ALLOWED_ORIGINS` to the exact public
+HTTPS origin. Keep `.env` private.
+
+New data directories default to sealed transport. Choose open transport only
+deliberately, by setting `NEKONEST_TRANSPORT_MODE=open` before the first start.
+The stored mode cannot be switched later by editing the environment.
+
+## 2. Start and inspect
+
+```bash
 docker compose pull
 docker compose up -d
 docker compose ps
 docker compose logs -f server
 ```
 
-Compose publishes only `127.0.0.1:8080`, enables the container health check,
-and bounds Docker's `json-file` log rotation. Set `NEKONEST_DATA_DIR` before
-startup to use an existing absolute data directory. Back that directory up as
-one unit; never start the binary and container against it simultaneously.
-Compose refuses to create a missing host path. The Server enforces mode `0700`
-on the Linux data root and `0600` on SQLite DB/WAL/SHM files, and fails before
-listening if it cannot make the mounted path private.
-
-## 1. Build
+The Compose file publishes the application only on `127.0.0.1:8080`. Check it
+locally before configuring TLS:
 
 ```bash
-git clone https://github.com/klarkxy/nekonest.git
-cd nekonest
-
-cd pwa
-pnpm install --frozen-lockfile
-pnpm build
-# output: pwa/dist
-
-cd ../server
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/server
+curl -fsS http://127.0.0.1:8080/health
 ```
 
-Upload to the VPS, for example:
+The response should contain `"status":"nyan~"`.
 
-```text
-/opt/nekonest/
-  nekonest-server
-  pwa-dist/          # contents of pwa/dist
-  data/              # created at runtime; keep private
-  .env               # optional EnvironmentFile (mode 600)
-```
-
-## 2. Environment
-
-```bash
-export NEKONEST_ADMIN_SECRET='long-random-string'
-export NEKONEST_BOOTSTRAP_TOKEN='another-long-random-string'
-# New data defaults to sealed; set only to assert/choose a deliberate mode.
-# export NEKONEST_TRANSPORT_MODE='sealed'
-export NEKONEST_ALLOWED_ORIGINS='https://nekonest.example.com'
-export NEKONEST_LOG_FORMAT='json'
-export NEKONEST_LOG_LEVEL='info'
-# Behind a header-overwriting reverse proxy on this host:
-export NEKONEST_TRUST_PROXY=1
-# If the proxy is not loopback:
-# export NEKONEST_TRUSTED_PROXY_CIDRS='10.0.0.0/8'
-# Optional Web Push:
-# export NEKONEST_VAPID_PUBLIC_KEY='…'
-# export NEKONEST_VAPID_PRIVATE_KEY='…'
-# export NEKONEST_VAPID_SUBJECT='mailto:you@example.com'
-```
-
-> [!WARNING]
-> Without `NEKONEST_ADMIN_SECRET` (or its deprecated `NEKONEST_PHONE_SECRET` alias) the server binds **loopback only** (dev mode). Do not expose that mode publicly. With an admin secret set but bootstrap empty, **device registration is disabled**.
-
-Manual register probe (normally the Windows daemon does this):
-
-```bash
-curl -X POST "https://nekonest.example.com/api/devices/register" \
-  -H "Content-Type: application/json" \
-  -H "X-Neko-Bootstrap: $NEKONEST_BOOTSTRAP_TOKEN" \
-  -d '{"name":"study-pc"}'
-```
-
-## 3. systemd
-
-`/etc/systemd/system/nekonest.service`:
-
-```ini
-[Unit]
-Description=NekoNest Server
-After=network.target
-
-[Service]
-Type=simple
-User=nekonest
-Group=nekonest
-WorkingDirectory=/opt/nekonest
-EnvironmentFile=-/opt/nekonest/.env
-# Prefer EnvironmentFile for secrets. If you must inline:
-# Environment=NEKONEST_ADMIN_SECRET=…
-# Environment=NEKONEST_BOOTSTRAP_TOKEN=…
-# Environment=NEKONEST_TRANSPORT_MODE=open
-# Environment=NEKONEST_ALLOWED_ORIGINS=https://nekonest.example.com
-# Environment=NEKONEST_TRUST_PROXY=1
-ExecStart=/opt/nekonest/nekonest-server -port 8080 -data /opt/nekonest/data -pwa /opt/nekonest/pwa-dist
-Restart=on-failure
-RestartSec=3
-NoNewPrivileges=true
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo useradd --system --home /opt/nekonest --shell /usr/sbin/nologin nekonest
-sudo chown -R nekonest:nekonest /opt/nekonest
-sudo install -d -m 700 -o nekonest -g nekonest /opt/nekonest/data
-sudo chmod 600 /opt/nekonest/.env   # if used
-sudo systemctl daemon-reload
-sudo systemctl enable --now nekonest
-curl -sS http://127.0.0.1:8080/health
-# {"status":"nyan~"}
-```
-
-Keep port **8080** on localhost; only 80/443 public via the proxy.
-
-## 4. Reverse proxy
+## 3. Publish HTTPS/WSS
 
 ### Caddy
 
 ```caddy
 nekonest.example.com {
-  # Overwrite client XFF so the app sees a single trusted hop (set NEKONEST_TRUST_PROXY=1)
   reverse_proxy 127.0.0.1:8080 {
     header_up X-Forwarded-For {remote_host}
     header_up X-Real-IP {remote_host}
@@ -158,12 +70,10 @@ nekonest.example.com {
 
 ### Nginx
 
-WebSocket-capable location; **overwrite** (do not blindly append) client-supplied XFF:
-
 ```nginx
 server {
   server_name nekonest.example.com;
-  # tls termination here…
+  # Configure TLS certificates here.
 
   location / {
     proxy_pass http://127.0.0.1:8080;
@@ -179,44 +89,53 @@ server {
 }
 ```
 
-## 5. Acceptance
+`NEKONEST_TRUST_PROXY=1` is safe only when the proxy overwrites forwarded client
+headers as shown. If the proxy connects from another network, also configure
+`NEKONEST_TRUSTED_PROXY_CIDRS`.
 
-- [ ] `curl https://nekonest.example.com/health` → `nyan~`
-- [ ] Browser opens PWA; admin bootstrap secret accepted and phone identity created
-- [ ] Daemon can register with bootstrap token
-- [ ] Phone pairs and sees device **online**
-- [ ] Full path: [e2e-smoke.md](./e2e-smoke.md)
+Keep port 8080 firewalled from the public internet. Only ports 80/443 should be
+public.
 
-## 6. Upgrade
+## 4. First-use check
 
-For Docker, pull the target immutable `vX.Y.Z` tag, record its manifest digest,
-back up the bind-mounted data directory, then recreate the service and run the
-acceptance checks below. Roll back by restoring the previous image digest; only
-restore data when an explicit migration requires it.
+1. Open `https://nekonest.example.com`.
+2. Complete setup with the admin secret.
+3. Install and register a [Windows](./deploy-windows.md) or
+   [Linux](./deploy-linux.md) host daemon with the bootstrap token.
+4. Pair the host and run the [acceptance checklist](./e2e-smoke.md).
 
-1. Merge/push the approved change and build `nekonest-server` plus `pwa/dist`
-   from that exact commit. Record local SHA-256 hashes.
-2. Read the live unit before assuming paths or identity:
-   `systemctl show nekonest -p ExecStart -p WorkingDirectory -p User -p Group`.
-   Existing installs may use a different user or port than the example above.
-3. Upload to a unique staging directory, verify remote SHA-256 hashes and archive
-   integrity, and prepare unique new/rollback paths. Refuse to overwrite an
-   existing rollback path.
-4. Preserve `/opt/nekonest/data`, environment files, and attachments. Move the
-   current Server/PWA into the rollback directory before switching the staged
-   files into place.
-5. Restart `nekonest`; if restart or the live unit's loopback health endpoint
-   fails, restore both Server and PWA from the rollback directory and restart.
-6. Verify loopback and public `/health`, `systemctl is-active`, `NRestarts`, the
-   deployed hashes, current PWA asset/version, and daemon reconnect. Then run the
-   applicable [E2E smoke](./e2e-smoke.md).
+## Back up
 
-Tags are not auto-deployed; production updates are operator-driven ([release.md](./release.md)).
+The Server data directory contains the database and attachments. Back it up as
+one unit, together with the private `.env` file. A simple cold backup is:
+
+```bash
+docker compose down
+sudo tar -C /var/lib -czf "nekonest-backup-$(date +%Y%m%d-%H%M%S).tar.gz" nekonest
+docker compose up -d
+```
+
+Store backups encrypted and test restoration away from production. Do not copy
+only the SQLite file while ignoring its companion files or attachments.
+
+## Upgrade and rollback
+
+1. Read the target release notes and record the current image reference/digest.
+2. Take a backup and confirm `/health` before changing anything.
+3. Set `NEKONEST_IMAGE` to the target immutable `vX.Y.Z` image.
+4. Run `docker compose pull && docker compose up -d`.
+5. Verify local and public `/health`, logs, host reconnect, and the changed user
+   workflow.
+
+If the new container fails, restore the previous image reference and recreate
+the service. Restore data only when release notes identify a data migration that
+requires it.
+
+Building the Server from source is a contributor workflow; see
+[development.md](./development.md).
 
 ## Related
 
-- [Windows daemon deploy](./deploy-windows.md)
-- [Linux daemon deploy](./deploy-linux.md)
 - [Configuration](./configuration.md)
 - [Security](./security.md)
 - [Troubleshooting](./troubleshooting.md)

@@ -1,236 +1,101 @@
 > [English](./configuration.md) | 简体中文
 
-# 配置参考
+# 配置
 
-NekoNest v0.2.x 的环境变量、命令行 flags、配置文件与运行限额权威列表。产品边界见根目录 [README.zh-CN.md](../README.zh-CN.md)；工程不变量见 [AGENTS.md](../AGENTS.md)。
+本页只列出受支持的运维设置。参数以已安装二进制的 `-help` 输出为准；容器部署
+以 `compose.yaml` 和 `docker.env.example` 为准。
 
 ## Server
 
-二进制：`nekonest-server`（`server/cmd/server`）。
+常用参数：
 
-### Flags
-
-| Flag | 默认 | 说明 |
+| 参数 | 默认值 | 用途 |
 |---|---|---|
-| `-port` | `8080` | 监听端口 |
-| `-data` | `./data` | 数据目录（SQLite + 附件） |
-| `-pwa` | `./pwa-dist` | 已构建 PWA 静态目录 |
-| `-version` | — | 输出 Server 应用发行版本并退出 |
+| `-port` | `8080` | HTTP/WebSocket 监听端口 |
+| `-data` | `./data` | SQLite 与附件目录 |
+| `-pwa` | `./pwa-dist` | 已构建的 PWA 目录 |
+| `-version` | — | 输出应用版本 |
 
-在 POSIX 主机上，Server 会设置私有的 `0077` 进程 umask，把数据根目录保持为
-`0700`，把 SQLite DB/WAL/SHM 文件保持为 `0600`；若无法落实这些权限，会在
-打开监听端口前退出。Windows 继续依赖运行 Server 的账户 ACL；POSIX 权限位
-不能替代私有的 Windows 服务账户 ACL。
+### 公网服务鉴权
 
-### 监听地址
-
-| 管理员密钥（`NEKONEST_ADMIN_SECRET` 或兼容别名） | 绑定地址 |
+| 变量 | 用途 |
 |---|---|
-| **未设置 / 空** | 仅 `127.0.0.1:<port>`（本地开发） |
-| **已设置** | `0.0.0.0:<port>`（`:<port>`），供公网反代 |
+| `NEKONEST_ADMIN_SECRET` | 初始管理员凭据，使用长随机值。 |
+| `NEKONEST_ADMIN_SECRET_FILE` | 从私有普通文件读取管理员凭据，替代内联变量；两种形式不能同时设置。 |
+| `NEKONEST_BOOTSTRAP_TOKEN` | 授权新主机注册，必须与管理员密钥不同。 |
+| `NEKONEST_ALLOWED_ORIGINS` | 逗号分隔的浏览器来源，通常就是公网 HTTPS 地址。 |
 
-不要把未鉴权 Server 暴露到局域网或公网。
+`NEKONEST_ADMIN_SECRET` 与 `NEKONEST_ADMIN_SECRET_FILE` 二选一，另加
+注册令牌与允许来源。未配置管理员密钥时，Server 只监听 loopback，供本地开发
+使用。配置了管理员密钥但没有注册令牌时，新主机注册会被禁用。
+`NEKONEST_PHONE_SECRET` 只是已弃用的兼容别名，新部署不要使用。
 
-### 环境变量
+### 可选
 
-| 变量 | 公网是否必需 | 说明 |
-|---|---|---|
-| `NEKONEST_ADMIN_SECRET` | **是** | 首选管理员引导密钥；可直接鉴权并签发独立手机身份/令牌。 |
-| `NEKONEST_ADMIN_SECRET_FILE` | 托管运行时 | 包含管理员密钥的私有普通文件路径。不得与任何内联管理员密钥变量同时设置；非 Windows 主机会拒绝 group/other 权限。 |
-| `NEKONEST_PHONE_SECRET` | 兼容 | `NEKONEST_ADMIN_SECRET` 的单版本弃用别名。 |
-| `NEKONEST_BOOTSTRAP_TOKEN` | **是** | 保护 `POST /api/devices/register`（头 `X-Neko-Bootstrap`）。必须与管理员密钥不同。 |
-| `NEKONEST_TRANSPORT_MODE` | 否 | 首次启动可选 `open` \| `sealed`（新 DB 默认 sealed）；后续仅作为断言且必须匹配 SQLite 不可变值。无元数据旧库会持久化为 open，不能靠环境变量切换。 |
-| `NEKONEST_ALLOWED_ORIGINS` | 建议 | 逗号分隔的浏览器来源白名单。 |
-| `NEKONEST_TRUST_PROXY` | 若在反代后 | 仅当反代**覆盖** `X-Forwarded-For` / `X-Real-IP` 时设为 `1` 或 `true`。用于限流客户端 IP。 |
-| `NEKONEST_TRUSTED_PROXY_CIDRS` | 反代非 loopback | 可信反代 CIDR/IP 列表。 |
-| `NEKONEST_VAPID_PUBLIC_KEY` | 可选 | Web Push VAPID 公钥（base64url）。 |
-| `NEKONEST_VAPID_PRIVATE_KEY` | 可选 | Web Push VAPID 私钥。 |
-| `NEKONEST_VAPID_SUBJECT` | 可选 | Web Push 联系地址，如 `mailto:you@example.com`。 |
-| `NEKONEST_LOG_FORMAT` | 否 | 运维日志格式：`text`（默认）或每行一个对象的 `json`；非法值会阻止启动。 |
-| `NEKONEST_LOG_LEVEL` | 否 | 最低日志级别：`debug`、`info`（默认）、`warn`、`error`；非法值会阻止启动。 |
-
-#### Bootstrap 行为
-
-| 管理员密钥 | Bootstrap | 注册 |
-|---|---|---|
-| 已设 | 已设 | 需要 `X-Neko-Bootstrap` |
-| 已设 | 空 | 注册**禁用** |
-| 空（开发） | 空 | 注册开放（仅开发，且 loopback） |
-| 空（开发） | 已设 | 仍按服务端逻辑校验 bootstrap |
-
-### 服务端数据布局
-
-```text
-<data>/
-  nekonest.db
-  attachments/
-```
-
-将该目录视为敏感数据，备份时同等保护。
-
-### HTTP / WebSocket 面
-
-| 路径 | 作用 | 鉴权 |
-|---|---|---|
-| `GET /health` | 存活检查，并返回 `server_version`、`protocol_version` 与权威 `transport_mode` | 无 |
-| `GET /ws/phone` | 手机 WebSocket | 手机密钥 |
-| `GET /ws/daemon` | Daemon WebSocket | 注册后的设备令牌 |
-| `GET /api/devices` | 设备列表 | 手机密钥 |
-| `POST /api/devices/register` | Daemon 注册 | Bootstrap（公网） |
-| `GET /api/devices/sessions` | 设备会话 | 手机密钥 |
-| `GET /api/messages` | 消息历史 API | 手机密钥 |
-| `POST /api/attachments` | 上传附件 | 手机密钥 |
-| `GET /api/attachments/{id}` | 下载附件 | 手机密钥等（按实现） |
-| `POST /api/push/subscribe` | Web Push 订阅 | 手机密钥 |
-| `GET /api/push/vapid-public-key` | VAPID 公钥 | 手机密钥 |
-| `POST /api/pair/generate` | 签发配对码 | 设备侧流程 |
-| `POST /api/pair/consume` | 手机消费 6 位码 | 手机密钥 |
-| `/` 与 SPA 资源 | `-pwa` 存在时提供 PWA | — |
-
-消息类型详见 [protocol.zh-CN.md](./protocol.zh-CN.md)。部署见 [deploy-vps.zh-CN.md](./deploy-vps.zh-CN.md)。
-
----
-
-## Daemon（Windows/Linux）
-
-二进制：`nekonest-daemon.exe`（`daemon/cmd/daemon`）。
-
-### Flags
-
-| Flag | 说明 |
+| 变量 | 用途 |
 |---|---|
-| `-register` | 向 Server 注册本机（需要 `NEKONEST_SERVER`） |
-| `-name <string>` | 注册时的设备显示名 |
-| `-pair gen` | 为已注册设备生成新的 6 位手机配对码 |
-| `-config <path>` | 配置文件路径（默认 `%USERPROFILE%\.nekonest\config.json`） |
-| `-doctor` | 运行诊断，包括 Daemon / Server 应用版本是否一致 |
-| `-version` | 输出 Daemon 应用发行版本并退出 |
+| `NEKONEST_TRANSPORT_MODE` | 只在创建新数据目录时选择 `sealed` 或 `open`；以后必须与已保存模式一致。新数据默认 `sealed`。 |
+| `NEKONEST_TRUST_PROXY` | 仅当受信反代会覆盖客户端转发头时设为 `1`。 |
+| `NEKONEST_TRUSTED_PROXY_CIDRS` | 反代连接不来自 loopback 时，列出可信代理网段。 |
+| `NEKONEST_VAPID_PUBLIC_KEY` | Web Push 公钥。 |
+| `NEKONEST_VAPID_PRIVATE_KEY` | Web Push 私钥。 |
+| `NEKONEST_VAPID_SUBJECT` | Web Push 联系方式，例如 `mailto:operator@example.com`。 |
+| `NEKONEST_LOG_FORMAT` | `text`（默认）或 `json`。 |
+| `NEKONEST_LOG_LEVEL` | `debug`、`info`（默认）、`warn` 或 `error`。 |
 
-### 环境变量（注册时）
+Web Push 的三个 VAPID 值要么全部配置，要么保持关闭。`debug` 只用于有时间
+边界的排障。
 
-| 变量 | 何时 | 说明 |
-|---|---|---|
-| `NEKONEST_SERVER` | `-register` | 稳定服务地址，如 `https://nekonest.example.com`；注册与 `/ws/daemon` 始终使用同一 origin。 |
-| `NEKONEST_BOOTSTRAP_TOKEN` | 公网 `-register` | 与 Server 相同；以 `X-Neko-Bootstrap` 发送 |
-| `NEKONEST_TRANSPORT_MODE` | 注册 / 可选断言 | 注册时读取并持久化 Server 模式；若显式提供则必须一致。缺少字段的旧 Daemon 配置认定为 open。 |
-| `NEKONEST_LOG_FORMAT` | 每次运行 | `text`（默认）或每行一个对象的 `json`。 |
-| `NEKONEST_LOG_LEVEL` | 每次运行 | `debug`、`info`（默认）、`warn`、`error`。 |
+## 主机 Daemon
 
-注册请求包含 `registration_proof`：Daemon 使用 Ed25519 对域分离、长度前缀的
-一次性 bootstrap 凭证、OS、两把公钥、身份指纹和传输模式 transcript 签名。
-直连/自托管 Server 会安全忽略这个额外字段；托管 Cloud 在新配对凭证尝试恢复
-已撤销主机记录时强制验证，首次注册仍兼容旧版 Daemon。
+常用命令：
 
-常驻运行从配置文件读凭据，不依赖上述环境变量。
-
-Server/Daemon 只向 stdout/stderr 输出运维日志；Docker 或 journald 负责持久化与
-轮转，Windows 启动器应重定向这两个流。JSON 固定包含 `time`、`level`、
-`msg`、`component`、`event`。
-
-### 配置文件
-
-默认：`%USERPROFILE%\.nekonest\config.json`
-
-| 字段 | JSON 键 | 说明 |
-|---|---|---|
-| 服务 URL | `server_url` | Daemon WebSocket 使用的稳定服务地址（`wss://…` / `ws://…`） |
-| 设备 ID | `device_id` | 注册时分配 |
-| 令牌 | `token` | 设备鉴权令牌；**机密** |
-| 工作目录 | `work_dir` | 可选会话目录提示 |
-| 传输模式 | `transport_mode` | 注册时从 Server 得到的不可变模式；旧配置缺省表示 open |
-
-尚未发布的 `control_plane_url`、`activation_poll_path`、`relay_generation`
-配置格式不再支持；加载时会明确提示重新注册。普通 v0.2.5 自部署
-`server_url` 配置保持兼容。
-
-### 实例锁与日志
-
-| 路径 | 用途 |
+| 命令 | 用途 |
 |---|---|
-| `<config>.daemon.lock` | 单实例锁；同配置第二进程会被拒绝 |
-| 提示词 journal（配置旁、按设备） | 接受/提交状态，用于至多一次投递 |
-| 提示词 queue（配置旁、按设备） | 按会话持久 FIFO；每会话最多 20 条；重启时 running 转 paused |
+| `nekonest-daemon -register -name "Home PC"` | 注册主机并打印配对材料 |
+| `nekonest-daemon -pair gen` | 生成新的手机配对码 |
+| `nekonest-daemon -doctor` | 检查配置、Server 连通性和已安装智能体 |
+| `nekonest-daemon -config <path>` | 使用非默认配置文件 |
+| `nekonest-daemon -version` | 输出应用版本 |
 
-手机按 Web 来源钉扎已验证的传输模式：曾经使用 sealed 的来源会拒绝降级到 open；首次连接管理员明确选择的开放中继时，必须在应用内显式确认。
+注册时读取：
 
-### 配置热更
-
-Daemon 监视配置路径，变更时替换内存中的 `*Config` 快照。
-
-- 非凭据类字段可通过快照替换生效。
-- **`device_id` / `token` 在进程生命周期内固定**。更改身份类字段需要**重启**进程。
-
-### URL 规范化
-
-| 输入 | 拨号形式 |
+| 变量 | 用途 |
 |---|---|
-| `https://host` | `wss://host` |
-| `http://host` | `ws://host` |
-| `wss://` / `ws://` | 不变 |
-| 裸 `host:port` | `ws://host:port` |
+| `NEKONEST_SERVER` | 公网猫娘乐园地址，例如 `https://nekonest.example.com`。 |
+| `NEKONEST_BOOTSTRAP_TOKEN` | 与 Server 相同的注册令牌。 |
+| `NEKONEST_TRANSPORT_MODE` | 可选断言；设置后必须与 Server 一致。 |
 
-REST 使用由 ws(s) 推导的 http(s)。部署见 [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md)。
+Server 与 Daemon 都支持 `NEKONEST_LOG_FORMAT` 和 `NEKONEST_LOG_LEVEL`。
+Daemon 正常运行时使用配置文件内已经保存的凭据，注册用变量无需长期留在启动器
+中。
 
----
+## 数据与备份
 
-## PWA
-
-| 构建变量 | 默认 | 说明 |
+| 位置 | 内容 | 备份规则 |
 |---|---|---|
-| `VITE_NEKONEST_TRANSPORT_MODE` | 未设置 | 仅用于开发/构建断言。PWA 在 WebSocket 前读取 `/health.transport_mode`；若覆盖值不同，会显示错误并停止连接。 |
-| `VITE_NEKONEST_MANAGED` | 未设置 | 只有官方托管构建设为 `true`；此类构建强制要求部署期运行配置，并拒绝 open Relay。 |
+| Server 的 `-data` 目录 | 数据库与上传附件 | 停止或静默 Server 后，整体备份。 |
+| `~/.nekonest/config.json` | Server 地址与设备凭据 | 保密；Daemon 升级前备份。 |
+| `~/.nekonest/identity.json` | 主机身份密钥 | 保密；重新注册或恢复时继续保留。 |
+| Daemon 配置旁的文件 | 提示词日志、队列和实例锁 | 与配置一起保留，不要手工编辑。 |
 
-PWA 启动时以 `no-store` 从自身静态来源读取 `/runtime-config.json`。自部署
-文件为 `{}`，保持全部请求同源。托管部署提供：
+Daemon 默认目录在 Windows 是 `%USERPROFILE%\.nekonest`，Linux 是
+`~/.nekonest`。使用自定义 `-config` 时，相关身份与状态保存在该文件旁边。
+同一份配置只能由一个 Daemon 进程使用。
 
-```json
-{
-  "api_base": "https://connect.example.com",
-  "ws_base": "wss://connect.example.com",
-  "attachment_base": "https://connect.example.com",
-  "push_base": "https://connect.example.com",
-  "managed": true,
-  "handoff_exchange_path": "/api/pwa/handoff/exchange"
-}
-```
+不要手改设备 ID、令牌、传输模式、日志或队列文件。需要更换凭据时重新注册。
 
-`api_base`、`ws_base`、`attachment_base` 与 `push_base` 必须是没有凭据、路径、
-query 或 fragment 的精确 origin；后三项可省略并回退到 `api_base`。该文件不进入
-PWA 预缓存，所以 placement 变化既不会向客户端暴露后端 URL，也不要求重构 PWA。
+## 用户可见限制
 
----
-
-## 附件与客户端限额
-
-| 限额 | 值 |
-|---|---|
-| 单次最多文件数 | **5** |
-| 单文件最大 | **4 MB** |
-| 允许 MIME（服务端） | `image/jpeg`、`image/jpg`、`image/png`、`image/webp`、`image/gif`、`text/plain`、`text/markdown`、`application/pdf`、`application/json` |
-| PWA 图片最长边 | 1920 px（适用时客户端缩小） |
-| PWA 待发 outbox | 最多 40 条 |
-| 历史拉取（daemon） | 最多约 **40** 条；单条内容常截断约 **4000** rune |
-
-各智能体附件接线见 [README.zh-CN.md](../README.zh-CN.md) 与 [deploy-windows.zh-CN.md](./deploy-windows.zh-CN.md)。
-
----
-
-## 配对
-
-- 配对码为 **6 位数字**。
-- 服务端签发 TTL 约 **5 分钟**。
-- 手机在持有手机密钥的前提下消费配对 API；Daemon 在 `-register` 或 `-pair gen` 后打印配对码。
-
-## 能力与队列运行说明
-
-- NekoNest 不安装或升级任何 Agent CLI。可执行文件缺失时仍可浏览已有原生历史，但 `send`、`interrupt`、`queue`、`spawn` 会以 `cli_missing` 原因关闭。
-- queue v2 位于 Daemon 配置旁，属于敏感数据；升级前应与配置一起备份。存在活动或 blocker 项时不得直接用旧 Daemon 读取 v2 队列。
-- 本版本不配置 Claude bridge 专属能力：自包含 Bun/SDK 打包门槛未通过，因此继续使用既有 Claude CLI fallback，也不要求 Node/Bun 运行时。
+- 每次提示词最多 5 个附件，每个最多 4 MB。
+- 支持 JPEG、PNG、WebP、GIF、TXT、Markdown、PDF 和 JSON。
+- 每个智能体最终如何接收附件，仍由它当前声明的能力决定。
+- 手机只启用 Daemon 当前明确声明的控制。
 
 ## 相关文档
 
-- [安全模型](./security.zh-CN.md)
-- [架构](./architecture.zh-CN.md)
 - [VPS 部署](./deploy-vps.zh-CN.md)
-- [Windows 部署](./deploy-windows.zh-CN.md)
+- [Windows 主机](./deploy-windows.zh-CN.md)
+- [Linux 主机](./deploy-linux.zh-CN.md)
+- [安全](./security.zh-CN.md)
 - [排障](./troubleshooting.zh-CN.md)

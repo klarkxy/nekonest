@@ -54,3 +54,6 @@ _archive/
 
 # Local brand generation workspace (source PNGs / grok run logs)
 .brand-src/
+
+# Local UI exploration screenshots and scripts
+.tmp-ui-explore/

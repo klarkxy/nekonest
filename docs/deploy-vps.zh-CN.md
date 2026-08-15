@@ -1,152 +1,63 @@
 > [English](./deploy-vps.md) | 简体中文
 
-# VPS 部署（NekoNest Server）
+# 部署 VPS Server
 
-目标：公网 HTTPS + WSS，使手机 PWA 与家中 Daemon 都能连上。
+本指南用 Docker Compose 安装 Server 与匹配的 PWA，保持应用端口私有，只通过
+反向代理公开 HTTPS/WSS。
 
-完整环境变量/flags：[configuration.zh-CN.md](./configuration.zh-CN.md)。安全：[security.zh-CN.md](./security.zh-CN.md)。
+## 前置条件
 
-## 前置
+- 安装了 Docker Compose 的 Linux VPS
+- 已指向 VPS 的域名
+- Caddy、Nginx 或其他支持 WebSocket 的 TLS 反代
+- 两个不同的长随机密钥
 
-- 可控的 Linux VPS（或同类主机）与公网 DNS 名
-- 构建机 Go **1.22+**
-- Node.js + **pnpm** 构建 PWA
-- 带 TLS 的反代（推荐 Caddy 或 Nginx）
-- 两段长随机密钥：管理员密钥与 bootstrap 令牌（**必须不同**）
-
-## Docker Compose（推荐）
-
-公开镜像为 `ghcr.io/klarkxy/nekonest-server`，内含匹配 PWA，以 uid/gid
-`10001` 运行，根文件系统只读，只有 `/data` 写入 SQLite 与附件持久数据。
+## 1. 准备部署
 
 ```bash
 git clone https://github.com/klarkxy/nekonest.git
 cd nekonest
 cp docker.env.example .env
-# 替换 .env 中全部占位符。
-chmod 600 .env
-sudo install -d -m 700 -o 10001 -g 10001 data
+sudo install -d -m 700 -o 10001 -g 10001 /var/lib/nekonest
+```
+
+编辑 `.env`，替换所有占位值，并加入：
+
+```dotenv
+NEKONEST_DATA_DIR=/var/lib/nekonest
+# 生产环境受控升级建议固定版本：
+# NEKONEST_IMAGE=ghcr.io/klarkxy/nekonest-server:vX.Y.Z
+```
+
+`NEKONEST_ADMIN_SECRET` 与 `NEKONEST_BOOTSTRAP_TOKEN` 必须使用不同的
+值。`NEKONEST_ALLOWED_ORIGINS` 填准确的公网 HTTPS 来源。保护好 `.env`。
+
+新数据目录默认使用 sealed 传输。只有在明确接受 open 模式时，才在第一次启动
+前设置 `NEKONEST_TRANSPORT_MODE=open`。以后修改环境变量不能切换已保存模式。
+
+## 2. 启动并检查
+
+```bash
 docker compose pull
 docker compose up -d
 docker compose ps
 docker compose logs -f server
 ```
 
-Compose 只发布 `127.0.0.1:8080`，启用容器健康检查，并限制 Docker
-`json-file` 日志轮转。若要复用已有绝对数据目录，启动前设置
-`NEKONEST_DATA_DIR`。该目录须整体备份，禁止二进制与容器同时读取。
-Compose 不会自动创建缺失的宿主机路径。Linux 上 Server 会强制数据根目录为
-`0700`、SQLite DB/WAL/SHM 文件为 `0600`；若挂载路径无法收紧，会在监听
-端口前停止启动。
-
-## 1. 编译
+Compose 只把应用发布到 `127.0.0.1:8080`。配置 TLS 前先检查本机端点：
 
 ```bash
-git clone https://github.com/klarkxy/nekonest.git
-cd nekonest
-
-cd pwa
-pnpm install --frozen-lockfile
-pnpm build
-# 产物：pwa/dist
-
-cd ../server
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nekonest-server ./cmd/server
+curl -fsS http://127.0.0.1:8080/health
 ```
 
-上传到 VPS，例如：
+响应应包含 `"status":"nyan~"`。
 
-```text
-/opt/nekonest/
-  nekonest-server
-  pwa-dist/          # pwa/dist 内容
-  data/              # 运行时创建；保持私密
-  .env               # 可选 EnvironmentFile（权限 600）
-```
-
-## 2. 环境变量
-
-```bash
-export NEKONEST_ADMIN_SECRET='换成足够长的随机串'
-export NEKONEST_BOOTSTRAP_TOKEN='另一段足够长的随机串'
-# 新数据默认 sealed；仅在有意选择/断言模式时设置。
-# export NEKONEST_TRANSPORT_MODE='sealed'
-export NEKONEST_ALLOWED_ORIGINS='https://nekonest.example.com'
-export NEKONEST_LOG_FORMAT='json'
-export NEKONEST_LOG_LEVEL='info'
-# 本机前有覆盖转发头的反代时：
-export NEKONEST_TRUST_PROXY=1
-# 反代不在 loopback 时：
-# export NEKONEST_TRUSTED_PROXY_CIDRS='10.0.0.0/8'
-# 可选 Web Push：
-# export NEKONEST_VAPID_PUBLIC_KEY='…'
-# export NEKONEST_VAPID_PRIVATE_KEY='…'
-# export NEKONEST_VAPID_SUBJECT='mailto:you@example.com'
-```
-
-> [!WARNING]
-> 未设置 `NEKONEST_ADMIN_SECRET`（或弃用别名 `NEKONEST_PHONE_SECRET`）时 Server 只绑定 **loopback**（开发模式）。不要公网暴露。已设管理员密钥但 bootstrap 为空时，**设备注册禁用**。
-
-手动注册探测（通常由 Windows daemon 完成）：
-
-```bash
-curl -X POST "https://nekonest.example.com/api/devices/register" \
-  -H "Content-Type: application/json" \
-  -H "X-Neko-Bootstrap: $NEKONEST_BOOTSTRAP_TOKEN" \
-  -d '{"name":"书房"}'
-```
-
-## 3. systemd
-
-`/etc/systemd/system/nekonest.service`：
-
-```ini
-[Unit]
-Description=NekoNest Server
-After=network.target
-
-[Service]
-Type=simple
-User=nekonest
-Group=nekonest
-WorkingDirectory=/opt/nekonest
-EnvironmentFile=-/opt/nekonest/.env
-# 密钥优先放 EnvironmentFile。若必须内联：
-# Environment=NEKONEST_ADMIN_SECRET=…
-# Environment=NEKONEST_BOOTSTRAP_TOKEN=…
-# Environment=NEKONEST_TRANSPORT_MODE=open
-# Environment=NEKONEST_ALLOWED_ORIGINS=https://nekonest.example.com
-# Environment=NEKONEST_TRUST_PROXY=1
-ExecStart=/opt/nekonest/nekonest-server -port 8080 -data /opt/nekonest/data -pwa /opt/nekonest/pwa-dist
-Restart=on-failure
-RestartSec=3
-NoNewPrivileges=true
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo useradd --system --home /opt/nekonest --shell /usr/sbin/nologin nekonest
-sudo chown -R nekonest:nekonest /opt/nekonest
-sudo install -d -m 700 -o nekonest -g nekonest /opt/nekonest/data
-sudo chmod 600 /opt/nekonest/.env   # 若使用
-sudo systemctl daemon-reload
-sudo systemctl enable --now nekonest
-curl -sS http://127.0.0.1:8080/health
-# {"status":"nyan~"}
-```
-
-**8080** 仅本机；公网只开 80/443 经反代。
-
-## 4. 反代
+## 3. 发布 HTTPS/WSS
 
 ### Caddy
 
 ```caddy
 nekonest.example.com {
-  # 覆盖客户端 XFF，使应用看到单一可信跳（配合 NEKONEST_TRUST_PROXY=1）
   reverse_proxy 127.0.0.1:8080 {
     header_up X-Forwarded-For {remote_host}
     header_up X-Real-IP {remote_host}
@@ -156,12 +67,10 @@ nekonest.example.com {
 
 ### Nginx
 
-支持 WebSocket；**覆盖**（勿盲目追加）客户端提供的 XFF：
-
 ```nginx
 server {
   server_name nekonest.example.com;
-  # 此处终止 TLS…
+  # 在这里配置 TLS 证书。
 
   location / {
     proxy_pass http://127.0.0.1:8080;
@@ -177,40 +86,48 @@ server {
 }
 ```
 
-## 5. 验收
+只有当反代像示例一样覆盖客户端转发头时，`NEKONEST_TRUST_PROXY=1` 才安全。
+代理从其他网络连接时，还要配置 `NEKONEST_TRUSTED_PROXY_CIDRS`。
 
-- [ ] `curl https://nekonest.example.com/health` → `nyan~`
-- [ ] 浏览器打开 PWA；管理员引导密钥可用并建立手机身份
-- [ ] Daemon 可用 bootstrap 注册
-- [ ] 手机配对后设备 **online**
-- [ ] 完整路径：[e2e-smoke.zh-CN.md](./e2e-smoke.zh-CN.md)
+不要把 8080 暴露到公网。公网只开放 80/443。
 
-## 6. 升级
+## 4. 首次使用检查
 
-Docker 升级应拉取目标不可变 `vX.Y.Z` 标签并记录 manifest digest，备份绑定的
-数据目录，再重建服务并执行下方验收。回滚时恢复旧镜像 digest；只有显式迁移要求时
-才回滚数据。
+1. 打开 `https://nekonest.example.com`。
+2. 用管理员密钥完成初始化。
+3. 用注册令牌安装并注册 [Windows](./deploy-windows.zh-CN.md) 或
+   [Linux](./deploy-linux.zh-CN.md) 主机 Daemon。
+4. 配对主机并运行[验收清单](./e2e-smoke.zh-CN.md)。
 
-1. 合并/推送已批准改动，并从这个确切提交构建 `nekonest-server` 与 `pwa/dist`；
-   记录本地 SHA-256。
-2. 不得先假定路径或运行身份；先读取线上 unit：
-   `systemctl show nekonest -p ExecStart -p WorkingDirectory -p User -p Group`。
-   已有安装可能使用不同于上方示例的用户或端口。
-3. 上传到唯一暂存目录，核对远端 SHA-256 与归档完整性，并准备唯一的新路径/回滚路径；
-   若回滚路径已存在则拒绝覆盖。
-4. 保留 `/opt/nekonest/data`、环境文件和附件；切换暂存文件前，把现有 Server/PWA
-   移入回滚目录。
-5. 重启 `nekonest`；若重启或线上 unit 实际 loopback 健康端点失败，同时恢复回滚目录
-   中的 Server 与 PWA 并再次启动。
-6. 核验 loopback 与公网 `/health`、`systemctl is-active`、`NRestarts`、部署哈希、
-   当前 PWA 资源/版本和 daemon 重连，再跑适用的 [E2E 冒烟](./e2e-smoke.zh-CN.md)。
+## 备份
 
-标签不会自动部署；生产更新由运维执行（[release.zh-CN.md](./release.zh-CN.md)）。
+Server 数据目录包含数据库与附件。把它和私有 `.env` 一起备份。简单的冷备份：
 
-## 相关
+```bash
+docker compose down
+sudo tar -C /var/lib -czf "nekonest-backup-$(date +%Y%m%d-%H%M%S).tar.gz" nekonest
+docker compose up -d
+```
 
-- [Windows Daemon 部署](./deploy-windows.zh-CN.md)
-- [Linux Daemon 部署](./deploy-linux.zh-CN.md)
+加密保存备份，并在非生产环境测试恢复。不要只复制 SQLite 主文件而忽略伴随文件
+或附件。
+
+## 升级与回滚
+
+1. 阅读目标版本说明，记录当前镜像引用或 digest。
+2. 先备份，并确认升级前 `/health` 正常。
+3. 将 `NEKONEST_IMAGE` 设为目标不可变 `vX.Y.Z` 镜像。
+4. 运行 `docker compose pull && docker compose up -d`。
+5. 检查本机与公网 `/health`、日志、主机重连及本次变更的用户流程。
+
+新容器失败时，恢复原镜像引用并重建服务。只有版本说明明确涉及数据迁移时，才
+恢复数据备份。
+
+从源码构建 Server 属于贡献者流程，见
+[development.zh-CN.md](./development.zh-CN.md)。
+
+## 相关文档
+
 - [配置](./configuration.zh-CN.md)
 - [安全](./security.zh-CN.md)
 - [排障](./troubleshooting.zh-CN.md)

@@ -9,11 +9,12 @@ Type=simple
 ExecStart=%h/.local/bin/nekonest-daemon
 Restart=on-failure
 RestartSec=5
-Environment=NEKONEST_TRANSPORT_MODE=open
-# Prefer sealed once E2E message path is enabled end-to-end:
+# Leave transport mode unset so registration stores the Server's persisted mode
+# (new nests default sealed). Set this only as an assertion for a known nest:
 # Environment=NEKONEST_TRANSPORT_MODE=sealed
+# Environment=NEKONEST_TRANSPORT_MODE=open
 
-# Config defaults to ~/.nekonest/config.json (XDG may be used later).
+# Config defaults to ~/.nekonest/config.json
 # WorkingDirectory=%h
 
 [Install]
