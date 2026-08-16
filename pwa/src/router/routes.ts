@@ -1,23 +1,18 @@
 import type { RouteRecordRaw } from 'vue-router'
 import DeviceList from '../views/DeviceList.vue'
-import DeviceDetail from '../views/DeviceDetail.vue'
-import SessionDetail from '../views/SessionDetail.vue'
-import PairDevice from '../views/PairDevice.vue'
-import Setup from '../views/Setup.vue'
-import HandoffError from '../views/HandoffError.vue'
 import { deviceDetailLocation } from './navigation'
 
 export const appRoutes: RouteRecordRaw[] = [
   {
     path: '/setup',
     name: 'setup',
-    component: Setup,
+    component: () => import('../views/Setup.vue'),
     meta: { public: true }
   },
   {
     path: '/handoff-error',
     name: 'handoff-error',
-    component: HandoffError,
+    component: () => import('../views/HandoffError.vue'),
     meta: { public: true }
   },
   {
@@ -28,7 +23,7 @@ export const appRoutes: RouteRecordRaw[] = [
   {
     path: '/device/:deviceId',
     name: 'device-detail',
-    component: DeviceDetail
+    component: () => import('../views/DeviceDetail.vue')
   },
   {
     path: '/device/:deviceId/sessions',
@@ -43,12 +38,12 @@ export const appRoutes: RouteRecordRaw[] = [
   {
     path: '/device/:deviceId/session/:sessionId',
     name: 'session-detail',
-    component: SessionDetail
+    component: () => import('../views/SessionDetail.vue')
   },
   {
     path: '/pair',
     name: 'pair',
-    component: PairDevice
+    component: () => import('../views/PairDevice.vue')
   },
   {
     path: '/:pathMatch(.*)*',

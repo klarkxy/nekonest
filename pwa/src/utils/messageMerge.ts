@@ -121,6 +121,21 @@ function capMessages(messages: SessionMessage[]): SessionMessage[] {
   return messages.length > MAX_MESSAGES ? messages.slice(-MAX_MESSAGES) : messages
 }
 
+/**
+ * dedupeImportedCopies can only remove imported-flagged rows and returns the
+ * input array untouched when none exist. Live streams rarely carry imported
+ * rows, so this O(n) probe skips the O(n^2) pairwise scan on the hot path.
+ * The greedy one-to-one matching can converge further on later runs, so the
+ * scan must never be skipped when imported rows are present.
+ */
+function needsImportedDedupe(messages: SessionMessage[], incoming?: SessionMessage): boolean {
+  if (incoming?.metadata?.imported === true) return true
+  for (const m of messages) {
+    if (m.metadata?.imported === true) return true
+  }
+  return false
+}
+
 /** Insert or patch message by id (streaming). Longer content wins. */
 export function upsertMessageList(
   messages: SessionMessage[],
@@ -136,15 +151,17 @@ export function upsertMessageList(
     next = { ...next, id: mintId() }
   }
   const idx = cleanMessages.findIndex(m => m.id === next.id)
+  const dedupe = needsImportedDedupe(cleanMessages, next)
   if (idx >= 0) {
     const prev = cleanMessages[idx]
     const content =
       (next.content?.length || 0) >= (prev.content?.length || 0) ? next.content : prev.content
     const copy = [...cleanMessages]
     copy[idx] = { ...prev, ...next, content }
-    return capMessages(dedupeImportedCopies(copy))
+    return capMessages(dedupe ? dedupeImportedCopies(copy) : copy)
   }
-  return capMessages(dedupeImportedCopies([...cleanMessages, next]))
+  const appended = [...cleanMessages, next]
+  return capMessages(dedupe ? dedupeImportedCopies(appended) : appended)
 }
 
 /** Merge by stable id first, then remove source-aware one-to-one imported copies. */
@@ -154,7 +171,9 @@ export function mergeHistoryLists(
 ): SessionMessage[] {
   const cleanCurrent = withoutLegacyDiagnosticNoise(current)
   const cleanHistory = withoutLegacyDiagnosticNoise(hist)
-  if (!cleanHistory.length) return capMessages(dedupeImportedCopies(cleanCurrent))
+  if (!cleanHistory.length) {
+    return capMessages(needsImportedDedupe(cleanCurrent) ? dedupeImportedCopies(cleanCurrent) : cleanCurrent)
+  }
   const byId = new Map<string, SessionMessage>()
   for (const m of cleanHistory) {
     if (m?.id) byId.set(m.id, m)
@@ -169,5 +188,5 @@ export function mergeHistoryLists(
     }
   }
   const merged = [...byId.values()].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
-  return capMessages(dedupeImportedCopies(merged))
+  return capMessages(needsImportedDedupe(merged) ? dedupeImportedCopies(merged) : merged)
 }

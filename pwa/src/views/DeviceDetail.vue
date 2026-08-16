@@ -81,7 +81,11 @@
         class="load-pending"
         role="status"
       >
-        {{ t('deviceDetail.loadingThreads') }}
+        <span class="sr-only">{{ t('deviceDetail.loadingThreads') }}</span>
+        <div v-for="index in 3" :key="index" class="load-pending__row" aria-hidden="true">
+          <span class="neko-skeleton-line load-pending__title"></span>
+          <span class="neko-skeleton-line load-pending__meta"></span>
+        </div>
       </div>
 
       <SessionThreadList
@@ -490,8 +494,24 @@ html[data-theme='dark'] .retry-load {
 }
 
 .load-pending {
-  color: var(--neko-ink-soft);
+  display: grid;
+  gap: 14px;
+  padding: 18px 16px;
   background: var(--neko-panel);
+}
+
+.load-pending__row {
+  display: grid;
+  gap: 9px;
+}
+
+.load-pending__title {
+  width: 52%;
+}
+
+.load-pending__meta {
+  width: 74%;
+  height: 8px;
 }
 
 @media (max-width: 370px) {

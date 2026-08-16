@@ -436,8 +436,10 @@ async function copyCommand(command: string) {
   cursor: pointer;
 }
 
-.command-row button:hover {
-  background: rgba(114, 91, 157, 0.1);
+@media (hover: hover) {
+  .command-row button:hover {
+    background: rgba(114, 91, 157, 0.1);
+  }
 }
 
 @media (max-width: 340px) {

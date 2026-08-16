@@ -62,6 +62,11 @@
     <section v-if="catalogLoading" class="catalog-state" role="status">
       <strong>{{ t('session.catalogLoadingTitle') }}</strong>
       <p>{{ t('session.catalogLoadingHint') }}</p>
+      <div class="catalog-skeleton" aria-hidden="true">
+        <span class="neko-skeleton-line catalog-skeleton__line catalog-skeleton__line--user"></span>
+        <span class="neko-skeleton-line catalog-skeleton__line"></span>
+        <span class="neko-skeleton-line catalog-skeleton__line catalog-skeleton__line--short"></span>
+      </div>
     </section>
 
     <section v-else-if="hiddenOrRemoved" class="catalog-state" role="status">
@@ -202,12 +207,12 @@
       :aria-label="t('session.messagesAria')"
       tabindex="0"
     >
-      <div
-        v-for="msg in sessionStore.messages"
-        :key="msg.id"
-        class="message-bubble"
-        :class="[msg.role, msg.type]"
-      >
+      <template v-for="msg in sessionStore.messages" :key="msg.id">
+        <div
+          v-memo="[msg, deliveryStatus(msg), canRetryMessage(msg), liveThinkingId === msg.id, locale]"
+          class="message-bubble"
+          :class="[msg.role, msg.type]"
+        >
         <details
           v-if="msg.type === 'thinking'"
           class="thinking-block"
@@ -277,6 +282,13 @@
             @click="retryMessage(msg.id)"
           >{{ t('session.retry') }}</button>
         </div>
+        </div>
+      </template>
+
+      <div v-if="sessionStore.streaming" class="typing-dots" aria-hidden="true">
+        <span class="typing-dots__dot"></span>
+        <span class="typing-dots__dot"></span>
+        <span class="typing-dots__dot"></span>
       </div>
 
       <div
@@ -424,6 +436,7 @@ import { isLocalDraftSessionId, useLocalThreadsStore } from '@/stores/localThrea
 import { projectBaseName, projectDisplay, sessionActivityPresentation, shortSummary, threadDisplayTitle } from '@/utils/agent'
 import { formatRelativeActivity } from '@/utils/time'
 import { renderMarkdown, isMarkdownBubble } from '@/utils/markdown'
+import { isNearBottom, pinToBottom } from '@/utils/scroll'
 import { liveThinkingMessageId } from '@/utils/thinking'
 import { createApprovalDecisionGuard } from '@/utils/approvalDecision'
 import { bindStartOperationIfAllowed } from '@/utils/startCapabilities'
@@ -473,6 +486,8 @@ const uploading = ref(false)
 const uploadError = ref('')
 const approvalDecision = createApprovalDecisionGuard()
 const messagesRef = ref<HTMLElement>()
+/** Follow streaming output only while the user stays near the bottom. */
+const autoFollow = ref(true)
 const attachmentInputRef = ref<HTMLInputElement>()
 const pendingAtts = ref<AttachmentRef[]>([])
 /** avoid writing draft while restoring */
@@ -984,12 +999,33 @@ watch([inputText, pendingAtts], () => {
   scheduleSaveDraft()
 }, { deep: true })
 
+function onMessagesScroll() {
+  const el = messagesRef.value
+  if (el) autoFollow.value = isNearBottom(el)
+}
+
+// messages-area mounts/unmounts with the catalog gate; rebind the listener
+// and start each mount pinned so an opened thread lands on the latest turn.
+watch(messagesRef, (el, prev) => {
+  prev?.removeEventListener('scroll', onMessagesScroll)
+  el?.addEventListener('scroll', onMessagesScroll, { passive: true })
+  if (el) {
+    autoFollow.value = true
+    pinToBottom(el)
+  }
+})
+
 watch(
-  () => [sessionStore.messages.length, sessionStore.messages.map(m => m.content?.length || 0).join(',')],
+  () => {
+    const list = sessionStore.messages
+    const last = list.length ? list[list.length - 1] : undefined
+    return [list.length, last?.id ?? '', last?.content?.length ?? 0] as const
+  },
   async () => {
+    if (!autoFollow.value) return
     await nextTick()
     if (messagesRef.value) {
-      messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+      pinToBottom(messagesRef.value)
     }
   }
 )
@@ -1033,6 +1069,7 @@ function canRetryMessage(msg: SessionMessage) {
 }
 
 function retryMessage(messageId: string) {
+  autoFollow.value = true
   sessionStore.retryPrompt(messageId)
 }
 
@@ -1173,6 +1210,8 @@ async function handleSend() {
     sessionStore.lastError = t('session.sendBusyHint')
     return
   }
+  // The user's own outgoing turn always wins back the bottom.
+  autoFollow.value = true
   let prompt = inputText.value.trim()
   const mark = '\n\n[NekoNest attachments — local files on this PC]\n'
   const mi = prompt.indexOf(mark)
@@ -1741,6 +1780,50 @@ async function handleUserInputSubmit() {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
 }
+
+/* New bubbles materialize once on DOM insert; patched rows keep their
+   element, so streaming deltas never replay the animation. */
+.message-bubble {
+  animation: message-enter 0.22s ease-out;
+}
+
+@keyframes message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.typing-dots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  max-width: 86%;
+  padding: 12px 15px;
+  margin-bottom: 8px;
+  border: 1px solid var(--neko-line);
+  border-radius: 17px;
+  border-bottom-left-radius: 5px;
+  background: var(--neko-bubble-assistant);
+  box-shadow: var(--neko-shadow-soft);
+}
+
+.typing-dots__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--neko-primary);
+  animation: thinking-pulse 1.2s ease-in-out infinite;
+}
+
+.typing-dots__dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots__dot:nth-child(3) { animation-delay: 0.4s; }
 .message-bubble .system-msg { color: var(--neko-ink-faint); font-size: 12px; }
 .message-bubble .tool-call-info,
 .message-bubble .thinking-indicator {
@@ -1849,12 +1932,20 @@ async function handleUserInputSubmit() {
 .delivery-state.failed { color: var(--neko-danger-ink); }
 .message-bubble.user .delivery-state.failed { color: inherit; opacity: 0.92; }
 .retry-btn {
+  position: relative;
   border: 1px solid rgba(255, 255, 255, 0.65);
   border-radius: 999px;
   padding: 2px 8px;
   color: inherit;
   background: rgba(255, 255, 255, 0.12);
   cursor: pointer;
+}
+
+/* The pill stays visually small; the invisible overlay reaches ~44px. */
+.retry-btn::after {
+  content: '';
+  position: absolute;
+  inset: -10px -8px;
 }
 
 .empty-messages {
@@ -1897,6 +1988,27 @@ async function handleUserInputSubmit() {
   line-height: 1.6;
 }
 
+.catalog-skeleton {
+  display: grid;
+  gap: 14px;
+  width: min(320px, 80%);
+  margin: 22px auto 0;
+}
+
+.catalog-skeleton__line {
+  width: 100%;
+  height: 14px;
+}
+
+.catalog-skeleton__line--user {
+  width: 56%;
+  justify-self: end;
+}
+
+.catalog-skeleton__line--short {
+  width: 72%;
+}
+
 .prompt-queue {
   flex: 0 0 auto;
   padding: 8px 16px;
@@ -1930,6 +2042,17 @@ async function handleUserInputSubmit() {
   font: inherit;
   font-weight: 650;
   cursor: pointer;
+}
+
+/* Dense queue rows keep compact visuals but expand the touch target. */
+.queue-action {
+  position: relative;
+}
+
+.queue-action::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
 }
 .plan-mode-toggle {
   flex: 0 0 auto;
@@ -2137,8 +2260,10 @@ async function handleUserInputSubmit() {
   touch-action: manipulation;
   user-select: none;
 }
-.attachment-picker:hover:not(.disabled) {
-  background: var(--neko-primary-soft);
+@media (hover: hover) {
+  .attachment-picker:hover:not(.disabled) {
+    background: var(--neko-primary-soft);
+  }
 }
 .attachment-picker:focus-visible {
   outline: 2px solid var(--neko-primary);

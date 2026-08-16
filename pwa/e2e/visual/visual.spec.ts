@@ -300,6 +300,26 @@ test.describe('390px primary visual matrix', () => {
     await capture(page, 'session-streaming.png', false)
   })
 
+  test('transcript scroll follow', async ({ page, request }) => {
+    await openScenario(page, request, 'session-rich', sessionPath)
+    await waitForConnected(page)
+    const log = page.getByRole('log')
+    await expect(log).toBeVisible()
+    const distanceFromBottom = () =>
+      log.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)
+
+    // Opening a thread lands on the latest turn.
+    await expect.poll(distanceFromBottom).toBeLessThan(96)
+
+    // The reader's own outgoing turn always wins the bottom back,
+    // even when they had scrolled up into history.
+    await log.evaluate(el => { el.scrollTop = 0 })
+    await expect.poll(() => log.evaluate(el => el.scrollTop)).toBe(0)
+    await sendPrompt(page, '滚动跟随检查')
+    await expect(page.getByText('已收到，视觉回归状态正常。')).toBeVisible()
+    await expect.poll(distanceFromBottom).toBeLessThan(96)
+  })
+
   test('session approval', async ({ page, request }) => {
     await openScenario(page, request, 'session-approval', sessionPath)
     await expect(page.getByText('需要审批', { exact: true })).toBeVisible()

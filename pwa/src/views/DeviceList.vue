@@ -119,8 +119,8 @@
       <div v-if="deviceStore.loading && visibleDevices.length === 0" class="device-skeletons" role="status">
         <span class="sr-only">{{ t('deviceList.loadingList') }}</span>
         <div v-for="index in 2" :key="index" class="device-skeleton" aria-hidden="true">
-          <span class="skeleton-line skeleton-line--title"></span>
-          <span class="skeleton-line skeleton-line--meta"></span>
+          <span class="neko-skeleton-line skeleton-line--title"></span>
+          <span class="neko-skeleton-line skeleton-line--meta"></span>
         </div>
       </div>
 
@@ -192,6 +192,10 @@
           />
           <h3>{{ t('deviceList.emptyTitle') }}</h3>
           <p>{{ t('deviceList.emptyBody') }}</p>
+          <RouterLink class="empty-pair" :to="pairLocation()">
+            <span aria-hidden="true">＋</span>
+            {{ t('deviceList.emptyPair') }}
+          </RouterLink>
         </div>
       </div>
     </section>
@@ -896,13 +900,6 @@ function osLabel(os: string): string {
   border: 1px solid var(--neko-line);
 }
 
-.skeleton-line {
-  display: block;
-  height: 11px;
-  border-radius: 5px;
-  background: var(--neko-surface-muted);
-}
-
 .skeleton-line--title {
   width: 48%;
 }
@@ -941,6 +938,31 @@ function osLabel(os: string): string {
   color: var(--neko-ink-soft);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.empty-pair {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  margin-top: 18px;
+  padding: 0 20px;
+  border-radius: 14px;
+  color: #fff;
+  background: var(--neko-primary);
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+  box-shadow: var(--neko-shadow-soft);
+}
+
+.empty-pair:active {
+  filter: brightness(1.06);
+}
+
+html[data-theme='dark'] .empty-pair {
+  color: #1a1422;
 }
 
 .dock-pair {
