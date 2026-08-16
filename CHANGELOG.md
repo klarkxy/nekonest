@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8-rc.4] - 2026-08-16
+
+### Changed
+
+- Speed up the PWA thread view during streaming: memoize sanitized Markdown
+  rendering per message, skip re-rendering unchanged message bubbles, drop the
+  quadratic imported-copy scan from live deltas, and split secondary routes
+  into lazy chunks (entry JS roughly halved).
+- The thread transcript now follows new output only while the reader stays
+  near the bottom; scrolling up during a stream keeps the position, and the
+  reader's own outgoing turn jumps back to the latest content.
+
+### Added
+
+- Add shimmering skeleton loaders for the device thread list and the thread
+  loading wall, a typing indicator while a turn streams, and a subtle enter
+  animation for new message bubbles (disabled under reduced motion).
+- Add a "Pair now" call to action to the empty device list.
+
+### Fixed
+
+- Stop sticky hover states on the attachment picker and pairing copy buttons
+  on touch screens, and widen the retry and queue-action touch targets to
+  roughly 44 px without changing their visual size.
+
 ## [0.2.8-rc.3] - 2026-08-15
 
 ### Changed

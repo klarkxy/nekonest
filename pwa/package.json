@@ -1,7 +1,7 @@
 {
   "name": "nekonest-pwa",
   "private": true,
-  "version": "0.2.8-rc.3",
+  "version": "0.2.8-rc.4",
   "packageManager": "pnpm@10.29.2",
   "description": "猫娘乐园 - 从手机续写家里电脑上的线团",
   "license": "SATA-2.0",
