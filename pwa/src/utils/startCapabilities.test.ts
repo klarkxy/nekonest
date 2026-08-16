@@ -35,8 +35,7 @@ describe('project start capabilities', () => {
 
     expect(options).toEqual([
       { agentType: 'claude_code', enabled: true, reason: undefined },
-      { agentType: 'grok_build', enabled: false, reason: 'CLI missing' },
-      { agentType: 'zcode', enabled: true, reason: undefined }
+      { agentType: 'grok_build', enabled: false, reason: 'CLI missing' }
     ])
   })
 

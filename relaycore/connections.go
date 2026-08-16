@@ -60,6 +60,9 @@ type phonePrincipal struct {
 const (
 	phoneOutboundQueueSize = 64
 	maxPhoneOutboundBytes  = int64(8 << 20)
+	// maxPhoneConnsPerDevice bounds live phone sockets subscribed to one host.
+	// The newest connection is kept; older ones are closed.
+	maxPhoneConnsPerDevice = 8
 )
 
 func newPhoneOutbound() *phoneOutbound {
@@ -305,7 +308,9 @@ func (cm *ConnectionManager) Close() {
 	cm.mu.Lock()
 	daemons := make([]*DaemonConn, 0, len(cm.daemonConns))
 	for _, dc := range cm.daemonConns {
+		dc.mu.Lock()
 		dc.closed = true
+		dc.mu.Unlock()
 		daemons = append(daemons, dc)
 	}
 	phones := make([]*websocket.Conn, 0, len(cm.phoneOutbounds))
@@ -373,10 +378,12 @@ func (cm *ConnectionManager) AddPhoneAuthenticated(deviceID string, conn *websoc
 		out = newPhoneOutbound()
 		cm.phoneOutbounds[conn] = out
 	}
+	closeConns, stopped := cm.evictExcessPhoneConnsLocked(deviceID)
 	cm.mu.Unlock()
 	if !exists {
 		go cm.phoneWriter(conn, out)
 	}
+	finishPhoneEviction(closeConns, stopped)
 }
 
 // RemovePhone removes a phone WebSocket connection from a specific device subscription.
@@ -390,18 +397,7 @@ func (cm *ConnectionManager) RemovePhone(deviceID string, conn *websocket.Conn) 
 		cm.phoneConns[deviceID] = filtered
 	}
 	// Only drop write mutex if conn is not subscribed to any other device
-	stillUsed := false
-	for _, list := range cm.phoneConns {
-		for _, c := range list {
-			if c == conn {
-				stillUsed = true
-				break
-			}
-		}
-		if stillUsed {
-			break
-		}
-	}
+	stillUsed := cm.phoneStillSubscribedLocked(conn)
 	var stopped *phoneOutbound
 	if !stillUsed {
 		stopped = cm.phoneOutbounds[conn]
@@ -430,9 +426,54 @@ func (cm *ConnectionManager) ResubscribePhone(deviceID string, conn *websocket.C
 		out = newPhoneOutbound()
 		cm.phoneOutbounds[conn] = out
 	}
+	closeConns, stopped := cm.evictExcessPhoneConnsLocked(deviceID)
 	cm.mu.Unlock()
 	if !exists {
 		go cm.phoneWriter(conn, out)
+	}
+	finishPhoneEviction(closeConns, stopped)
+}
+
+func (cm *ConnectionManager) phoneStillSubscribedLocked(conn *websocket.Conn) bool {
+	for _, list := range cm.phoneConns {
+		for _, c := range list {
+			if c == conn {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (cm *ConnectionManager) evictExcessPhoneConnsLocked(deviceID string) (closeConns []*websocket.Conn, stopped []*phoneOutbound) {
+	for len(cm.phoneConns[deviceID]) > maxPhoneConnsPerDevice {
+		oldest := cm.phoneConns[deviceID][0]
+		rest := cm.phoneConns[deviceID][1:]
+		if len(rest) == 0 {
+			delete(cm.phoneConns, deviceID)
+		} else {
+			cm.phoneConns[deviceID] = rest
+		}
+		if !cm.phoneStillSubscribedLocked(oldest) {
+			if out := cm.phoneOutbounds[oldest]; out != nil {
+				stopped = append(stopped, out)
+			}
+			delete(cm.phoneOutbounds, oldest)
+			delete(cm.phonePrincipals, oldest)
+		}
+		closeConns = append(closeConns, oldest)
+	}
+	return closeConns, stopped
+}
+
+func finishPhoneEviction(closeConns []*websocket.Conn, stopped []*phoneOutbound) {
+	for _, out := range stopped {
+		out.close()
+	}
+	for _, conn := range closeConns {
+		if conn != nil {
+			_ = conn.Close()
+		}
 	}
 }
 
@@ -853,7 +894,6 @@ func cleanAgentStartCapabilities(in []protocol.AgentStartCapability) []protocol.
 		protocol.AgentCodex:      true,
 		protocol.AgentKimiCLI:    true,
 		protocol.AgentGrokBuild:  true,
-		protocol.AgentZCode:      true,
 		protocol.AgentCursor:     true,
 	}
 	seen := make(map[protocol.AgentType]bool, len(in))

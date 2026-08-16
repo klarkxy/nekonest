@@ -1299,6 +1299,115 @@ func TestFailedResubscribeCannotRouteCommandsToOldDevice(t *testing.T) {
 	}
 }
 
+func TestGrantedPhoneCannotResubscribeToUngrantedDevice(t *testing.T) {
+	server, httpServer, token, database := newWebSocketTestServer(t, "phone-secret")
+	if _, err := database.RegisterDevice("dev2", "Other PC"); err != nil {
+		t.Fatal(err)
+	}
+	phoneID, phoneTok, err := database.CreatePhoneIdentity("Pixel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.GrantPhoneDevice(phoneID, "dev1"); err != nil {
+		t.Fatal(err)
+	}
+	daemon := connectDaemonReady(t, server, httpServer, token)
+
+	header := http.Header{"Origin": []string{httpServer.URL}}
+	phone, _, err := websocket.DefaultDialer.Dial(
+		websocketURL(httpServer.URL, "/ws/phone?phone_token="+phoneTok),
+		header,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = phone.Close() })
+	if err := phone.WriteJSON(v1Envelope(protocol.MsgSubscribe, "dev1", map[string]any{
+		"subscription_id": "grant-sub",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var ack, snapshot, deviceList protocol.NekoMessage
+	if err := phone.ReadJSON(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.ReadJSON(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.ReadJSON(&deviceList); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Type != protocol.MsgSubscribeAck || deviceList.Type != protocol.MsgDeviceList {
+		t.Fatalf("subscribe frames: ack=%#v snapshot=%#v device_list=%#v", ack, snapshot, deviceList)
+	}
+	rawDevices, _ := json.Marshal(deviceList.Payload["devices"])
+	var devices []protocol.Device
+	if err := json.Unmarshal(rawDevices, &devices); err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].ID != "dev1" {
+		t.Fatalf("granted phone saw devices %#v", devices)
+	}
+
+	if err := phone.WriteJSON(&protocol.NekoMessage{
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgSubscribe,
+		DeviceID:        "dev2",
+		Payload:         map[string]any{"subscription_id": "grant-switch"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var switchError protocol.NekoMessage
+	if err := phone.ReadJSON(&switchError); err != nil {
+		t.Fatal(err)
+	}
+	if switchError.Type != protocol.MsgError ||
+		stringPayload(switchError.Payload, "message") != "forbidden" {
+		t.Fatalf("ungranted switch response: %#v", switchError)
+	}
+
+	if err := phone.WriteJSON(&protocol.NekoMessage{
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		TransportMode:   protocol.TransportOpen,
+		Type:            protocol.MsgSendPrompt,
+		DeviceID:        "dev2",
+		SessionID:       "session-1",
+		Payload: map[string]any{
+			"prompt":        "must not reach ungranted device",
+			"client_msg_id": "local_ungranted",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var routeError protocol.NekoMessage
+	if err := phone.ReadJSON(&routeError); err != nil {
+		t.Fatal(err)
+	}
+	if routeError.Type != protocol.MsgError ||
+		stringPayload(routeError.Payload, "message") != "device_id does not match subscription" {
+		t.Fatalf("ungranted prompt response: %#v", routeError)
+	}
+
+	daemonResult := make(chan protocol.NekoMessage, 1)
+	daemonErr := make(chan error, 1)
+	go func() {
+		var msg protocol.NekoMessage
+		if err := daemon.ReadJSON(&msg); err != nil {
+			daemonErr <- err
+			return
+		}
+		daemonResult <- msg
+	}()
+	select {
+	case msg := <-daemonResult:
+		t.Fatalf("ungranted prompt reached daemon: %#v", msg)
+	case err := <-daemonErr:
+		t.Fatalf("daemon read: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestSessionSnapshotIncludesAgentStartCapabilitiesAndRelaysStartAgent(t *testing.T) {
 	server, httpServer, token, _ := newWebSocketTestServer(t, "phone-secret")
 	daemon := connectDaemonReady(t, server, httpServer, token)

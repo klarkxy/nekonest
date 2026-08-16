@@ -260,11 +260,14 @@ func TestRateLimiter(t *testing.T) {
 			t.Fatalf("unexpected rejection for %s", key)
 		}
 	}
-	if bounded.allow("e") {
-		t.Fatal("new spoofed key should be rejected at capacity")
+	if !bounded.allow("e") {
+		t.Fatal("new key should evict the oldest entry at capacity")
 	}
 	if len(bounded.requests) != 4 {
 		t.Fatalf("map grew beyond cap: %d", len(bounded.requests))
+	}
+	if _, ok := bounded.requests["e"]; !ok {
+		t.Fatal("new key was not admitted")
 	}
 }
 

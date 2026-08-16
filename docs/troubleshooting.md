@@ -128,7 +128,8 @@ is unavailable, the current app-server probe did not confirm the required API.
 ## Web Push does not arrive
 
 - Configure all three VAPID variables on the Server.
-- Use HTTPS and grant browser notification permission.
+- Use HTTPS and grant browser notification permission. iOS Safari only
+  prompts after you tap **Enable notifications** on the workspace page.
 - Reopen the PWA and recreate the subscription after rotating VAPID keys.
 - Push is optional; verify the in-app workflow separately.
 

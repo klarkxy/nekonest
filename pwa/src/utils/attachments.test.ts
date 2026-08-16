@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isImageMime, pickAndUpload, prepareFile, uploadAttachment } from './attachments'
+import { isImageMime, pickAndUpload, prepareFile, safeAttachmentURL, uploadAttachment } from './attachments'
 import { setPhoneToken, setRouteHandle } from '@/api/http'
 import { setRuntimeConfigForTests } from '@/config/runtimeEndpoint'
 
@@ -8,6 +8,17 @@ afterEach(() => {
   vi.restoreAllMocks()
   setRuntimeConfigForTests(undefined)
   localStorage.clear()
+})
+
+describe('safeAttachmentURL', () => {
+  it('rejects javascript and cross-origin URLs', () => {
+    setRuntimeConfigForTests({ attachment_base: 'https://nest.example' })
+    expect(safeAttachmentURL('javascript:alert(1)')).toBe('')
+    expect(safeAttachmentURL('https://evil.example/steal')).toBe('')
+    expect(safeAttachmentURL('https://nest.example/api/attachments/abc?k=1')).toBe(
+      'https://nest.example/api/attachments/abc?k=1'
+    )
+  })
 })
 
 describe('isImageMime', () => {

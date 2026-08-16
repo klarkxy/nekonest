@@ -77,13 +77,9 @@ func (a *ZCodeAdapter) StartNativeThread(ctx context.Context, request ThreadStar
 	if !a.IsAvailable() {
 		return ThreadStartResult{}, fmt.Errorf("%s", agentexec.ZCodeUnavailableReason)
 	}
-	startedAt := time.Now().Add(-2 * time.Second)
 	nativeID, created, promptAccepted, err := a.commander.StartThread(
 		ctx, request.ProjectDir, request.Prompt, request.Attachments, request.OnComplete,
 	)
-	if strings.TrimSpace(nativeID) == "" {
-		nativeID = a.newestSessionInDir(request.ProjectDir, startedAt)
-	}
 	return ThreadStartResult{
 		SessionID:      publicSessionID(AgentZCode, nativeID),
 		Created:        created,

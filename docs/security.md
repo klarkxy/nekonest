@@ -23,7 +23,7 @@ Phone PWA  ⇄  HTTPS/WSS  ⇄  VPS Server  ⇄  outbound daemon  ⇄  local age
 
 | Mode | What the VPS can read |
 |---|---|
-| `sealed` | Routing metadata and encrypted application bodies. Prompt, response, approval, path, title, and attachment bodies are encrypted between phone and daemon. |
+| `sealed` | Routing metadata and encrypted application bodies. Prompt, response, approval, path, and title are encrypted between phone and daemon. Attachment bytes still transit the VPS as opaque blobs (no MIME sniffing in sealed mode); they are not yet end-to-end encrypted. |
 | `open` | Application bodies stored or relayed by the Server are plaintext to the VPS operator. |
 
 New data directories default to `sealed`. One data directory has one persisted

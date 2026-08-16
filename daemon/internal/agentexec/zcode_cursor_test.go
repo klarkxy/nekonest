@@ -228,9 +228,9 @@ func TestZcodeStartFailsWhenProcessExitsWithoutAck(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	started := time.Now()
-	_, _, accepted, err := zcode.StartThread(ctx, root, "ping", nil, nil)
-	if accepted || err == nil || !strings.Contains(err.Error(), "Model config is missing") {
-		t.Fatalf("start = accepted=%v err=%v", accepted, err)
+	_, created, accepted, err := zcode.StartThread(ctx, root, "ping", nil, nil)
+	if created || accepted || err == nil || !strings.Contains(err.Error(), "initial prompt was not confirmed") {
+		t.Fatalf("start = created=%v accepted=%v err=%v", created, accepted, err)
 	}
 	if time.Since(started) > 5*time.Second {
 		t.Fatalf("start waited too long: %s", time.Since(started))

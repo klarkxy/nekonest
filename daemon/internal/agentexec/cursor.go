@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nekonest/daemon/internal/attach"
 	"github.com/nekonest/daemon/internal/opslog"
 )
@@ -147,7 +148,7 @@ func (c *CursorCommander) StartThread(ctx context.Context, workDir, prompt strin
 	var idMu sync.Mutex
 	var lastDiag string
 	var diagMu sync.Mutex
-	placeholder := cursorStartPlaceholder
+	placeholder := cursorStartPlaceholder + "-" + uuid.NewString()
 	wrappedComplete := func() {
 		exitOnce.Do(func() { close(exited) })
 		if onComplete != nil {
@@ -176,7 +177,7 @@ func (c *CursorCommander) StartThread(ctx context.Context, workDir, prompt strin
 		if cursorPromptAcknowledged(line) {
 			ackOnce.Do(func() { ack <- struct{}{} })
 		}
-	}); err != nil {
+	}, true); err != nil {
 		return "", false, false, err
 	}
 	return waitPromptAck(ctx, ack, exited, &nativeID, &idMu, "Cursor", func() string {
@@ -233,7 +234,23 @@ func (c *CursorCommander) SendPromptInDir(
 	attachments []attach.LocalFile,
 	onComplete func(),
 ) error {
-	return c.startPromptInDir(sessionID, cursorResumeArgs(sessionID, prompt, workDir, attachments), workDir, onComplete, nil)
+	return c.startPromptInDir(sessionID, cursorResumeArgs(sessionID, prompt, workDir, attachments), workDir, onComplete, nil, false)
+}
+
+func (c *CursorCommander) rekeyExecutor(from, to string) {
+	if from == "" || to == "" || from == to {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ex, ok := c.executors[from]; ok {
+		delete(c.executors, from)
+		c.executors[to] = ex
+	}
+	if st, ok := c.streams[from]; ok {
+		delete(c.streams, from)
+		c.streams[to] = st
+	}
 }
 
 func (c *CursorCommander) startPromptInDir(
@@ -242,6 +259,7 @@ func (c *CursorCommander) startPromptInDir(
 	workDir string,
 	onComplete func(),
 	onOutput func(source, line string),
+	allowRekey bool,
 ) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -258,39 +276,47 @@ func (c *CursorCommander) startPromptInDir(
 		textID:    fmt.Sprintf("cursor_%s_text_%d", sessionID, now),
 		thoughtID: fmt.Sprintf("cursor_%s_thought_%d", sessionID, now),
 	}
-	placeholder := sessionID == cursorStartPlaceholder
+	liveID := sessionID
 	executor := NewAgentExecutor("cursor", sessionID)
 	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {
 		if onOutput != nil {
 			onOutput(source, line)
 		}
-		if placeholder || diagnostics.suppress("cursor", sessionID, source, line) {
+		if allowRekey && source == "stdout" {
+			if id := cursorSessionIDFromLine(line); id != "" && id != liveID {
+				c.rekeyExecutor(liveID, id)
+				liveID = id
+			}
+		}
+		if diagnostics.suppress("cursor", liveID, source, line) {
 			return
 		}
-		c.handleProcessLine(sessionID, source, line)
+		c.handleProcessLine(liveID, source, line)
 	}
 	executor.OnExit = func(exitCode int) {
 		defer completePrompt(onComplete)
-		if !placeholder {
-			c.flushStream(sessionID)
-			opslog.Info("daemon.agentexec", "process_exited", "agent process exited", "agent_type", "cursor", "session_id", sessionID, "status", exitCode)
-			if message := diagnostics.exitFailure(
-				"Cursor",
-				exitCode,
-				executor.WasIntentionallyStopped(),
-			); message != "" && c.OnAgentOutput != nil {
-				c.OnAgentOutput(sessionID, "error", message, "")
-			}
+		c.flushStream(liveID)
+		opslog.Info("daemon.agentexec", "process_exited", "agent process exited", "agent_type", "cursor", "session_id", liveID, "status", exitCode)
+		if message := diagnostics.exitFailure(
+			"Cursor",
+			exitCode,
+			executor.WasIntentionallyStopped(),
+		); message != "" && c.OnAgentOutput != nil {
+			c.OnAgentOutput(liveID, "error", message, "")
 		}
 		c.mu.Lock()
+		if cur, ok := c.executors[liveID]; ok && cur == executor {
+			delete(c.executors, liveID)
+			delete(c.streams, liveID)
+		}
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {
 			delete(c.executors, sessionID)
 			delete(c.streams, sessionID)
 		}
 		c.mu.Unlock()
-		if !placeholder && c.OnTurnEnd != nil {
-			c.OnTurnEnd(sessionID, exitCode, executor.WasIntentionallyStopped())
+		if c.OnTurnEnd != nil {
+			c.OnTurnEnd(liveID, exitCode, executor.WasIntentionallyStopped())
 		}
 	}
 

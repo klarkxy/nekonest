@@ -6,15 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"time"
 )
 
-func generateToken() string {
+func generateToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%x", time.Now().UnixNano())
+		return "", fmt.Errorf("generate token: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 func hashToken(token string) string {

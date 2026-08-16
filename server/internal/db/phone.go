@@ -31,8 +31,15 @@ func (db *DB) CreatePhoneIdentity(name string) (phoneID, token string, err error
 	if name == "" {
 		name = "Phone"
 	}
-	token = generateToken()
-	phoneID = "phone_" + generateToken()[:16]
+	token, err = generateToken()
+	if err != nil {
+		return "", "", err
+	}
+	idPart, err := generateToken()
+	if err != nil {
+		return "", "", err
+	}
+	phoneID = "phone_" + idPart[:16]
 	now := time.Now().Unix()
 	_, err = db.conn.Exec(
 		`INSERT INTO phone_identities (id, name, token_hash, ed25519_public, x25519_public, created_at, last_seen, revoked_at)

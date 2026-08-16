@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klarkxy/nekonest/relaycore/protocol"
@@ -99,7 +101,7 @@ func (s *Server) handleAttachmentUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	mime := hdr.Header.Get("Content-Type")
-	if mime == "" || mime == "application/octet-stream" {
+	if s.TransportMode() != protocol.TransportSealed && (mime == "" || mime == "application/octet-stream") {
 		mime = http.DetectContentType(data)
 	}
 	mime = strings.ToLower(strings.TrimSpace(strings.Split(mime, ";")[0]))
@@ -167,7 +169,7 @@ func (s *Server) handleAttachmentUpload(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-	go pruneAttachments(dir, 7*24*time.Hour, 2000)
+	scheduleAttachmentPrune(dir)
 	diskPath := filepath.Join(dir, id+ext)
 	if err := os.WriteFile(diskPath, data, 0o600); err != nil {
 		http.Error(w, "write failed", http.StatusInternalServerError)
@@ -217,7 +219,7 @@ func (s *Server) handleAttachmentGet(w http.ResponseWriter, r *http.Request, id 
 			WriteAPIError(w, stableError(protocol.ServiceErrorPhoneCredentialInvalid, "attachment credential invalid", false, http.StatusUnauthorized))
 			return
 		}
-		w.Header().Set("Content-Type", meta.MIME)
+		writeAttachmentSecurityHeaders(w, meta.MIME, meta.Name)
 		w.Header().Set("Cache-Control", "private, max-age=86400")
 		_, _ = io.Copy(w, body)
 		return
@@ -264,11 +266,7 @@ func (s *Server) handleAttachmentGet(w http.ResponseWriter, r *http.Request, id 
 	}
 	defer f.Close()
 
-	if meta.MIME != "" {
-		w.Header().Set("Content-Type", meta.MIME)
-	}
-	dispName := strings.ReplaceAll(meta.Name, `"`, "")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, dispName))
+	writeAttachmentSecurityHeaders(w, meta.MIME, meta.Name)
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	http.ServeContent(w, r, meta.Name, time.Unix(meta.Created, 0), f)
 }
@@ -359,6 +357,36 @@ func subtleConstEq(a, b string) bool {
 	return v == 0
 }
 
+func writeAttachmentSecurityHeaders(w http.ResponseWriter, mime, name string) {
+	if mime != "" {
+		w.Header().Set("Content-Type", mime)
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	dispName := strings.ReplaceAll(name, `"`, "")
+	disposition := "attachment"
+	if strings.HasPrefix(strings.ToLower(mime), "image/") {
+		disposition = "inline"
+	}
+	if dispName != "" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, dispName))
+	} else {
+		w.Header().Set("Content-Disposition", disposition)
+	}
+}
+
+var attachmentPruneMu sync.Mutex
+
+func scheduleAttachmentPrune(dir string) {
+	go func() {
+		if !attachmentPruneMu.TryLock() {
+			return
+		}
+		defer attachmentPruneMu.Unlock()
+		pruneAttachments(dir, 7*24*time.Hour, 2000)
+	}()
+}
+
 // pruneAttachments deletes meta+payload pairs older than maxAge, and trims
 // oldest files when more than maxFiles metas exist.
 func pruneAttachments(dir string, maxAge time.Duration, maxFiles int) {
@@ -401,14 +429,9 @@ func pruneAttachments(dir string, maxAge time.Duration, maxFiles int) {
 	if maxFiles <= 0 || len(items) <= maxFiles {
 		return
 	}
-	// Sort oldest first
-	for i := 0; i < len(items); i++ {
-		for j := i + 1; j < len(items); j++ {
-			if items[j].mod.Before(items[i].mod) {
-				items[i], items[j] = items[j], items[i]
-			}
-		}
-	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].mod.Before(items[j].mod)
+	})
 	drop := len(items) - maxFiles
 	for i := 0; i < drop; i++ {
 		removeAttachmentPair(dir, items[i].id)

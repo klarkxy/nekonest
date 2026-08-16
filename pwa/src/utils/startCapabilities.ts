@@ -61,6 +61,7 @@ export function projectStartOptions(
 
   if (catalog !== null && catalog !== undefined) {
     return KNOWN_AGENT_TYPES.flatMap(agentType => {
+      if (agentType === 'zcode') return []
       const cap = catalog.find(entry => entry.agent_type === agentType)
       if (!cap) return []
       if (isInstallGatedAgent(agentType) && !cap.available) return []

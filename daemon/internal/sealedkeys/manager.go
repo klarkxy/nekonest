@@ -212,11 +212,26 @@ func (m *Manager) SealSession(sessionID, senderID, recipientID string, aad seale
 	return sealed.SealWire(key, epoch, "session", senderID, recipientID, seq, aad, plaintext)
 }
 
-// OpenSession decrypts a session-scoped sealed payload.
+// OpenSession decrypts a session-scoped sealed payload. Unknown session IDs
+// do not mint a new key; only SealSession / WrapSessionForPhone may create one.
 func (m *Manager) OpenSession(sessionID string, wire *sealed.WireSealed, aad sealed.AADFields) ([]byte, error) {
-	key, _, err := m.SessionKey(sessionID)
-	if err != nil {
-		return nil, err
+	if wire != nil && wire.KeyScope != "session" {
+		return nil, fmt.Errorf("session key scope mismatch")
+	}
+	m.mu.Lock()
+	sk, ok := m.sessions[sessionID]
+	var key []byte
+	var epoch uint64
+	if ok {
+		key = append([]byte(nil), sk.Key...)
+		epoch = sk.Epoch
+	}
+	m.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("unknown session key")
+	}
+	if wire != nil && wire.Epoch != epoch {
+		return nil, fmt.Errorf("session key epoch mismatch")
 	}
 	return sealed.OpenWire(key, wire, aad)
 }

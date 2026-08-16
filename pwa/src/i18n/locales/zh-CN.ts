@@ -172,7 +172,9 @@ export default {
     startThreadFailed: '创建 {agent} 线团失败',
     startThreadNeedProject: '缺少项目目录，无法创建。',
     startThreadUnavailable: '该 agent 或项目已不在当前可新建范围内。',
-    startPromptUnconfirmed: '原生线程已创建，但首条提示词未确认。内容已保留在输入框，请先核对原生历史再决定是否重发。'
+    startPromptUnconfirmed: '原生线程已创建，但首条提示词未确认。内容已保留在输入框，请先核对原生历史再决定是否重发。',
+    enableNotifications: '开启通知',
+    notificationsBlocked: '浏览器已禁止通知，请在系统设置里允许。'
   },
   threadList: {
     showArchived: '显示已收起',
@@ -281,6 +283,7 @@ export default {
     userInputKeyUnavailable: '缺少密封会话密钥，回答没有发送。',
     interruptUnavailable: '当前会话不支持中断',
     sendUnavailable: '当前主机只能浏览这个已保存会话，不能继续发送',
+    startTimeout: '主机没有在时限内确认新线团，草稿已保留。',
     attachmentUnavailable: '当前 Agent 控制路径不支持附件',
     queueSkip: '跳过阻塞项',
     queueBlockedWarning: '上一条提示可能已越过 Agent 边界，系统绝不会自动重放。',

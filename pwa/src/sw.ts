@@ -69,9 +69,22 @@ self.addEventListener('push', (event) => {
   )
 })
 
+function safeNotificationURL(raw: string | undefined): string {
+  const value = String(raw || '').trim() || '/'
+  try {
+    const parsed = new URL(value, self.location.origin)
+    if (parsed.origin !== self.location.origin) {
+      return '/'
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/'
+  } catch {
+    return '/'
+  }
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const url = (event.notification.data as { url?: string } | undefined)?.url || '/'
+  const url = safeNotificationURL((event.notification.data as { url?: string } | undefined)?.url)
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {

@@ -2,6 +2,8 @@ package relaycore
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -298,6 +300,70 @@ func TestConnectionManagerPhoneSubscribe(t *testing.T) {
 	// SafeWrite without registration is no-op
 	cm.SafeWritePhone(p1, protocol.NewMessage(protocol.MsgHeartbeat, "x"))
 	cm.BroadcastToPhones("nobody", protocol.NewMessage(protocol.MsgHeartbeat, "nobody"))
+}
+
+func TestPhoneConnectionCapEvictsOldest(t *testing.T) {
+	cm := NewConnectionManager(stubStore{})
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	accepted := make(chan *websocket.Conn, maxPhoneConnsPerDevice+2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		accepted <- c
+		go func() {
+			for {
+				if _, _, err := c.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}()
+	}))
+	t.Cleanup(srv.Close)
+
+	var clients []*websocket.Conn
+	var servers []*websocket.Conn
+	for i := 0; i < maxPhoneConnsPerDevice+1; i++ {
+		client, _, err := websocket.DefaultDialer.Dial("ws"+srv.URL[len("http"):], nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clients = append(clients, client)
+		select {
+		case server := <-accepted:
+			servers = append(servers, server)
+			cm.AddPhone("devCap", server)
+		case <-time.After(2 * time.Second):
+			t.Fatal("accept timeout")
+		}
+	}
+	t.Cleanup(func() {
+		for _, c := range clients {
+			_ = c.Close()
+		}
+	})
+
+	if n, _ := cm.PhoneSubscriptionCounts("devCap"); n != maxPhoneConnsPerDevice {
+		t.Fatalf("phones=%d want %d", n, maxPhoneConnsPerDevice)
+	}
+	cm.mu.RLock()
+	kept := append([]*websocket.Conn(nil), cm.phoneConns["devCap"]...)
+	cm.mu.RUnlock()
+	for _, c := range kept {
+		if c == servers[0] {
+			t.Fatal("oldest phone connection was not evicted")
+		}
+	}
+	foundNewest := false
+	for _, c := range kept {
+		if c == servers[len(servers)-1] {
+			foundNewest = true
+		}
+	}
+	if !foundNewest {
+		t.Fatal("newest phone connection was evicted")
+	}
 }
 
 func TestUpdateSessionsConvenience(t *testing.T) {

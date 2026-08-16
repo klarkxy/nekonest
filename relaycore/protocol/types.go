@@ -543,7 +543,7 @@ func ValidateFrameForTransport(msg *NekoMessage, mode TransportMode) error {
 	}
 	switch mode {
 	case TransportSealed:
-		if msg.Type == MsgThreadIndeterminate && msg.ClientMsgID != "" && msg.Payload == nil && msg.SealedPayload == nil {
+		if isSealedFailClosedRouting(msg) {
 			return nil
 		}
 		if policy == MessageBodyApplication && msg.SealedPayload == nil {
@@ -557,6 +557,21 @@ func ValidateFrameForTransport(msg *NekoMessage, mode TransportMode) error {
 		return fmt.Errorf("%s: invalid negotiated transport mode", ErrCodeTransportModeMismatch)
 	}
 	return nil
+}
+
+// isSealedFailClosedRouting allows the relay to emit terminal failure frames
+// without application plaintext. ClientMsgID / Outcome / RetryAllowed stay on
+// the envelope; payload and sealed_payload must both be absent.
+func isSealedFailClosedRouting(msg *NekoMessage) bool {
+	if msg == nil || strings.TrimSpace(msg.ClientMsgID) == "" || msg.Payload != nil || msg.SealedPayload != nil {
+		return false
+	}
+	switch msg.Type {
+	case MsgPromptFailed, MsgThreadFailed, MsgThreadIndeterminate:
+		return true
+	default:
+		return false
+	}
 }
 
 // NewMessage creates a new NekoMessage with the current timestamp.

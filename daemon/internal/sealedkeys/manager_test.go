@@ -78,3 +78,26 @@ func TestManagerCatalogAndSession(t *testing.T) {
 		t.Fatalf("catalog open = %q, %v", catalogPlain, err)
 	}
 }
+
+func TestOpenSessionDoesNotMintUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	m, err := LoadOrCreate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.OpenSession("never-sealed", &sealed.WireSealed{KeyScope: "session", Epoch: 1}, sealed.AADFields{
+		ProtocolVersion: "1.0",
+		TransportMode:   "sealed",
+		Type:            "send_prompt",
+		DeviceID:        "dev",
+		SessionID:       "never-sealed",
+		KeyScope:        "session",
+		KeyEpoch:        1,
+	})
+	if err == nil {
+		t.Fatal("unknown session minted a key")
+	}
+	if _, ok := m.sessions["never-sealed"]; ok {
+		t.Fatal("unknown session persisted a key")
+	}
+}

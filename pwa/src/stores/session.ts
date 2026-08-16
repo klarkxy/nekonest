@@ -632,6 +632,23 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
 
+  function pruneOtherDeviceState(deviceId: string) {
+    const prefix = `${deviceId}::`
+    for (const key of [...inbox.keys()]) {
+      if (!key.startsWith(prefix)) inbox.delete(key)
+    }
+    const nextQueues: Record<string, PromptQueueState> = {}
+    for (const [key, value] of Object.entries(promptQueues.value)) {
+      if (key.startsWith(prefix)) nextQueues[key] = value
+    }
+    promptQueues.value = nextQueues
+    const nextOps = { ...startOps.value }
+    for (const [operationId, op] of Object.entries(nextOps)) {
+      if (op.deviceId !== deviceId) delete nextOps[operationId]
+    }
+    startOps.value = nextOps
+  }
+
   function subscribeDevice(deviceId: string) {
     const ws = nekoWS()
     if (activeDeviceId !== deviceId) {
@@ -643,6 +660,7 @@ export const useSessionStore = defineStore('sessions', () => {
       // A catalog from the previous device cannot authorize controls or history
       // on the next device, including legacy sessions without device_id.
       setCurrentSession(null)
+      pruneOtherDeviceState(deviceId)
       activeDeviceId = deviceId
     }
     ws.onStatusChange(HANDLER_ID, (s) => {
@@ -1074,9 +1092,23 @@ export const useSessionStore = defineStore('sessions', () => {
     ws.subscribe(deviceId, forceRefresh ? { force: true } : undefined)
   }
 
-  function applySessionList(payload: SessionListPayload, deviceId: string, producerVersion?: string) {
+  function applySessionList(
+    payload: SessionListPayload,
+    deviceId: string,
+    producerVersion?: string,
+    source: 'ws' | 'rest' = 'ws'
+  ) {
+    const incoming = payload.sessions || []
+    if (
+      source === 'rest' &&
+      incoming.length === 0 &&
+      sessions.value.length > 0 &&
+      (catalogDeviceId.value == null || catalogDeviceId.value === deviceId)
+    ) {
+      return
+    }
     catalogProducerVersion.value = producerVersion || null
-    sessions.value = (payload.sessions || []).map(session =>
+    sessions.value = incoming.map(session =>
       normalizeSessionCapabilities(session, producerVersion)
     ).filter(
       (s): s is AgentSession => !!s && s.agent_type !== 'kilo' && (!s.device_id || s.device_id === deviceId)
@@ -1580,7 +1612,7 @@ export const useSessionStore = defineStore('sessions', () => {
     return ok
   }
 
-  function steer(deviceId: string, sessionId: string, text: string): boolean {
+  async function steer(deviceId: string, sessionId: string, text: string): Promise<boolean> {
     lastError.value = null
     const trimmed = text.trim()
     if (!trimmed) {
@@ -1591,9 +1623,35 @@ export const useSessionStore = defineStore('sessions', () => {
 	  lastError.value = tGlobal('session.controlUnavailable')
 	  return false
 	}
-    const ok = sendApplicationCommand('steer', deviceId, sessionId, { text: trimmed })
-    if (!ok) lastError.value = tGlobal('errors.channelSteer')
-    return ok
+    const payload = { text: trimmed }
+    const timestamp = Math.floor(Date.now() / 1000)
+    if (nestTransportMode() === 'sealed') {
+      let sealed: Awaited<ReturnType<typeof encryptSessionPayload>> = null
+      try {
+        sealed = await encryptSessionPayload(
+          deviceId, sessionId, getPhoneId() || 'phone', 'steer', payload,
+          undefined, timestamp, nekoWS().getProtocolVersion()
+        )
+      } catch {
+        // Treat local crypto failures as definitive so the composer can retry.
+      }
+      if (!sealed) {
+        lastError.value = tGlobal('session.queueKeyUnavailable')
+        return false
+      }
+      const sent = nekoWS().send({
+        type: 'steer', device_id: deviceId, session_id: sessionId,
+        timestamp, sealed_payload: sealed
+      })
+      if (!sent) lastError.value = tGlobal('errors.channelSteer')
+      return sent
+    }
+    const sent = nekoWS().send({
+      type: 'steer', device_id: deviceId, session_id: sessionId,
+      timestamp, payload
+    })
+    if (!sent) lastError.value = tGlobal('errors.channelSteer')
+    return sent
   }
 
   function sendQueueControl(

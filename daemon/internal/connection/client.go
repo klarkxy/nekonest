@@ -23,6 +23,7 @@ const (
 	maxReconnectDelay  = 60 * time.Second
 	writeTimeout       = 10 * time.Second
 	readCloseTimeout   = 3 * time.Second
+	pongWait           = 90 * time.Second
 	maxRemoteErrorBody = 64 << 10
 )
 
@@ -355,6 +356,10 @@ func (c *Client) Connect() error {
 		onConnect := c.onConnect
 		c.mu.Unlock()
 		c.dispatchMu.Unlock()
+		if err := armConnectionLiveness(conn); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("liveness: %w", err)
+		}
 		if oldConn != nil && oldConn != conn {
 			_ = oldConn.Close()
 		}
@@ -548,6 +553,15 @@ func (c *Client) StartHeartbeat(ctx context.Context) {
 					continue
 				}
 				opslog.Error("daemon.connection", "heartbeat_failed", "heartbeat send failed", err, "device_id", deviceID, "generation", generation)
+				c.closeForReconnect()
+				continue
+			}
+			if err := c.sendPing(); err != nil {
+				if errors.Is(err, ErrEndpointPaused) {
+					continue
+				}
+				opslog.Error("daemon.connection", "ping_failed", "websocket ping failed", err, "device_id", deviceID, "generation", generation)
+				c.closeForReconnect()
 			}
 		case <-ctx.Done():
 			opslog.Info("daemon.connection", "heartbeat_stopped", "heartbeat stopped")
@@ -670,10 +684,6 @@ func (c *Client) waitForReconnect(ctx context.Context) bool {
 	generation := c.generation
 	c.mu.Unlock()
 
-	if !serviceRetry && attempt > maxReconnects {
-		opslog.Error("daemon.connection", "reconnect_exhausted", "maximum generic reconnection attempts reached", nil, "device_id", deviceID, "generation", generation, "count", maxReconnects)
-		return false
-	}
 	delay := time.Duration(attempt) * 5 * time.Second
 	if retryAfter > delay {
 		delay = retryAfter
@@ -694,6 +704,44 @@ func (c *Client) waitForReconnect(ctx context.Context) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+func armConnectionLiveness(conn *websocket.Conn) error {
+	if conn == nil {
+		return fmt.Errorf("connection required")
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		return err
+	}
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
+	conn.SetPingHandler(func(appData string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeTimeout))
+	})
+	return nil
+}
+
+func (c *Client) sendPing() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.endpointActive {
+		return ErrEndpointPaused
+	}
+	if c.conn == nil {
+		return fmt.Errorf("not connected")
+	}
+	return c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeTimeout))
+}
+
+func (c *Client) closeForReconnect() {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
 	}
 }
 

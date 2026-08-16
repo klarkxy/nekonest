@@ -86,7 +86,13 @@ func (c *threadStartCoordinator) Handle(parent context.Context, command threadSt
 	}
 	agentType := command.AgentType
 	if agentType == "" {
-		agentType = adapters.AgentCodex
+		emit(threadStartEvent{
+			OperationID: command.OperationID,
+			AgentType:   "",
+			State:       startjournal.StatusFailed,
+			Message:     "invalid agent_type",
+		})
+		return
 	}
 	normalizedDir, err := normalizeProjectDir(command.ProjectDir)
 	if err != nil {
@@ -398,7 +404,7 @@ func safeOwnsSession(adapter adapters.Adapter, sessionID string) (owned bool) {
 func parseStartAgentType(value string) (adapters.AgentType, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return adapters.AgentCodex, true
+		return "", false
 	}
 	for _, agentType := range supportedStartAgents {
 		if value == string(agentType) {
@@ -562,11 +568,15 @@ func resolveCurrentProjectDir(requested string, discovered []string) (string, er
 	return "", errors.New("directory not in currently discovered projects")
 }
 
-func snapshotProjectDirs(mu *sync.Mutex, sessions map[string]*adapters.SessionInfo) []string {
+func snapshotProjectDirs(mu *sync.Mutex, sessions *map[string]*adapters.SessionInfo) []string {
 	mu.Lock()
 	defer mu.Unlock()
-	dirs := make([]string, 0, len(sessions))
-	for _, session := range sessions {
+	current := map[string]*adapters.SessionInfo{}
+	if sessions != nil && *sessions != nil {
+		current = *sessions
+	}
+	dirs := make([]string, 0, len(current))
+	for _, session := range current {
 		if session != nil && strings.TrimSpace(session.ProjectDir) != "" {
 			dirs = append(dirs, session.ProjectDir)
 		}
@@ -841,7 +851,9 @@ func startCapabilityEntry(agentType adapters.AgentType, capability adapters.Thre
 	entry["spawn"] = capability.Available
 	entry["control_path"] = capability.ControlPath
 	entry["control_version"] = capability.ControlVersion
-	entry["attachment_mode"] = string(capability.AttachmentMode)
+	if capability.AttachmentMode != "" {
+		entry["attachment_mode"] = string(capability.AttachmentMode)
+	}
 	if !capability.Available {
 		reason := strings.TrimSpace(capability.Reason)
 		if reason == "" {

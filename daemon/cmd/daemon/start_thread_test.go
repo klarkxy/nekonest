@@ -473,8 +473,8 @@ func TestProjectDirNormalizationWindowsAndPOSIX(t *testing.T) {
 	}
 }
 
-func TestParseStartAgentTypeDefaultsOnlyMissingToCodex(t *testing.T) {
-	if got, ok := parseStartAgentType(""); !ok || got != adapters.AgentCodex {
+func TestParseStartAgentTypeRejectsMissingAndUnknown(t *testing.T) {
+	if got, ok := parseStartAgentType(""); ok || got != "" {
 		t.Fatalf("missing agent = %q, %v", got, ok)
 	}
 	if got, ok := parseStartAgentType("unknown"); ok || got != "" {

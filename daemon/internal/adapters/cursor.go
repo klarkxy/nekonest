@@ -65,6 +65,13 @@ func (a *CursorAdapter) IsAvailable() bool {
 	return a.commander != nil && a.commander.IsAvailable()
 }
 
+func (a *CursorAdapter) UnavailableReason() string {
+	if a.IsAvailable() {
+		return ""
+	}
+	return "Cursor Agent CLI (cursor-agent) not found"
+}
+
 func (a *CursorAdapter) ProbeThreadStart(ctx context.Context) ThreadStartCapability {
 	if a.commander == nil {
 		return ThreadStartCapability{Reason: "Cursor commander is unavailable"}
@@ -79,13 +86,9 @@ func (a *CursorAdapter) StartNativeThread(ctx context.Context, request ThreadSta
 	if a.commander == nil {
 		return ThreadStartResult{}, fmt.Errorf("Cursor commander is unavailable")
 	}
-	startedAt := time.Now().Add(-2 * time.Second)
 	nativeID, created, promptAccepted, err := a.commander.StartThread(
 		ctx, request.ProjectDir, request.Prompt, request.Attachments, request.OnComplete,
 	)
-	if strings.TrimSpace(nativeID) == "" {
-		nativeID = a.newestSessionInDir(request.ProjectDir, startedAt)
-	}
 	return ThreadStartResult{
 		SessionID:      publicSessionID(AgentCursor, nativeID),
 		Created:        created,
@@ -146,6 +149,9 @@ func (a *CursorAdapter) discoverCursorChats(now time.Time, records map[string]cu
 			return nil
 		}
 		sessionDir := filepath.Dir(path)
+		if info, infoErr := entry.Info(); infoErr == nil && info.ModTime().Before(recentSessionCutoff(now)) {
+			return nil
+		}
 		nativeID := filepath.Base(sessionDir)
 		if !looksLikeCursorNativeID(nativeID) {
 			return nil
@@ -213,6 +219,13 @@ func (a *CursorAdapter) mergeCursorTranscript(
 	sessions *[]*SessionInfo,
 	nativeID, jsonl, projectDir string,
 ) {
+	info, err := os.Stat(jsonl)
+	if err != nil {
+		return
+	}
+	if info.ModTime().Before(recentSessionCutoff(now)) && records[nativeID].nativeID == "" {
+		return
+	}
 	if rec, ok := records[nativeID]; ok {
 		if rec.transcriptPath == "" {
 			rec.transcriptPath = jsonl
@@ -226,11 +239,18 @@ func (a *CursorAdapter) mergeCursorTranscript(
 				}
 			}
 		}
+		if (rec.title == "" || rec.title == nativeID) && !info.ModTime().Before(recentSessionCutoff(now)) {
+			if title := cursorSummaryFromHistory(readCursorJSONL(jsonl, nativeID, info.ModTime()), nativeID); title != "" && title != nativeID {
+				rec.title = title
+				publicID := publicSessionID(AgentCursor, nativeID)
+				for _, session := range *sessions {
+					if session.ID == publicID && (session.Summary == "" || session.Summary == nativeID) {
+						session.Summary = title
+					}
+				}
+			}
+		}
 		records[nativeID] = rec
-		return
-	}
-	info, err := os.Stat(jsonl)
-	if err != nil {
 		return
 	}
 	updated := info.ModTime()
@@ -428,9 +448,9 @@ func (a *CursorAdapter) readCursorStoreHistory(storePath, nativeID string, fallb
 		return nil
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT id, data FROM blobs`)
+	rows, err := db.Query(`SELECT id, data FROM blobs ORDER BY rowid`)
 	if err != nil {
-		rows, err = db.Query(`SELECT key, value FROM blobs`)
+		rows, err = db.Query(`SELECT key, value FROM blobs ORDER BY rowid`)
 		if err != nil {
 			return nil
 		}
@@ -469,6 +489,9 @@ func (a *CursorAdapter) readCursorStoreHistory(storePath, nativeID string, fallb
 			Type:      "text",
 			Timestamp: timestamp.Unix(),
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil
 	}
 	sortHistoryMessages(messages)
 	return messages
@@ -554,16 +577,17 @@ func cursorCollapsedTitle(text string) string {
 func cursorTaggedText(text, tag string) string {
 	open := "<" + tag + ">"
 	close := "</" + tag + ">"
-	start := strings.Index(strings.ToLower(text), open)
+	lower := strings.ToLower(text)
+	start := strings.Index(lower, open)
 	if start < 0 {
 		return ""
 	}
 	start += len(open)
-	end := strings.Index(strings.ToLower(text[start:]), close)
+	end := strings.Index(lower[start:], close)
 	if end < 0 {
 		return ""
 	}
-	return strings.TrimSpace(text[start : start+end])
+	return strings.TrimSpace(lower[start : start+end])
 }
 
 func readCursorJSONL(path, nativeID string, fallback time.Time) []*HistoryMessage {
@@ -653,6 +677,10 @@ func (a *CursorAdapter) SendPrompt(sessionID string, request PromptRequest) erro
 	if err != nil {
 		a.turns.abort(sessionID, request.Generation)
 		return err
+	}
+	if strings.TrimSpace(record.projectDir) == "" {
+		a.turns.abort(sessionID, request.Generation)
+		return fmt.Errorf("cursor session has no resolved project directory")
 	}
 	err = a.commander.SendPromptInDir(nativeID, request.Prompt, record.projectDir, request.Attachments, request.OnComplete)
 	if err != nil {

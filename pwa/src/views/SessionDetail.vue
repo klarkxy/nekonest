@@ -32,7 +32,7 @@
           class="interrupt-btn"
           :disabled="sessionStore.wsStatus !== 'connected' || !interruptSupported"
           :title="interruptSupported ? undefined : capabilityUnavailableText('interrupt', 'session.interruptUnavailable')"
-          :aria-label="t('session.interruptAria')"
+          :aria-label="interruptSupported ? t('session.interruptAria') : capabilityUnavailableText('interrupt', 'session.interruptUnavailable')"
           @click="handleInterrupt"
         >{{ t('session.interrupt') }}</button>
       </div>
@@ -376,7 +376,7 @@
         role="button"
         :tabindex="attachmentControlsDisabled ? -1 : 0"
         :aria-disabled="attachmentControlsDisabled"
-        :aria-label="t('session.attachAria')"
+        :aria-label="attachmentPickerTitle"
         :title="attachmentPickerTitle"
         @keydown.enter.prevent="openAttachmentPicker"
         @keydown.space.prevent="openAttachmentPicker"
@@ -443,6 +443,7 @@ import { bindStartOperationIfAllowed } from '@/utils/startCapabilities'
 import {
   pickAndUpload,
   isImageMime,
+  safeAttachmentURL,
   MAX_COUNT,
   type AttachmentRef
 } from '@/utils/attachments'
@@ -496,6 +497,7 @@ let draftSaveTimer: number | null = null
 let routeGeneration = 0
 let uploadController: AbortController | null = null
 let userInputClock: number | null = null
+let startWaitTimer: number | null = null
 
 const agentMeta = computed(() => getAgentMeta(sessionStore.currentSession?.agent_type))
 const agentLabelText = computed(() => {
@@ -696,7 +698,13 @@ const composeStatusText = computed(() => {
   }
   if (mainSendIsSteer.value || isStartingThread.value || isIndeterminateStart.value) return ''
   if (!sendSupported.value) return capabilityUnavailableText('send', 'session.sendUnavailable')
+  if (canInterrupt.value && !interruptSupported.value) {
+    return capabilityUnavailableText('interrupt', 'session.interruptUnavailable')
+  }
   if (sendBlocked.value && !showActivityBanner.value) return t('session.sendBusyHint')
+  if (!attachmentSupported.value) {
+    return capabilityUnavailableText('attachment', 'session.attachmentUnavailable')
+  }
   return ''
 })
 
@@ -898,7 +906,7 @@ async function fetchCachedSessions(want: string) {
     if (!res.ok) return
     const data = await res.json() as SessionListPayload
     if (generation !== routeGeneration || deviceId.value !== want) return
-    sessionStore.applySessionList(data, want)
+    sessionStore.applySessionList(data, want, undefined, 'rest')
     const listed = sessionStore.sessions.find(s => s.id === sessionId.value)
     if (listed && sessionStore.currentSession?.id !== listed.id) {
       sessionStore.setCurrentSession(listed)
@@ -941,6 +949,8 @@ onUnmounted(() => {
   }
   approvalDecision.dispose()
   if (userInputClock !== null) window.clearInterval(userInputClock)
+  if (startWaitTimer !== null) window.clearInterval(startWaitTimer)
+  startWaitTimer = null
   for (const a of pendingAtts.value) {
     if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(a.previewUrl)
@@ -1040,7 +1050,11 @@ function thinkingLabel(msg: SessionMessage): string {
 
 function msgAttachments(msg: SessionMessage): ProtoAtt[] {
   const a = msg.metadata?.attachments
-  return Array.isArray(a) ? a : []
+  if (!Array.isArray(a)) return []
+  return a.flatMap((item) => {
+    const url = safeAttachmentURL(item.url)
+    return url ? [{ ...item, url }] : []
+  })
 }
 
 function isImage(mime?: string) {
@@ -1221,7 +1235,7 @@ async function handleSend() {
   if (mainSendIsSteer.value) {
     if (!prompt || sending.value || uploading.value) return
     sending.value = true
-    const ok = sessionStore.steer(deviceId.value, sessionId.value, prompt)
+    const ok = await sessionStore.steer(deviceId.value, sessionId.value, prompt)
     if (ok) {
       inputText.value = ''
       scheduleSaveDraft()
@@ -1294,19 +1308,34 @@ async function handleSend() {
     // Keep composer content until owned; clear after migrate.
     const waitOwned = () =>
       new Promise<{ sessionId?: string; promptAccepted?: boolean; error?: string; status: string }>((resolve) => {
-        const tick = window.setInterval(() => {
+        const startedAt = Date.now()
+        const finish = (result: { sessionId?: string; promptAccepted?: boolean; error?: string; status: string }) => {
+          if (startWaitTimer !== null) {
+            window.clearInterval(startWaitTimer)
+            startWaitTimer = null
+          }
+          resolve(result)
+        }
+        const tick = () => {
           const op = sessionStore.startOps[operationId]
-          if (!op) return
-          if (op.status === 'owned' || op.status === 'failed' || op.status === 'indeterminate') {
-            window.clearInterval(tick)
-            resolve({
+          if (op && (op.status === 'owned' || op.status === 'failed' || op.status === 'indeterminate')) {
+            finish({
               sessionId: op.sessionId,
               promptAccepted: op.promptAccepted,
               error: op.error,
               status: op.status
             })
-		  }
-        }, 200)
+            return
+          }
+          if (Date.now() - startedAt >= 90_000) {
+            finish({
+              status: 'indeterminate',
+              error: t('session.startTimeout')
+            })
+          }
+        }
+        startWaitTimer = window.setInterval(tick, 200)
+        tick()
       })
     const result = await waitOwned()
     const realId = (result.sessionId || '').trim()
@@ -1429,10 +1458,10 @@ function handleInterrupt() {
   sessionStore.interrupt(deviceId.value, sessionId.value)
 }
 
-function handleSteer() {
+async function handleSteer() {
   if (!steerMode.value || !inputText.value.trim() || sending.value || uploading.value) return
   sending.value = true
-  const ok = sessionStore.steer(deviceId.value, sessionId.value, inputText.value)
+  const ok = await sessionStore.steer(deviceId.value, sessionId.value, inputText.value)
   if (ok) {
     inputText.value = ''
     scheduleSaveDraft()

@@ -236,6 +236,62 @@ func TestCursorNewestSessionIgnoresOlderThreads(t *testing.T) {
 	}
 }
 
+func TestCursorStoreHistoryPreservesRowidWithoutTimestamps(t *testing.T) {
+	root := t.TempDir()
+	nativeID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	sessionDir := filepath.Join(root, "chats", "workspacehash", nativeID)
+	mustMkdirAll(t, sessionDir)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	mustWriteJSON(t, filepath.Join(sessionDir, "meta.json"), map[string]interface{}{
+		"cwd":         `D:\repo`,
+		"updatedAtMs": now.UnixMilli(),
+	})
+	db, err := sql.Open("sqlite", filepath.Join(sessionDir, "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE blobs (id TEXT PRIMARY KEY, data TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO blobs(id, data) VALUES (?, ?), (?, ?), (?, ?)`,
+		"fff-assistant-first-if-sorted-by-id", `{"role":"user","content":[{"type":"text","text":"first"}]}`,
+		"000-user-first-if-sorted-by-id", `{"role":"assistant","content":[{"type":"text","text":"second"}]}`,
+		"aaa-middle", `{"role":"user","content":[{"type":"text","text":"third"}]}`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := NewCursorAdapter()
+	adapter.chatsRoot = filepath.Join(root, "chats")
+	adapter.projectsRoot = filepath.Join(root, "projects")
+	dummy := filepath.Join(root, "cursor-agent.exe")
+	if err := os.WriteFile(dummy, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	adapter.commander.SetCLIPath(dummy)
+	if _, err := adapter.Discover(); err != nil {
+		t.Fatal(err)
+	}
+	history, err := adapter.FetchHistory("cursor:"+nativeID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || history[0].Content != "first" || history[1].Content != "second" || history[2].Content != "third" {
+		t.Fatalf("history = %#v", history)
+	}
+}
+
+func TestCursorTaggedTextUsesLowercaseBounds(t *testing.T) {
+	got := cursorTaggedText("<user_query>İİİİİİİİİİİİİİ</user_query>", "user_query")
+	if got == "" {
+		t.Fatal("expected tagged text")
+	}
+}
+
 func sameFilePath(got, want string) bool {
 	if got == "" || want == "" {
 		return got == want

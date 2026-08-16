@@ -97,7 +97,19 @@ func (rl *rateLimiter) allow(key string) bool {
 			}
 		}
 		if len(rl.requests) >= rl.maxKeys {
-			return false
+			var oldestKey string
+			var oldest time.Time
+			first := true
+			for candidate, value := range rl.requests {
+				if first || value.windowStart.Before(oldest) {
+					oldestKey = candidate
+					oldest = value.windowStart
+					first = false
+				}
+			}
+			if oldestKey != "" {
+				delete(rl.requests, oldestKey)
+			}
 		}
 	}
 	rl.requests[key] = rateLimitEntry{windowStart: now, count: 1}
@@ -566,13 +578,6 @@ func (s *Server) HandlePhoneWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Optional secret via query before upgrade (some clients prefer this)
-	if s.phoneSecret != "" {
-		if phoneSecretFromRequest(r) != s.phoneSecret {
-			// Allow secret in first WS message instead
-		}
-	}
-
 	u := s.websocketUpgrader()
 	conn, err := u.Upgrade(w, r, nil)
 	if err != nil {
@@ -725,7 +730,7 @@ func (s *Engine) ServePhoneConn(conn *websocket.Conn, r *http.Request, subscribe
 		reportedComponentVersion(subscribeMsg.Payload, "pwa_version"),
 		hs.NegotiatedVersion,
 	)
-	s.pushPhoneSnapshot(conn, deviceID)
+	s.pushPhoneSnapshot(conn, deviceID, phoneAuth)
 	if subscribeRequestsFreshSessionCatalog(subscribeMsg.Payload) {
 		s.requestFreshSessionCatalog(deviceID)
 	}
@@ -737,12 +742,13 @@ func (s *Engine) ServePhoneConn(conn *websocket.Conn, r *http.Request, subscribe
 		return nil
 	})
 
-	// Read loop for phone commands
-	_ = s.phoneReadLoop(conn, currentDevice, hs.NegotiatedVersion)
+	// Read loop for phone commands. The returned device is the live
+	// subscription after any authorized switches.
+	currentDevice = s.phoneReadLoop(conn, currentDevice, hs.NegotiatedVersion, phoneAuth)
 }
 
 // pushPhoneSnapshot sends session_list + device_list for the subscribed device.
-func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
+func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string, phoneAuth *db.PhoneAuth) {
 	if s.TransportMode() == protocol.TransportSealed {
 		if catalog := s.connMgr.GetSealedCatalogSnapshot(deviceID); catalog != nil {
 			s.connMgr.SafeWritePhone(conn, catalog)
@@ -763,18 +769,12 @@ func (s *Server) pushPhoneSnapshot(conn *websocket.Conn, deviceID string) {
 		s.connMgr.SafeWritePhone(conn, sessionMsg)
 	}
 
-	devices, _ := s.db.ListDevices()
-	onlineDevices := s.connMgr.GetOnlineDevices()
-	onlineSet := make(map[string]bool)
-	for _, id := range onlineDevices {
-		onlineSet[id] = true
+	devices, err := s.visibleDevices(phoneAuth)
+	if err != nil {
+		opslog.Error("server.ws", "device_list_filter_failed", "visible device list failed", err)
+		devices = nil
 	}
-	for _, d := range devices {
-		if onlineSet[d.ID] {
-			d.Status = "online"
-			d.DaemonVersion = s.connMgr.GetDaemonVersion(d.ID)
-		}
-	}
+	s.decorateDeviceOnlineStatus(devices)
 
 	statusMsg := s.stampEnvelope(protocol.NewMessage(protocol.MsgDeviceList, ""))
 	statusMsg.Payload = map[string]any{"devices": devices}
@@ -793,7 +793,7 @@ func (s *Server) requestFreshSessionCatalog(deviceID string) {
 	}
 }
 
-func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID, protocolVersion string) string {
+func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID, protocolVersion string, phoneAuth *db.PhoneAuth) string {
 	stopPing := make(chan struct{})
 	defer close(stopPing)
 	go func() {
@@ -866,10 +866,14 @@ func (s *Server) phoneReadLoop(conn *websocket.Conn, deviceID, protocolVersion s
 				s.writeSubscribeError(conn, newID, subscriptionID, "unknown device")
 				continue
 			}
+			if !s.phoneMayAccessDevice(phoneAuth, newID) {
+				s.writeSubscribeError(conn, newID, subscriptionID, "forbidden")
+				continue
+			}
 			s.connMgr.ResubscribePhone(newID, conn)
 			deviceID = newID
 			s.writeSubscribeAck(conn, newID, subscriptionID, pwaVersion, protocolVersion)
-			s.pushPhoneSnapshot(conn, newID)
+			s.pushPhoneSnapshot(conn, newID, phoneAuth)
 			if subscribeRequestsFreshSessionCatalog(msg.Payload) {
 				s.requestFreshSessionCatalog(newID)
 			}
@@ -1221,14 +1225,15 @@ func (s *Server) handlePhoneMessage(deviceID string, msg *protocol.NekoMessage) 
 		if err := s.connMgr.SendToDaemon(deviceID, msg); err != nil {
 			resultType, resultText := threadStartRelayFailure(err)
 			fail := s.stampEnvelope(protocol.NewMessage(resultType, deviceID))
-			fail.Payload = map[string]any{
-				"operation_id": opID,
-				"state":        string(resultType),
-				"error":        resultText,
-				"message":      resultText,
-				"reason":       resultText,
-			}
+			fail.ClientMsgID = opID
 			if !sealedStart {
+				fail.Payload = map[string]any{
+					"operation_id": opID,
+					"state":        string(resultType),
+					"error":        resultText,
+					"message":      resultText,
+					"reason":       resultText,
+				}
 				if agentType := stringPayload(msg.Payload, "agent_type"); agentType != "" {
 					fail.Payload["agent_type"] = agentType
 				}

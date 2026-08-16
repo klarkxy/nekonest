@@ -233,7 +233,7 @@ describe('session prompt outbox', () => {
     }
   )
 
-  it('sends a trimmed steer command without adding it to the prompt outbox', () => {
+  it('sends a trimmed steer command without adding it to the prompt outbox', async () => {
     setConnected(true)
     const store = useSessionStore()
     store.subscribeDevice('device-a')
@@ -242,7 +242,7 @@ describe('session prompt outbox', () => {
 	  summary: '', last_activity: 0, capabilities: { steer: true }
 	}
 
-    expect(store.steer('device-a', 'session-a', '  change direction  ')).toBe(true)
+    expect(await store.steer('device-a', 'session-a', '  change direction  ')).toBe(true)
     expect(harness.sent).toHaveLength(1)
     expect(harness.sent[0]).toMatchObject({
       type: 'steer',
@@ -255,11 +255,11 @@ describe('session prompt outbox', () => {
     store.cleanup()
   })
 
-  it('rejects an empty steer command before touching the channel', () => {
+  it('rejects an empty steer command before touching the channel', async () => {
     setConnected(true)
     const store = useSessionStore()
 
-    expect(store.steer('device-a', 'session-a', '   ')).toBe(false)
+    expect(await store.steer('device-a', 'session-a', '   ')).toBe(false)
     expect(store.lastError).toBe(tGlobal('errors.emptySteer'))
     expect(harness.sent).toHaveLength(0)
     store.cleanup()
@@ -334,7 +334,7 @@ describe('session prompt outbox', () => {
     expect(store.approve('device-a', 'session-a', 'approval-a')).toBe(false)
     expect(store.deny('device-a', 'session-a', 'approval-a')).toBe(false)
     expect(store.interrupt('device-a', 'session-a')).toBe(false)
-    expect(store.steer('device-a', 'session-a', 'change direction')).toBe(false)
+    expect(await store.steer('device-a', 'session-a', 'change direction')).toBe(false)
     expect(await store.respondUserInput('device-a', 'session-a', pending, { answer: ['yes'] })).toBe(false)
     expect(store.cancelPrompt('device-a', 'session-a', 'prompt-a')).toBe(false)
     expect(store.resumePromptQueue('device-a', 'session-a')).toBe(false)
@@ -1478,6 +1478,21 @@ describe('session prompt outbox', () => {
     store.cleanup()
   })
 
+  it('does not let an empty REST snapshot wipe a WS catalog', () => {
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({
+      sessions: [{
+        id: 'session-a', device_id: 'device-a', agent_type: 'codex',
+        status: 'idle', summary: 'live', last_activity: 1
+      }]
+    }, 'device-a', '1.3', 'ws')
+    store.applySessionList({ sessions: [] }, 'device-a', undefined, 'rest')
+    expect(store.sessions).toHaveLength(1)
+    expect(store.sessions[0].id).toBe('session-a')
+    store.cleanup()
+  })
+
   it('uses the legacy per-session spawn fallback only for explicit Codex capability and an absent catalog', () => {
     setConnected(true)
     const store = useSessionStore()
@@ -1550,6 +1565,76 @@ describe('session prompt outbox', () => {
     expect(store.catalogDeviceId).toBe('device-b')
     expect(store.catalogStatus).toBe('loading')
     expect(store.sessions).toEqual([])
+    store.cleanup()
+  })
+
+  it('drops the previous device inbox, prompt queue, and start ops on switch', () => {
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    grantStartCapability(store, 'codex', 'path_best_effort')
+    expect(store.startThread('device-a', 'codex', 'D:\\repo', 'hello').ok).toBe(true)
+    expect(Object.keys(store.startOps)).toHaveLength(1)
+
+    emit({
+      type: 'queue_update', device_id: 'device-a', session_id: 'session-a', timestamp: 1,
+      payload: { paused: false, items: [{ client_msg_id: 'prompt-a', position: 1, status: 'queued' }] }
+    })
+    expect(store.promptQueues['device-a::session-a']?.items).toHaveLength(1)
+
+    emit({
+      type: 'session_message', device_id: 'device-a', session_id: 'session-other', timestamp: 2,
+      payload: {
+        message: {
+          id: 'msg-other', role: 'assistant', content: 'buffered', type: 'text', timestamp: 2
+        }
+      }
+    })
+
+    store.subscribeDevice('device-b')
+    expect(store.promptQueues).toEqual({})
+    expect(store.startOps).toEqual({})
+
+    store.subscribeDevice('device-a')
+    store.setCurrentSession({
+      id: 'session-other', device_id: 'device-a', agent_type: 'codex',
+      status: 'idle', summary: '', last_activity: 2
+    })
+    expect(store.messages.some(message => message.id === 'msg-other')).toBe(false)
+    store.cleanup()
+  })
+
+  it('waits for sealed steer encryption before reporting success', async () => {
+    resetTransportModeForTests('sealed')
+    setConnected(true)
+    let release: (value: NonNullable<NekoMessage['sealed_payload']>) => void
+    const pendingEncrypt = new Promise<NonNullable<NekoMessage['sealed_payload']>>(resolve => {
+      release = resolve
+    })
+    vi.mocked(encryptSessionPayload).mockImplementation(() => pendingEncrypt)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a', device_id: 'device-a', agent_type: 'codex', status: 'running',
+      summary: '', last_activity: 0, capabilities: { steer: true }
+    }
+
+    const pending = store.steer('device-a', 'session-a', 'change direction')
+    expect(harness.sent).toHaveLength(0)
+    release!({
+      alg: 'aes-256-gcm', version: 1, key_scope: 'session', epoch: 1,
+      sender_id: 'phone', recipient_id: 'device-a', sequence: 1,
+      nonce: 'nonce', ciphertext: 'ciphertext'
+    })
+    expect(await pending).toBe(true)
+    expect(harness.sent).toHaveLength(1)
+    expect(harness.sent[0]).toMatchObject({
+      type: 'steer',
+      device_id: 'device-a',
+      session_id: 'session-a',
+      sealed_payload: { ciphertext: 'ciphertext' }
+    })
+    expect(harness.sent[0].payload).toBeUndefined()
     store.cleanup()
   })
 

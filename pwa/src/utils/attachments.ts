@@ -223,4 +223,31 @@ export async function pickAndUpload(
   return out
 }
 
+export function safeAttachmentURL(url: string | undefined | null): string {
+  const raw = String(url || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('blob:')) return raw
+  let parsed: URL
+  try {
+    const base = typeof location !== 'undefined' && location.origin
+      ? location.origin
+      : 'https://invalid.local'
+    parsed = new URL(raw, base)
+  } catch {
+    return ''
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return ''
+  }
+  try {
+    const trusted = new URL(attachmentURL('/'))
+    if (parsed.origin !== trusted.origin) {
+      return ''
+    }
+  } catch {
+    return ''
+  }
+  return parsed.toString()
+}
+
 export { MAX_COUNT, MAX_BYTES }

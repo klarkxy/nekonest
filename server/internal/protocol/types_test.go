@@ -210,10 +210,12 @@ func TestRefreshSessionsIsSealedSafeRoutingData(t *testing.T) {
 }
 
 func TestValidateFrameForTransportAllowsBareFailClosedThreadIndeterminate(t *testing.T) {
-	msg := NewMessage(MsgThreadIndeterminate, "device-a").WithTransport(TransportSealed)
-	msg.ClientMsgID = "operation-a"
-	if err := ValidateFrameForTransport(msg, TransportSealed); err != nil {
-		t.Fatalf("bare thread_indeterminate: %v", err)
+	for _, msgType := range []MessageType{MsgThreadIndeterminate, MsgThreadFailed, MsgPromptFailed} {
+		msg := NewMessage(msgType, "device-a").WithTransport(TransportSealed)
+		msg.ClientMsgID = "operation-a"
+		if err := ValidateFrameForTransport(msg, TransportSealed); err != nil {
+			t.Fatalf("bare %s: %v", msgType, err)
+		}
 	}
 }
 

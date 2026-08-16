@@ -434,44 +434,12 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devices, err := s.db.ListDevices()
+	devices, err := s.visibleDevices(auth)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		WriteAPIError(w, stableError(protocol.ServiceErrorServiceProvisioning, "device list unavailable", true, http.StatusInternalServerError))
 		return
 	}
-
-	// Phone tokens only see granted devices; admin bypass sees all.
-	if auth != nil && !auth.AdminBypass {
-		allowed, err := s.db.ListPhoneDeviceIDs(auth.PhoneID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		allow := make(map[string]bool, len(allowed))
-		for _, id := range allowed {
-			allow[id] = true
-		}
-		filtered := devices[:0]
-		for _, d := range devices {
-			if allow[d.ID] {
-				filtered = append(filtered, d)
-			}
-		}
-		devices = filtered
-	}
-
-	// Update online status
-	onlineDevices := s.connMgr.GetOnlineDevices()
-	onlineSet := make(map[string]bool)
-	for _, id := range onlineDevices {
-		onlineSet[id] = true
-	}
-	for _, d := range devices {
-		if onlineSet[d.ID] {
-			d.Status = "online"
-			d.DaemonVersion = s.connMgr.GetDaemonVersion(d.ID)
-		}
-	}
+	s.decorateDeviceOnlineStatus(devices)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -704,7 +672,7 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		if got == "" {
 			got = r.URL.Query().Get("bootstrap")
 		}
-		if got != bootstrap {
+		if !secureEqual(got, bootstrap) {
 			WriteAPIError(w, stableError(protocol.ServiceErrorDeviceCredentialInvalid, "registration credential invalid", false, http.StatusUnauthorized))
 			return
 		}
@@ -733,13 +701,20 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DeviceID == "" {
 		b := make([]byte, 8)
-		rand.Read(b)
+		if _, err := rand.Read(b); err != nil {
+			WriteAPIError(w, stableError(protocol.ServiceErrorServiceProvisioning, "device registration unavailable", true, http.StatusInternalServerError))
+			return
+		}
 		req.DeviceID = "device_" + hex.EncodeToString(b)
 	}
 
 	token, err := s.db.RegisterDevice(req.DeviceID, req.Name, req.OS)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if s.db.DeviceExists(req.DeviceID) {
+			WriteAPIError(w, stableError(protocol.ServiceErrorDeviceIdentityConflict, "device registration failed", false, http.StatusConflict))
+			return
+		}
+		WriteAPIError(w, stableError(protocol.ServiceErrorServiceProvisioning, "device registration unavailable", true, http.StatusInternalServerError))
 		return
 	}
 	if req.Ed25519Public != "" || req.X25519Public != "" {
@@ -793,14 +768,17 @@ func (s *Server) handleGeneratePairCode(w http.ResponseWriter, r *http.Request) 
 		_ = s.db.SetDevicePublicKeys(req.DeviceID, req.Ed25519Public, req.X25519Public, req.IdentityFingerprint)
 	}
 
-	// Generate 6-char pairing code
+	// Generate 6-char pairing code. Fail closed if the random source is unavailable.
 	b := make([]byte, 3)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		WriteAPIError(w, stableError(protocol.ServiceErrorServiceProvisioning, "pair code unavailable", true, http.StatusInternalServerError))
+		return
+	}
 	code := hex.EncodeToString(b)[:6]
 
 	expiresAt := s.clock.Now().Add(5 * time.Minute)
 	if err := s.db.CreatePairCode(code, req.DeviceID, expiresAt); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		WriteAPIError(w, stableError(protocol.ServiceErrorServiceProvisioning, "pair code unavailable", true, http.StatusInternalServerError))
 		return
 	}
 
@@ -1221,6 +1199,48 @@ func (s *Server) phoneMayAccessDevice(auth *db.PhoneAuth, deviceID string) bool 
 		return true
 	}
 	return s.db.PhoneHasDeviceGrant(auth.PhoneID, deviceID)
+}
+
+func (s *Server) visibleDevices(auth *db.PhoneAuth) ([]*protocol.Device, error) {
+	devices, err := s.db.ListDevices()
+	if err != nil {
+		return nil, err
+	}
+	if auth == nil || auth.AdminBypass {
+		return devices, nil
+	}
+	allowed, err := s.db.ListPhoneDeviceIDs(auth.PhoneID)
+	if err != nil {
+		return nil, err
+	}
+	allow := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		allow[id] = true
+	}
+	filtered := devices[:0]
+	for _, d := range devices {
+		if allow[d.ID] {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *Server) decorateDeviceOnlineStatus(devices []*protocol.Device) {
+	onlineDevices := s.connMgr.GetOnlineDevices()
+	onlineSet := make(map[string]bool, len(onlineDevices))
+	for _, id := range onlineDevices {
+		onlineSet[id] = true
+	}
+	for _, d := range devices {
+		if d == nil {
+			continue
+		}
+		if onlineSet[d.ID] {
+			d.Status = "online"
+			d.DaemonVersion = s.connMgr.GetDaemonVersion(d.ID)
+		}
+	}
 }
 
 func phoneSecretFromRequest(r *http.Request) string {

@@ -29,14 +29,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events are not concatenated into the assistant bubble, and treat only real
   turn output as the initial-prompt acknowledgement.
 - Do not publish a synthetic `zcode:` / `cursor:` session id when native start
-  returns no id, and only adopt a same-directory ZCode or Cursor session
-  created at or after the start attempt.
+  returns no id, and do not claim the newest same-directory session as a
+  fallback.
 - Discover Cursor Agent threads from `~/.cursor/projects/*/agent-transcripts`
   (not only `~/.cursor/chats`), resolve workspace slugs back to existing host
   directories, and advertise path attachments through Cursor `--add-dir` and
   ZCode `--attach` on both resume and start.
 - Fail Cursor thread start as soon as the CLI exits without a prompt
   acknowledgement.
+- Recheck device grants on phone WebSocket resubscribe and filter the
+  `device_list` snapshot the same way as REST.
+- Keep the host daemon reconnecting after generic network failures instead of
+  giving up after 50 attempts, and detect half-open sockets with ping/pong
+  deadlines.
+- Preserve Cursor store history in insertion order when native blobs have no
+  timestamps, and refuse to resume a Cursor thread that has no resolved
+  project directory.
+- Do not let an empty sealed-mode REST session snapshot wipe a decrypted
+  WebSocket catalog, and ignore untrusted attachment / notification URLs.
+- Ask for notification permission only from the workspace **Enable
+  notifications** control, so iOS Safari is not prompted on page load.
+- Wait for sealed-mode steer encryption before clearing the composer, and
+  show interrupt / attachment unavailable reasons in the compose status.
+- Cap phone WebSocket subscriptions per device and evict the oldest socket.
+- Drop the previous device's inbox, prompt-queue, and start-op caches when
+  the phone switches hosts.
 
 ## [0.2.8-rc.4] - 2026-08-16
 

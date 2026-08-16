@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/nekonest/daemon/internal/attach"
 	"github.com/nekonest/daemon/internal/opslog"
 )
@@ -173,7 +174,7 @@ func (c *ZCodeCommander) StartThread(ctx context.Context, workDir, prompt string
 	var idMu sync.Mutex
 	var lastDiag string
 	var diagMu sync.Mutex
-	placeholder := zcodeStartPlaceholder
+	placeholder := zcodeStartPlaceholder + "-" + uuid.NewString()
 	wrappedComplete := func() {
 		exitOnce.Do(func() { close(exited) })
 		if onComplete != nil {
@@ -289,7 +290,7 @@ func (c *ZCodeCommander) startPromptInDir(
 		textID:    fmt.Sprintf("zcode_%s_text_%d", sessionID, now),
 		thoughtID: fmt.Sprintf("zcode_%s_thought_%d", sessionID, now),
 	}
-	placeholder := sessionID == zcodeStartPlaceholder
+	placeholder := strings.HasPrefix(sessionID, zcodeStartPlaceholder)
 	executor := NewAgentExecutor("zcode", sessionID)
 	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {

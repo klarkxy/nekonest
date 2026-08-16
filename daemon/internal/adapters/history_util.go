@@ -39,9 +39,6 @@ func takeLastHistory(msgs []*HistoryMessage, limit int) []*HistoryMessage {
 
 func sortHistoryMessages(messages []*HistoryMessage) {
 	sort.SliceStable(messages, func(i, j int) bool {
-		if messages[i].Timestamp != messages[j].Timestamp {
-			return messages[i].Timestamp < messages[j].Timestamp
-		}
-		return messages[i].ID < messages[j].ID
+		return messages[i].Timestamp < messages[j].Timestamp
 	})
 }

@@ -9,19 +9,37 @@ async function pushFetch(path: string, init: RequestInit = {}): Promise<Response
   })
 }
 
-/** Request notification permission and subscribe if VAPID is configured. */
-export async function ensurePushSubscription(deviceId: string): Promise<boolean> {
+export type EnsurePushOptions = {
+  /** iOS Safari rejects permission prompts that are not a user gesture. */
+  requestPermission?: boolean
+}
+
+export function notificationPermission(): NotificationPermission | 'unsupported' {
+  if (typeof Notification === 'undefined') return 'unsupported'
+  return Notification.permission
+}
+
+/** Subscribe when VAPID is configured. Does not prompt unless requested. */
+export async function ensurePushSubscription(
+  deviceId: string,
+  options: EnsurePushOptions = {}
+): Promise<boolean> {
   if (!deviceId || !('serviceWorker' in navigator) || !('PushManager' in window)) {
     return false
   }
+  const permission = notificationPermission()
+  if (permission === 'unsupported' || permission === 'denied') return false
+  if (permission !== 'granted' && !options.requestPermission) return false
   try {
     const res = await pushFetch('/api/push/vapid-public-key')
     if (!res.ok) return false
     const data = (await res.json()) as { enabled?: boolean; public_key?: string }
     if (!data.enabled || !data.public_key) return false
 
-    const perm = await Notification.requestPermission()
-    if (perm !== 'granted') return false
+    if (notificationPermission() !== 'granted') {
+      const perm = await Notification.requestPermission()
+      if (perm !== 'granted') return false
+    }
 
     const reg = await navigator.serviceWorker.ready
     let sub = await reg.pushManager.getSubscription()

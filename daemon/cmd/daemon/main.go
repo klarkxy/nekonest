@@ -323,21 +323,24 @@ func main() {
 	}
 	dispatchQueued = func(sessionID string) {
 		unlock := sessionSends.lock(sessionID)
-		defer unlock()
 		if !queueAvailable {
+			unlock()
 			return
 		}
 		// The app-server only knows about turns joined by this daemon. Native
 		// discovery also observes work started from another Codex surface; do not
 		// claim a queued phone prompt until that authoritative busy state clears.
 		if sessionReportedBusy != nil && sessionReportedBusy(sessionID) {
+			unlock()
 			return
 		}
 		target := pickAdapterForSession(sessionID, adapterList)
 		if target == nil {
+			unlock()
 			return
 		}
 		if codex, ok := target.(*adapters.CodexAdapter); ok && (!codex.AppServerHealthy() || codex.HasActiveTurn(sessionID)) {
+			unlock()
 			return
 		}
 		item, ok, claimErr := durableQueue.claimNext(sessionID)
@@ -345,16 +348,20 @@ func main() {
 			if claimErr != nil {
 				opslog.Error("daemon.main", "queued_prompt_claim_failed", "queued prompt claim failed", claimErr, "session_id", sessionID)
 			}
+			unlock()
 			return
 		}
 		sendQueueUpdate(client, deviceID, sessionID, durableQueue)
 		if target.Name() != item.AgentType {
 			_ = durableQueue.block(sessionID, item.ClientMsgID, promptQueueBlockedIndeterminate)
 			sendQueueUpdate(client, deviceID, sessionID, durableQueue)
+			unlock()
 			return
 		}
 		prompt, refs, collaborationMode, dispatchErr := queuedPromptPayload(deviceID, sessionID, item)
 		item.CollaborationMode = collaborationMode
+		unlock()
+
 		var files []attach.LocalFile
 		attDir := ""
 		if dispatchErr == nil && len(refs) > 0 {
@@ -367,6 +374,9 @@ func main() {
 				prompt += suffix
 			}
 		}
+
+		unlock = sessionSends.lock(sessionID)
+		defer unlock()
 		crossedNativeBoundary := false
 		if dispatchErr == nil {
 			crossedNativeBoundary, dispatchErr = dispatchQueuedPrompt(target, commandJournal, acceptedPrompts, client, deviceID, item, prompt, files, attDir, turnGenerations.Add(1), activeTurns, handleControlEvent)
@@ -433,7 +443,7 @@ func main() {
 		journal:       threadJournal,
 		lookupAdapter: adapterRegistry.Get,
 		snapshotProjectDirs: func() []string {
-			return snapshotProjectDirs(&sessionMu, lastSessions)
+			return snapshotProjectDirs(&sessionMu, &lastSessions)
 		},
 		materializeAttachments: func(operationID string, refs []attach.Ref) (string, []attach.LocalFile, string, error) {
 			return attach.Materialize(currentConfig().ServerURL, operationID, refs)

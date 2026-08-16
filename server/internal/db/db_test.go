@@ -32,7 +32,14 @@ func TestHashToken(t *testing.T) {
 }
 
 func TestGenerateToken(t *testing.T) {
-	a, b := generateToken(), generateToken()
+	a, err := generateToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := generateToken()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(a) != 64 {
 		t.Fatalf("len=%d", len(a))
 	}

@@ -173,7 +173,9 @@ export default {
     startThreadFailed: 'Could not create {agent} thread',
     startThreadNeedProject: 'Missing project directory.',
     startThreadUnavailable: 'This agent or project is no longer available for native thread creation.',
-    startPromptUnconfirmed: 'The native thread was created, but the first prompt was not confirmed. It remains in the composer; check native history before resending.'
+    startPromptUnconfirmed: 'The native thread was created, but the first prompt was not confirmed. It remains in the composer; check native history before resending.',
+    enableNotifications: 'Enable notifications',
+    notificationsBlocked: 'Notifications are blocked in the browser settings.'
   },
   threadList: {
     showArchived: 'Show archived',
@@ -282,6 +284,7 @@ export default {
     userInputKeyUnavailable: 'The sealed session key is unavailable; answers were not sent.',
     interruptUnavailable: 'Interrupt is not available for this agent session',
     sendUnavailable: 'Sending is unavailable for this stored session on the current host',
+    startTimeout: 'The host did not confirm thread creation in time. The draft was kept.',
     attachmentUnavailable: 'Attachments are unavailable for this agent path',
     queueSkip: 'Skip blocked item',
     queueBlockedWarning: 'The previous prompt may have crossed the agent boundary. It will never be replayed automatically.',

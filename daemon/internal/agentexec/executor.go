@@ -124,10 +124,10 @@ func (e *AgentExecutor) StartWithDir(command string, args []string, env []string
 
 	// Wait for process exit in background
 	go func() {
-		err := cmd.Wait()
-		// Do not let the exit callback overtake an output callback that was
-		// already processing the final structured line.
+		// Reap only after both pipes have been fully read. Wait() closes the
+		// parent pipe ends and would otherwise drop the final structured line.
 		outputWG.Wait()
+		err := cmd.Wait()
 		e.mu.Lock()
 		exitCode := 0
 		if err != nil {

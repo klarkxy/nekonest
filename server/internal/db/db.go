@@ -638,7 +638,10 @@ func (db *DB) migratePromptCommands() error {
 // RegisterDevice registers a new device and returns its token.
 // osName should be "windows" or "linux" (v1 formal hosts); empty defaults to windows.
 func (db *DB) RegisterDevice(id, name string, osName ...string) (string, error) {
-	token := generateToken()
+	token, err := generateToken()
+	if err != nil {
+		return "", err
+	}
 	tokenHash := hashToken(token)
 	now := time.Now().Unix()
 	osVal := "windows"
@@ -656,7 +659,7 @@ func (db *DB) RegisterDevice(id, name string, osName ...string) (string, error) 
 		}
 	}
 
-	_, err := db.conn.Exec(
+	_, err = db.conn.Exec(
 		`INSERT INTO devices (id, name, os, token_hash, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)`,
 		id, name, osVal, tokenHash, now, now,
 	)

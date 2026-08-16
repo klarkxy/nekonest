@@ -63,6 +63,16 @@
         <div>
           <h2 id="sessions-title">{{ t('deviceDetail.sectionTitle') }}</h2>
         </div>
+        <button
+          v-if="showEnableNotifications"
+          type="button"
+          class="notify-enable"
+          :disabled="pushBusy"
+          @click="enableNotifications"
+        >{{ t('deviceDetail.enableNotifications') }}</button>
+        <p v-else-if="showNotificationsBlocked" class="notify-blocked">
+          {{ t('deviceDetail.notificationsBlocked') }}
+        </p>
       </div>
 
       <div v-if="authError" class="load-error" role="alert">
@@ -109,7 +119,7 @@ import { useSessionStore } from '@/stores/session'
 import { useBindingStore } from '@/stores/binding'
 import { useLocalThreadsStore } from '@/stores/localThreads'
 import { apiFetch } from '@/api/http'
-import { ensurePushSubscription } from '@/api/push'
+import { ensurePushSubscription, notificationPermission } from '@/api/push'
 import { nekoWS } from '@/api/websocket'
 import { devicesLocation, setupLocation } from '@/router/navigation'
 import SessionThreadList from '@/components/SessionThreadList.vue'
@@ -186,12 +196,40 @@ watch(deviceId, (next, previous) => {
   }
 })
 
+const pushCapable =
+  typeof window !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  'PushManager' in window &&
+  typeof Notification !== 'undefined'
+const notificationPerm = ref(notificationPermission())
+const pushBusy = ref(false)
+const showEnableNotifications = computed(
+  () => pushCapable && notificationPerm.value === 'default'
+)
+const showNotificationsBlocked = computed(
+  () => pushCapable && notificationPerm.value === 'denied'
+)
+
 function activateDevice(want: string) {
   if (!want) return
   binding.setLastDevice(want)
   sessionStore.subscribeDevice(want)
   void fetchSessions(want)
-  void ensurePushSubscription(want)
+  // Already-granted browsers can resubscribe; do not prompt on mount (iOS).
+  void ensurePushSubscription(want).finally(() => {
+    notificationPerm.value = notificationPermission()
+  })
+}
+
+async function enableNotifications() {
+  if (!deviceId.value || pushBusy.value) return
+  pushBusy.value = true
+  try {
+    await ensurePushSubscription(deviceId.value, { requestPermission: true })
+  } finally {
+    notificationPerm.value = notificationPermission()
+    pushBusy.value = false
+  }
 }
 
 function retryFetch() {
@@ -222,7 +260,7 @@ async function fetchSessions(want: string) {
     }
     const data = await res.json()
     if (!isCurrentRequest(want, gen, controller)) return
-    sessionStore.applySessionList(data, want)
+    sessionStore.applySessionList(data, want, undefined, 'rest')
     loadError.value = ''
   } catch (error) {
     if (!controller.signal.aborted && isCurrentRequest(want, gen, controller)) {
@@ -437,6 +475,9 @@ function isCurrentRequest(want: string, gen: number, controller: AbortController
 
 .section-heading {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 12px;
   padding-inline: 2px;
 }
@@ -491,6 +532,35 @@ html[data-theme='dark'] .retry-load {
 .retry-load:disabled {
   opacity: 0.65;
   cursor: wait;
+}
+
+.notify-enable {
+  flex: 0 0 auto;
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--neko-line);
+  border-radius: 12px;
+  color: var(--neko-primary-deep);
+  background: var(--neko-surface-solid);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.notify-enable:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.notify-blocked {
+  flex: 0 1 auto;
+  margin: 0;
+  color: var(--neko-ink-faint);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: right;
 }
 
 .load-pending {
