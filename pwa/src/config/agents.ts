@@ -13,8 +13,16 @@ export const KNOWN_AGENT_TYPES = [
   'claude_code',
   'codex',
   'kimi_cli',
-  'grok_build'
+  'grok_build',
+  'zcode',
+  'cursor'
 ] as const satisfies readonly KnownAgentType[]
+
+const INSTALL_GATED_AGENT_TYPES = new Set<KnownAgentType>(['zcode', 'cursor'])
+
+export function isInstallGatedAgent(type?: string | null): boolean {
+  return INSTALL_GATED_AGENT_TYPES.has(String(type || '').trim() as KnownAgentType)
+}
 
 export const AGENT_CATALOG: Readonly<Record<KnownAgentType, AgentMeta>> = {
   claude_code: {
@@ -48,6 +56,22 @@ export const AGENT_CATALOG: Readonly<Record<KnownAgentType, AgentMeta>> = {
     color: '#303744',
     softColor: '#E7E9ED',
     symbol: '⚫'
+  },
+  zcode: {
+    id: 'zcode',
+    label: 'ZCode',
+    avatar: '/agents/zcode.webp',
+    color: '#0F9B8E',
+    softColor: '#D5F3EF',
+    symbol: '🔷'
+  },
+  cursor: {
+    id: 'cursor',
+    label: 'Cursor',
+    avatar: '/agents/cursor.webp',
+    color: '#7C5CFF',
+    softColor: '#EDE7FF',
+    symbol: '🟣'
   }
 }
 

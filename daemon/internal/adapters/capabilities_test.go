@@ -24,4 +24,19 @@ func TestDefaultCapabilities(t *testing.T) {
 	if claude.AttachmentMode != AttachPathBestEffort {
 		t.Fatalf("claude attach=%s", claude.AttachmentMode)
 	}
+
+	zcode := DefaultCapabilities(AgentZCode)
+	if zcode.ControlMode != ControlCompatibility || zcode.Approve || zcode.Steer {
+		t.Fatalf("zcode %#v", zcode)
+	}
+	if zcode.AttachmentMode != AttachPathBestEffort {
+		t.Fatalf("zcode attach=%s", zcode.AttachmentMode)
+	}
+	cursor := DefaultCapabilities(AgentCursor)
+	if cursor.ControlMode != ControlCompatibility || cursor.Approve {
+		t.Fatalf("cursor %#v", cursor)
+	}
+	if cursor.AttachmentMode != AttachPathBestEffort {
+		t.Fatalf("cursor attach=%s", cursor.AttachmentMode)
+	}
 }

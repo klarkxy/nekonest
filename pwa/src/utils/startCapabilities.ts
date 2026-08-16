@@ -1,4 +1,4 @@
-import { KNOWN_AGENT_TYPES } from '@/config/agents'
+import { KNOWN_AGENT_TYPES, isInstallGatedAgent } from '@/config/agents'
 import type { AgentSession, AgentStartCapability, AgentType } from '@/types/protocol'
 import type { SessionTreeProject } from '@/utils/sessionTree'
 import { projectKeyFromDir, UNCATEGORIZED_PROJECT_KEY } from '@/utils/sessionTree'
@@ -60,13 +60,15 @@ export function projectStartOptions(
   if (!project.path.trim() || project.uncategorized) return []
 
   if (catalog !== null && catalog !== undefined) {
-    return KNOWN_AGENT_TYPES.map(agentType => {
+    return KNOWN_AGENT_TYPES.flatMap(agentType => {
       const cap = catalog.find(entry => entry.agent_type === agentType)
-      return {
+      if (!cap) return []
+      if (isInstallGatedAgent(agentType) && !cap.available) return []
+      return [{
         agentType,
-        enabled: Boolean(cap?.available && cap?.spawn),
-        reason: cap?.reason
-      }
+        enabled: Boolean(cap.available && cap.spawn),
+        reason: cap.reason
+      }]
     })
   }
 

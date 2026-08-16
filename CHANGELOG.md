@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Mark ZCode unavailable across current catalogs. The wire id still parses,
+  but the daemon does not advertise discover, send, or spawn while upstream
+  `zcode login` cannot create headless credentials.
+
+### Added
+
+- Add ZCode and Cursor adapter implementations. Cursor is advertised only when
+  the host has `cursor-agent` (or `agent` only under a Cursor install
+  directory), not `cursor.exe`. ZCode remains parseable but is not advertised
+  while upstream headless login is broken.
+
+### Fixed
+
+- Resolve the Cursor Agent CLI without treating Cursor IDE's `CURSOR_AGENT`
+  marker or a generic `agent.exe` (including Grok Build) as that CLI. Override
+  the path with `NEKONEST_CURSOR_CLI`.
+- Keep Cursor/ZCode live output on a whitelist so `result`, user, and tool
+  events are not concatenated into the assistant bubble, and treat only real
+  turn output as the initial-prompt acknowledgement.
+- Do not publish a synthetic `zcode:` / `cursor:` session id when native start
+  returns no id, and only adopt a same-directory ZCode or Cursor session
+  created at or after the start attempt.
+- Discover Cursor Agent threads from `~/.cursor/projects/*/agent-transcripts`
+  (not only `~/.cursor/chats`), resolve workspace slugs back to existing host
+  directories, and advertise path attachments through Cursor `--add-dir` and
+  ZCode `--attach` on both resume and start.
+- Fail Cursor thread start as soon as the CLI exits without a prompt
+  acknowledgement.
+
 ## [0.2.8-rc.4] - 2026-08-16
 
 ### Changed

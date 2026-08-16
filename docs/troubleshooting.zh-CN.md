@@ -40,6 +40,13 @@
 - 先在主机上使用一次受支持的智能体，确保存在原生线程。
 - 确认智能体 CLI、原生存储与 Daemon 属于同一个系统用户。
 - 运行 `-doctor`，并查看 PWA 显示的不可用原因。
+- Cursor 需要 Agent CLI（`cursor-agent`）。桌面编辑器和无关的 `agent.exe`
+  （包括 Grok Build）都不会被接受。CLI 不在常见路径时，设置
+  `NEKONEST_CURSOR_CLI`。Cursor IDE 注入的 `CURSOR_AGENT` 不是 CLI 路径。
+  Agent 线程位于 `~/.cursor/projects/*/agent-transcripts`；仅有 composer 记录
+  不够。
+- ZCode 当前不可用。桌面/TUI 会话可能还在，但上游 `zcode login` 会报
+  `OAuth response is not valid JSON`，因此 NekoNest 不声明发现、发送或新建。
 - Daemon 在线后刷新设备页。
 - 较旧、子智能体、侧链或纯合成记录可能被有意隐藏；在主机上重新打开旧主线程
   即可恢复活跃度。

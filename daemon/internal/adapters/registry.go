@@ -41,6 +41,8 @@ func NewDefaultRegistry() (*Registry, error) {
 		NewCodexAdapter(),
 		NewKimiCLIAdapter(),
 		NewGrokBuildAdapter(),
+		NewZCodeAdapter(),
+		NewCursorAdapter(),
 	)
 }
 

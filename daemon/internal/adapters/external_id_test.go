@@ -17,7 +17,7 @@ func TestExternalSessionIDRoundTrip(t *testing.T) {
 }
 
 func TestACPStartNativeIDsAreNamespacedAtAdapterBoundary(t *testing.T) {
-	for _, agent := range []AgentType{AgentKimiCLI, AgentGrokBuild} {
+	for _, agent := range []AgentType{AgentKimiCLI, AgentGrokBuild, AgentZCode, AgentCursor} {
 		publicID := publicSessionID(agent, "native-acp-id")
 		if publicID != string(agent)+":native-acp-id" {
 			t.Fatalf("%s public start id = %q", agent, publicID)
@@ -31,5 +31,14 @@ func TestACPStartNativeIDsAreNamespacedAtAdapterBoundary(t *testing.T) {
 func TestExternalSessionIDRejectsWrongAgent(t *testing.T) {
 	if _, err := nativeSessionID(AgentKimiCLI, "grok_build:abc"); err == nil {
 		t.Fatal("expected wrong-agent id to fail")
+	}
+}
+
+func TestPublicSessionIDEmptyNativeID(t *testing.T) {
+	if got := publicSessionID(AgentZCode, ""); got != "" {
+		t.Fatalf("empty zcode id = %q", got)
+	}
+	if got := publicSessionID(AgentCursor, "   "); got != "" {
+		t.Fatalf("blank cursor id = %q", got)
 	}
 }

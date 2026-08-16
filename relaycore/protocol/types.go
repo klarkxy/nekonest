@@ -218,6 +218,8 @@ const (
 	AgentKilo      AgentType = "kilo"
 	AgentKimiCLI   AgentType = "kimi_cli"
 	AgentGrokBuild AgentType = "grok_build"
+	AgentZCode     AgentType = "zcode"
+	AgentCursor    AgentType = "cursor"
 )
 
 // AgentStartCapability is a device-scoped native thread-creation capability.

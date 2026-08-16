@@ -25,15 +25,19 @@ const project: SessionTreeProject = {
 }
 
 describe('project start capabilities', () => {
-  it('lists all known agents from a catalog and disables unavailable entries', () => {
+  it('lists catalog agents and hides uninstalled zcode/cursor', () => {
     const options = projectStartOptions(project, [
       { agent_type: 'claude_code', available: true, spawn: true },
-      { agent_type: 'grok_build', available: false, spawn: false, reason: 'CLI missing' }
+      { agent_type: 'grok_build', available: false, spawn: false, reason: 'CLI missing' },
+      { agent_type: 'zcode', available: true, spawn: true },
+      { agent_type: 'cursor', available: false, spawn: false, reason: 'CLI missing' }
     ])
 
-    expect(options).toHaveLength(4)
-    expect(options).toContainEqual({ agentType: 'claude_code', enabled: true, reason: undefined })
-    expect(options).toContainEqual({ agentType: 'grok_build', enabled: false, reason: 'CLI missing' })
+    expect(options).toEqual([
+      { agentType: 'claude_code', enabled: true, reason: undefined },
+      { agentType: 'grok_build', enabled: false, reason: 'CLI missing' },
+      { agentType: 'zcode', enabled: true, reason: undefined }
+    ])
   })
 
   it('uses only a positive legacy Codex session capability when the catalog is absent', () => {

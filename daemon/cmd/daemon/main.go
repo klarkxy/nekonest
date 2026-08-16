@@ -2983,6 +2983,10 @@ func runDoctor(configPath string) int {
 			mark := "missing"
 			if avail {
 				mark = "available"
+			} else if reasoner, ok := a.(interface{ UnavailableReason() string }); ok {
+				if reason := strings.TrimSpace(reasoner.UnavailableReason()); reason != "" {
+					mark = "unavailable (" + reason + ")"
+				}
 			}
 			fmt.Printf("  - %s: %s\n", a.Name(), mark)
 		}

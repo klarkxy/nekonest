@@ -123,6 +123,8 @@ export type KnownAgentType =
   | 'codex'
   | 'kimi_cli'
   | 'grok_build'
+  | 'zcode'
+  | 'cursor'
 
 /** Known agents keep editor completion while future daemon adapters remain wire-compatible. */
 export type AgentType = KnownAgentType | (string & {})

@@ -32,6 +32,17 @@ var supportedStartAgents = []adapters.AgentType{
 	adapters.AgentCodex,
 	adapters.AgentKimiCLI,
 	adapters.AgentGrokBuild,
+	adapters.AgentZCode,
+	adapters.AgentCursor,
+}
+
+func advertiseStartCapability(agentType adapters.AgentType, adapter adapters.Adapter) bool {
+	switch agentType {
+	case adapters.AgentZCode, adapters.AgentCursor:
+		return adapter != nil && adapter.IsAvailable()
+	default:
+		return true
+	}
 }
 
 type threadStartCommand struct {
@@ -659,6 +670,10 @@ func (c *agentStartCapabilityCache) Get(parent context.Context, registry *adapte
 	}
 	entries := make([]map[string]interface{}, 0, len(supportedStartAgents))
 	for _, agentType := range supportedStartAgents {
+		adapter, _ := registry.Get(string(agentType))
+		if !advertiseStartCapability(agentType, adapter) {
+			continue
+		}
 		tier := startCapabilityTier(agentType, sessions, c.currentTime())
 		capability, hasResult, inFlight, implemented := c.getOrStart(parent, registry, agentType, tier)
 		entries = append(entries, startCapabilityEntry(agentType, capability, hasResult, inFlight, implemented))

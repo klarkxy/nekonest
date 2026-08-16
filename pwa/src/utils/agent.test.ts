@@ -32,6 +32,8 @@ describe('agent helpers', () => {
     expect(agentColor('codex')).toMatch(/^#/)
     expect(getAgentMeta('kimi_cli').avatar).toBe('/agents/kimi-cli.webp')
     expect(getAgentMeta('grok_build').label).toBe('Grok Build')
+    expect(getAgentMeta('zcode').label).toBe('ZCode')
+    expect(getAgentMeta('cursor').avatar).toBe('/agents/cursor.webp')
     expect(getAgentMeta('future_agent').avatar).toBe('/agents/unknown.webp')
     expect(agentLabel('unknown')).toBe(tGlobal('agent.unknown'))
     expect(agentLabel('other')).toBe('other')

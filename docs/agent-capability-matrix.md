@@ -13,11 +13,23 @@ the stable support policy; it is not a version-by-version control matrix.
 | Codex | Full-control path through `codex app-server`, with compatibility fallback |
 | Kimi CLI | Compatibility resume of native threads |
 | Grok Build | Compatibility resume of native threads |
+| ZCode | Currently unavailable. Current catalogs must not advertise discover, send, or spawn |
+| Cursor | Compatibility resume of native threads, only when Cursor Agent CLI is installed |
 
 Compatibility resume covers discovery, native ownership, history, prompt
 execution/streaming, interruption, and attachments only when the installed path
 advertises them. It does not promise phone approval, steering, structured input,
 queueing, new-thread creation, or a particular attachment method.
+
+Cursor headless resume uses print/`stream-json` with `--force` and `--trust` so
+the CLI does not stop on local approval prompts. Phone approval and deny remain
+unsupported. Discovery reads `~/.cursor/projects/*/agent-transcripts/<id>/<id>.jsonl`
+and, when present, `~/.cursor/chats`. Workspace slugs such as
+`d-0-code-nekonest` are resolved back to an existing host directory when
+possible. Path attachments use `--add-dir`. ZCode remains parsed as a wire id, but
+current catalogs do not advertise it: upstream `zcode login` returns
+`OAuth response is not valid JSON` because `oauth/cli/init` is 404, so
+headless send/start cannot obtain `~/.zcode/cli/config.json`.
 
 Codex is the only agent with a supported full-control role. Even for Codex, the
 PWA enables each control only after the installed app-server path passes its

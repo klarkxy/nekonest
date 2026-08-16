@@ -48,6 +48,14 @@ Run `nekonest-daemon -doctor` before editing any files.
 - Confirm the agent CLI and its native store belong to the same OS user as the
   daemon.
 - Run `-doctor` and inspect the unavailable reason shown by the PWA.
+- Cursor requires the Agent CLI (`cursor-agent`). The desktop editor and
+  unrelated `agent.exe` binaries (including Grok Build) are not accepted. Set
+  `NEKONEST_CURSOR_CLI` if the CLI lives outside the usual paths. Cursor IDE's
+  `CURSOR_AGENT` environment marker is not a CLI path. Agent threads live under
+  `~/.cursor/projects/*/agent-transcripts`; composer-only rows are not enough.
+- ZCode is currently unavailable. Desktop/TUI sessions may exist, but NekoNest
+  does not advertise discover, send, or spawn while upstream `zcode login`
+  fails with `OAuth response is not valid JSON`.
 - Refresh the device page after the daemon is online.
 - Older, subagent, sidechain, or synthetic-only records may be intentionally
   hidden. Reopen an old main thread on the host to make it active again.

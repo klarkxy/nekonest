@@ -13,10 +13,21 @@ NekoNest 根据已安装的智能体路径检测能力。本页定义稳定的�
 | Codex | 通过 `codex app-server` 完整控制，并提供兼容回退 |
 | Kimi CLI | 兼容继续原生线程 |
 | Grok Build | 兼容继续原生线程 |
+| ZCode | 当前不可用。现行目录不得声明发现、发送或新建 |
+| Cursor | 仅在已安装 Cursor Agent CLI 时兼容继续原生线程 |
 
 兼容继续涵盖发现、原生所有权、历史、提示词执行/流式输出、中断和附件，但只有
 已安装路径明确声明时才可用。它不承诺手机审批、转向、结构化输入、队列、新建
 线程或某种固定附件方式。
+
+Cursor 无头继续使用 print/`stream-json`，并带上 `--force` 与 `--trust`，避免
+CLI 停在本机审批提示；手机审批/拒绝仍然不受支持。发现读取
+`~/.cursor/projects/*/agent-transcripts/<id>/<id>.jsonl`，以及存在时的
+`~/.cursor/chats`。像 `d-0-code-nekonest` 这样的工作区 slug 会在可能时还原成
+主机上已有的目录。路径附件使用 `--add-dir`。协议仍可解析 `zcode`，但现行目录不声明它：上游
+`zcode login` 会因 `oauth/cli/init` 返回 404 而报
+`OAuth response is not valid JSON`，无头发送/新建因此无法得到
+`~/.zcode/cli/config.json`。
 
 Codex 是唯一受支持的完整控制角色。即使是 Codex，也只有在已安装 app-server
 路径通过运行时探测后，PWA 才会启用对应控制；回退路径可能只提供较小能力集。

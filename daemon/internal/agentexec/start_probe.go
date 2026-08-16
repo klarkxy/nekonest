@@ -5,8 +5,37 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
+
+func waitPromptAck(
+	ctx context.Context,
+	ack <-chan struct{},
+	exited <-chan struct{},
+	nativeID *string,
+	idMu *sync.Mutex,
+	agent string,
+	diag func() string,
+) (string, bool, bool, error) {
+	id := func() string {
+		idMu.Lock()
+		defer idMu.Unlock()
+		return *nativeID
+	}
+	select {
+	case <-ack:
+		return id(), true, true, nil
+	case <-exited:
+		detail := strings.TrimSpace(diag())
+		if detail == "" {
+			detail = "process exited before acknowledgement"
+		}
+		return id(), true, false, fmt.Errorf("%s initial prompt was not confirmed: %s", agent, detail)
+	case <-ctx.Done():
+		return id(), true, false, fmt.Errorf("%s initial prompt was not confirmed: %w", agent, ctx.Err())
+	}
+}
 
 func probeCLIHelp(ctx context.Context, command string, required ...string) error {
 	if strings.TrimSpace(command) == "" {

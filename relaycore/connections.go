@@ -853,6 +853,8 @@ func cleanAgentStartCapabilities(in []protocol.AgentStartCapability) []protocol.
 		protocol.AgentCodex:      true,
 		protocol.AgentKimiCLI:    true,
 		protocol.AgentGrokBuild:  true,
+		protocol.AgentZCode:      true,
+		protocol.AgentCursor:     true,
 	}
 	seen := make(map[protocol.AgentType]bool, len(in))
 	clean := make([]protocol.AgentStartCapability, 0, len(in))

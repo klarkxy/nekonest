@@ -79,6 +79,13 @@ Web Push 的三个 VAPID 值要么全部配置，要么保持关闭。`debug` �
 | `NEKONEST_BOOTSTRAP_TOKEN` | 与 Server 相同的注册令牌。 |
 | `NEKONEST_TRANSPORT_MODE` | 可选断言；设置后必须与 Server 一致。 |
 
+可选的兼容适配器覆盖：
+
+| 变量 | 用途 |
+|---|---|
+| `NEKONEST_CURSOR_CLI` | Cursor Agent CLI（`cursor-agent`）的绝对路径。不要指向 `cursor.exe`，也不要指向 Grok Build 这类通用的 `agent.exe`。Cursor IDE 注入的 `CURSOR_AGENT` 标记会被忽略。 |
+| `ZCODE_CLI` | 可选的 ZCode CLI 路径（`zcode` / `zcode.cjs`，不是 `ZCode.exe`）。上游无头登录损坏期间，现行目录仍不会声明 ZCode。 |
+
 Server 与 Daemon 都支持 `NEKONEST_LOG_FORMAT` 和 `NEKONEST_LOG_LEVEL`。
 Daemon 正常运行时使用配置文件内已经保存的凭据，注册用变量无需长期留在启动器
 中。

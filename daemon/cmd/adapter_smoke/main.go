@@ -14,7 +14,7 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "send" {
 		if len(os.Args) < 5 {
-			fmt.Fprintln(os.Stderr, "usage: adapter_smoke send <claude_code|codex|kimi_cli|grok_build> <sessionID> <prompt>")
+			fmt.Fprintln(os.Stderr, "usage: adapter_smoke send <claude_code|codex|kimi_cli|grok_build|zcode|cursor> <sessionID> <prompt>")
 			os.Exit(2)
 		}
 		runSend(os.Args[2], os.Args[3], strings.Join(os.Args[4:], " "))

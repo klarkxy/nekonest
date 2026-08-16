@@ -19,6 +19,12 @@ import (
 // resolveLaunch never routes user-controlled args through cmd.exe.
 // npm .cmd shims are resolved to node.exe + .js so prompts keep %, !, and newlines.
 func resolveLaunch(command string, args []string) (exe string, argv []string, err error) {
+	if exe, argv, handled, wrapErr := wrapNodeScript(command, args); handled {
+		return exe, argv, wrapErr
+	}
+	if exe, argv, handled, wrapErr := resolveCursorAgentLaunch(command, args); handled {
+		return exe, argv, wrapErr
+	}
 	ext := strings.ToLower(filepath.Ext(command))
 	if ext != ".cmd" && ext != ".bat" {
 		return command, args, nil

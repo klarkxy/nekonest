@@ -41,6 +41,8 @@ NekoNest 把手机 PWA 与你自己电脑上的编码智能体连接起来。主
 | Codex | `codex app-server` 可用时支持手机完整控制，否则使用兼容回退 |
 | Kimi CLI | 兼容继续 |
 | Grok Build | 兼容继续 |
+| ZCode | 当前不可用。上游无头 `zcode login` 损坏，因此 NekoNest 不声明发现、发送或新建 |
+| Cursor | 本机已安装 Cursor Agent CLI（`cursor-agent`）时，兼容继续其原生线程 |
 
 能力由运行时检测。PWA 只启用当前 Daemon 明确声明的控制；某项操作不可用时，
 先运行 `nekonest-daemon -doctor`。稳定的支持边界见

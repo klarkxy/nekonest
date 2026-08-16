@@ -9,6 +9,12 @@ import (
 
 // Fallback for exotic GOOS without unix process groups.
 func resolveLaunch(command string, args []string) (string, []string, error) {
+	if exe, argv, handled, err := wrapNodeScript(command, args); handled {
+		return exe, argv, err
+	}
+	if exe, argv, handled, err := resolveCursorAgentLaunch(command, args); handled {
+		return exe, argv, err
+	}
 	return command, args, nil
 }
 

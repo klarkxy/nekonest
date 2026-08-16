@@ -43,6 +43,8 @@ been discovered on the host.
 | Codex | Full phone control when `codex app-server` is available; compatibility fallback otherwise |
 | Kimi CLI | Compatibility resume |
 | Grok Build | Compatibility resume |
+| ZCode | Currently unavailable. Headless `zcode login` is broken upstream, so NekoNest does not advertise discover, send, or spawn |
+| Cursor | Compatibility resume of Cursor Agent CLI (`cursor-agent`) when that CLI is installed |
 
 Capabilities are detected at runtime. The PWA only enables controls advertised
 by the connected daemon; run `nekonest-daemon -doctor` when a control is

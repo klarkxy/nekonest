@@ -480,6 +480,12 @@ func TestParseStartAgentTypeDefaultsOnlyMissingToCodex(t *testing.T) {
 	if got, ok := parseStartAgentType("unknown"); ok || got != "" {
 		t.Fatalf("unknown agent = %q, %v", got, ok)
 	}
+	if got, ok := parseStartAgentType("zcode"); !ok || got != adapters.AgentZCode {
+		t.Fatalf("zcode agent = %q, %v", got, ok)
+	}
+	if got, ok := parseStartAgentType("cursor"); !ok || got != adapters.AgentCursor {
+		t.Fatalf("cursor agent = %q, %v", got, ok)
+	}
 }
 
 func TestStartCapabilityCatalogIncludesSpawnAndUnavailableReasons(t *testing.T) {
@@ -492,8 +498,17 @@ func TestStartCapabilityCatalogIncludesSpawnAndUnavailableReasons(t *testing.T) 
 		t.Fatal(err)
 	}
 	entries := newAgentStartCapabilityCache(time.Minute).Get(context.Background(), registry)
-	if len(entries) != len(supportedStartAgents) {
-		t.Fatalf("capability entries = %d", len(entries))
+	alwaysAdvertised := 0
+	for _, agentType := range supportedStartAgents {
+		if advertiseStartCapability(agentType, nil) {
+			alwaysAdvertised++
+		}
+	}
+	if len(entries) != alwaysAdvertised {
+		t.Fatalf("capability entries = %d, want %d", len(entries), alwaysAdvertised)
+	}
+	if startCapabilityFor(entries, adapters.AgentZCode) != nil || startCapabilityFor(entries, adapters.AgentCursor) != nil {
+		t.Fatal("uninstalled zcode/cursor must stay out of start_capabilities")
 	}
 	for _, entry := range entries {
 		available, _ := entry["available"].(bool)
@@ -505,6 +520,31 @@ func TestStartCapabilityCatalogIncludesSpawnAndUnavailableReasons(t *testing.T) 
 			if reason, _ := entry["reason"].(string); reason == "" {
 				t.Fatalf("unavailable capability has no reason: %#v", entry)
 			}
+		}
+	}
+}
+
+func TestStartCapabilityCatalogIncludesInstalledZCodeAndCursor(t *testing.T) {
+	zcode := &fakeStartAdapter{
+		name:  string(adapters.AgentZCode),
+		probe: adapters.ThreadStartCapability{Available: true, ControlPath: "cli"},
+	}
+	cursor := &fakeStartAdapter{
+		name:  string(adapters.AgentCursor),
+		probe: adapters.ThreadStartCapability{Available: true, ControlPath: "cli"},
+	}
+	registry, err := adapters.NewRegistry(zcode, cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := newAgentStartCapabilityCache(time.Minute)
+	_ = cache.Get(context.Background(), registry)
+	waitForStartCapabilityProbes(t, zcode, cursor)
+	entries := cache.Get(context.Background(), registry)
+	for _, agentType := range []adapters.AgentType{adapters.AgentZCode, adapters.AgentCursor} {
+		entry := startCapabilityFor(entries, agentType)
+		if entry == nil || entry["available"] != true || entry["spawn"] != true {
+			t.Fatalf("%s entry = %#v", agentType, entry)
 		}
 	}
 }

@@ -1,6 +1,9 @@
 package adapters
 
-import "unicode/utf8"
+import (
+	"sort"
+	"unicode/utf8"
+)
 
 func clampHistoryLimit(limit int) int {
 	if limit <= 0 {
@@ -32,4 +35,13 @@ func takeLastHistory(msgs []*HistoryMessage, limit int) []*HistoryMessage {
 		return msgs
 	}
 	return msgs[len(msgs)-limit:]
+}
+
+func sortHistoryMessages(messages []*HistoryMessage) {
+	sort.SliceStable(messages, func(i, j int) bool {
+		if messages[i].Timestamp != messages[j].Timestamp {
+			return messages[i].Timestamp < messages[j].Timestamp
+		}
+		return messages[i].ID < messages[j].ID
+	})
 }

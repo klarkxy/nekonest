@@ -85,6 +85,13 @@ Registration reads these variables:
 | `NEKONEST_BOOTSTRAP_TOKEN` | Same registration token configured on the Server. |
 | `NEKONEST_TRANSPORT_MODE` | Optional assertion; if set, it must match the Server. |
 
+Optional compatibility-adapter overrides:
+
+| Variable | Purpose |
+|---|---|
+| `NEKONEST_CURSOR_CLI` | Absolute path to Cursor Agent CLI (`cursor-agent`). Do not point this at `cursor.exe` or a generic `agent.exe` such as Grok Build. Cursor IDE's `CURSOR_AGENT` marker is ignored. |
+| `ZCODE_CLI` | Optional path to the ZCode CLI (`zcode` / `zcode.cjs`, not `ZCode.exe`). Current catalogs still do not advertise ZCode while headless login is broken upstream. |
+
 Both Server and daemon also accept `NEKONEST_LOG_FORMAT` and
 `NEKONEST_LOG_LEVEL`. Normal daemon runs use credentials already stored in the
 config file; registration variables do not need to remain in the launcher.

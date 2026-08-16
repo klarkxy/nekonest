@@ -68,10 +68,15 @@ func TestStartCapabilityCacheUsesActivityTiers(t *testing.T) {
 	_ = cache.Get(context.Background(), registry, sessions)
 	waitForStartCapabilityProbes(t, claude, codex, kimi, grok)
 	entries := cache.Get(context.Background(), registry, sessions)
-	for _, agentType := range supportedStartAgents {
+	for _, agentType := range []adapters.AgentType{
+		adapters.AgentClaudeCode, adapters.AgentCodex, adapters.AgentKimiCLI, adapters.AgentGrokBuild,
+	} {
 		if entry := startCapabilityFor(entries, agentType); entry == nil || entry["spawn"] != true {
 			t.Fatalf("%s entry = %#v", agentType, entry)
 		}
+	}
+	if startCapabilityFor(entries, adapters.AgentZCode) != nil || startCapabilityFor(entries, adapters.AgentCursor) != nil {
+		t.Fatal("install-gated agents must stay out of the catalog when their CLI is absent")
 	}
 	wantNext := map[adapters.AgentType]time.Time{
 		adapters.AgentClaudeCode: now.Add(startCapabilityActiveInterval),

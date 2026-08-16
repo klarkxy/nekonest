@@ -118,6 +118,8 @@ const (
 	AgentKilo            = core.AgentKilo
 	AgentKimiCLI         = core.AgentKimiCLI
 	AgentGrokBuild       = core.AgentGrokBuild
+	AgentZCode           = core.AgentZCode
+	AgentCursor          = core.AgentCursor
 
 	ThreadStartStarting      = core.ThreadStartStarting
 	ThreadStartOwned         = core.ThreadStartOwned

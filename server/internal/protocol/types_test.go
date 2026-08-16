@@ -320,6 +320,8 @@ func TestSupportedAgentTypes(t *testing.T) {
 		AgentKilo,
 		AgentKimiCLI,
 		AgentGrokBuild,
+		AgentZCode,
+		AgentCursor,
 	}
 	want := []AgentType{
 		"claude_code",
@@ -327,6 +329,8 @@ func TestSupportedAgentTypes(t *testing.T) {
 		"kilo",
 		"kimi_cli",
 		"grok_build",
+		"zcode",
+		"cursor",
 	}
 	for i := range want {
 		if got[i] != want[i] {

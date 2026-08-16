@@ -172,8 +172,8 @@
     },
     "AgentType": {
       "type": "string",
-      "description": "Active ids are claude_code, codex, kimi_cli, and grok_build; kilo is retained only for protocol 1.x parse compatibility and must not be advertised by current catalogs",
-      "enum": ["claude_code", "codex", "kilo", "kimi_cli", "grok_build"]
+      "description": "Active ids are claude_code, codex, kimi_cli, grok_build, zcode, and cursor; kilo is retained only for protocol 1.x parse compatibility and must not be advertised by current catalogs; current catalogs also must not advertise zcode while headless login is broken upstream",
+      "enum": ["claude_code", "codex", "kilo", "kimi_cli", "grok_build", "zcode", "cursor"]
     },
     "SessionCapabilities": {
       "type": "object",

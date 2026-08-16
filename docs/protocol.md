@@ -31,8 +31,9 @@ checking these surfaces together.
 
 ## Stable product invariants
 
-- Active agent identities are `claude_code`, `codex`, `kimi_cli`, and
-  `grok_build`.
+- Active agent identities are `claude_code`, `codex`, `kimi_cli`,
+  `grok_build`, `zcode`, and `cursor`. Current catalogs parse `zcode` but
+  must not advertise it while headless ZCode login is broken upstream.
 - Native agent stores remain authoritative for thread ownership and history.
 - Phone controls are capability-gated and fail closed when absent or unknown.
 - Stable device, thread, message, and client action identities prevent duplicate

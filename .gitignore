@@ -11,6 +11,7 @@ go-sdk/
 gocache/
 node_modules/
 .kilo/
+.zcode/
 .art-staging/
 .release-cache/
 /.deploy-tmp/

@@ -12,8 +12,12 @@ Phone PWA <-> VPS Server <-> outbound Host Daemon (Windows/Linux) <-> local agen
 ```
 
 The active supported wire identifiers are `claude_code`, `codex`, `kimi_cli`,
-and `grok_build`. Protocol 1.x may still parse the retired legacy `kilo` id for
-backward compatibility, but current daemon/PWA catalogs must not advertise it.
+`grok_build`, `zcode`, and `cursor`. Protocol 1.x may still parse the retired
+legacy `kilo` id for backward compatibility, but current daemon/PWA catalogs
+must not advertise it. `cursor` is advertised only after the host has the
+matching agent CLI (not just the desktop editor). `zcode` remains a parseable
+wire id, but current catalogs must not advertise discover, send, or spawn
+while upstream headless `zcode login` is broken.
 
 **Current supported** behavior is described by `README.md` / operator docs under
 `docs/` (except `docs/archive/`). The old v1.0.0 target snapshot and the
@@ -48,12 +52,14 @@ Keep these product boundaries intact unless the user explicitly changes them
   `thread_indeterminate`. Navigate the phone to
   the session only after `thread_owned`.
 - **Agent roles (v1):** Codex is the only full-control agent (send, approve/deny,
-  interrupt, steer, full image+file attachments). Claude Code, Kimi CLI, and
-  Grok Build are compatibility-resume adapters (discover, ownership, history,
-  send/stream, interrupt, attachments per advertised capability). All four may
-  advertise agent-scoped `spawn` only after their native starter is
-  installed and probed; this does **not** imply approval, steer, queue, or any
-  other full-control capability.
+  interrupt, steer, full image+file attachments). Claude Code, Kimi CLI,
+  Grok Build, and Cursor are compatibility-resume adapters (discover,
+  ownership, history, send/stream, interrupt, attachments per advertised
+  capability). Each may advertise agent-scoped `spawn` only after their native
+  starter is installed and probed; this does **not** imply approval, steer,
+  queue, or any other full-control capability. ZCode is currently unavailable
+  and must not be advertised. Cursor requires `cursor-agent` (or `agent` only
+  under a Cursor install directory), not `cursor.exe`.
 - **Transport (v1):** sealed E2E is the default for new nests; open relay is
   admin-only, one mode per nest, no automatic sealed→open downgrade.
 - **Formal host OS (v1):** Windows and Linux. macOS is later.

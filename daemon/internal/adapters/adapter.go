@@ -20,6 +20,8 @@ const (
 	AgentCodex      AgentType = "codex"
 	AgentKimiCLI    AgentType = "kimi_cli"
 	AgentGrokBuild  AgentType = "grok_build"
+	AgentZCode      AgentType = "zcode"
+	AgentCursor     AgentType = "cursor"
 )
 
 // AgentStatus represents the current state of an agent session.
@@ -112,6 +114,26 @@ func DefaultCapabilities(agentType AgentType) *SessionCapabilities {
 				"send": "runtime_not_probed", "interrupt": "runtime_not_probed",
 				"approve": "acp_permission_not_observed", "deny": "acp_permission_not_observed",
 				"user_input": "acp_question_not_observed", "steer": "unsupported_by_agent",
+			},
+			AttachmentMode: AttachPathBestEffort,
+		}
+	case AgentZCode:
+		return &SessionCapabilities{
+			ControlMode: ControlCompatibility,
+			UnavailableReasons: map[string]string{
+				"send": "runtime_not_probed", "interrupt": "runtime_not_probed",
+				"approve": "unsupported_by_agent", "deny": "unsupported_by_agent",
+				"user_input": "unsupported_by_agent", "steer": "unsupported_by_agent",
+			},
+			AttachmentMode: AttachPathBestEffort,
+		}
+	case AgentCursor:
+		return &SessionCapabilities{
+			ControlMode: ControlCompatibility,
+			UnavailableReasons: map[string]string{
+				"send": "runtime_not_probed", "interrupt": "runtime_not_probed",
+				"approve": "unsupported_by_agent", "deny": "unsupported_by_agent",
+				"user_input": "unsupported_by_agent", "steer": "unsupported_by_agent",
 			},
 			AttachmentMode: AttachPathBestEffort,
 		}

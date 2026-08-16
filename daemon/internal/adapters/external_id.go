@@ -6,8 +6,11 @@ import (
 )
 
 func publicSessionID(agent AgentType, nativeID string) string {
-	prefix := string(agent) + ":"
 	nativeID = strings.TrimSpace(nativeID)
+	if nativeID == "" {
+		return ""
+	}
+	prefix := string(agent) + ":"
 	if strings.HasPrefix(nativeID, prefix) {
 		return nativeID
 	}
