@@ -22,13 +22,16 @@ func TestZcodeAndCursorLaunchArgs(t *testing.T) {
 	if strings.Join(got, " ") != "--prompt hello --json --mode yolo --cwd D:\\repo --attach D:\\tmp\\a.png" {
 		t.Fatalf("zcode start = %#v", got)
 	}
-	got = cursorResumeArgs("chat-1", "hello", `D:\repo`, []attach.LocalFile{{Path: `D:\tmp\a.png`}})
-	wantCursor := "--resume chat-1 -p hello --output-format stream-json --stream-partial-output --force --trust --workspace D:\\repo --add-dir D:\\tmp"
-	if strings.Join(got, " ") != wantCursor {
+	cursorAttachment := filepath.Join(t.TempDir(), "a.png")
+	cursorAttachmentDir := filepath.Dir(cursorAttachment)
+	got = cursorResumeArgs("chat-1", "hello", `D:\repo`, []attach.LocalFile{{Path: cursorAttachment}})
+	wantCursor := []string{"--resume", "chat-1", "-p", "hello", "--output-format", "stream-json", "--stream-partial-output", "--force", "--trust", "--workspace", `D:\repo`, "--add-dir", cursorAttachmentDir}
+	if strings.Join(got, "\x00") != strings.Join(wantCursor, "\x00") {
 		t.Fatalf("cursor resume = %#v", got)
 	}
-	got = cursorStartArgs("hello", `D:\repo`, []attach.LocalFile{{Path: `D:\tmp\a.png`}})
-	if strings.Join(got, " ") != "-p hello --output-format stream-json --stream-partial-output --force --trust --workspace D:\\repo --add-dir D:\\tmp" {
+	got = cursorStartArgs("hello", `D:\repo`, []attach.LocalFile{{Path: cursorAttachment}})
+	wantCursor = []string{"-p", "hello", "--output-format", "stream-json", "--stream-partial-output", "--force", "--trust", "--workspace", `D:\repo`, "--add-dir", cursorAttachmentDir}
+	if strings.Join(got, "\x00") != strings.Join(wantCursor, "\x00") {
 		t.Fatalf("cursor start = %#v", got)
 	}
 }
