@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-08-18
+
 ### Changed
 
 - Mark ZCode unavailable across current catalogs. The wire id still parses,
@@ -437,7 +439,9 @@ existing coding-agent threads on a home Windows PC from a phone PWA.
 - The VPS relays and persists device metadata, messages, and attachments; there
   is no end-to-end encryption between phone and home PC
 
-[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.3...HEAD
+[Unreleased]: https://github.com/klarkxy/nekonest/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/klarkxy/nekonest/compare/v0.2.7...v0.2.8
+[0.2.8-rc.4]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.3...v0.2.8-rc.4
 [0.2.8-rc.3]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.2...v0.2.8-rc.3
 [0.2.8-rc.2]: https://github.com/klarkxy/nekonest/compare/v0.2.8-rc.1...v0.2.8-rc.2
 [0.2.8-rc.1]: https://github.com/klarkxy/nekonest/compare/v0.2.7...v0.2.8-rc.1
