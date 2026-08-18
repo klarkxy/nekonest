@@ -47,6 +47,7 @@ export const useSessionStore = defineStore('sessions', () => {
   const HANDLER_ID = 'session-store'
   let historyGeneration = 0
   let streamPollTimer: number | null = null
+  let streamPollSessionId: string | null = null
   let streamIdleTimer: number | null = null
   let activeDeviceId: string | null = null
 
@@ -666,7 +667,17 @@ export const useSessionStore = defineStore('sessions', () => {
     ws.onStatusChange(HANDLER_ID, (s) => {
       wsStatus.value = s
       if (s === 'connected') {
-        ws.whenReady(() => flushOutbox())
+        ws.whenReady(() => {
+          flushOutbox()
+          const session = currentSession.value
+          if (
+            session &&
+            !session.id.startsWith('local_draft_') &&
+            session.status === 'running'
+          ) {
+            ensureStreamPollForOpenRunning(session.device_id || deviceId, session.id)
+          }
+        })
       }
     })
 
@@ -773,6 +784,8 @@ export const useSessionStore = defineStore('sessions', () => {
                 if (updated.status === 'idle' || updated.status === 'error') {
                   streaming.value = false
                   stopStreamPoll()
+                } else if (updated.status === 'running') {
+                  ensureStreamPollForOpenRunning(deviceId, updated.id)
                 }
               } else if (!currentSession.value.id.startsWith('local_draft_')) {
                 // session_list is authoritative for native thread visibility. Clear
@@ -813,9 +826,14 @@ export const useSessionStore = defineStore('sessions', () => {
           sessions.value[idx] = updated
           if (currentSession.value?.id === updated.id) {
             currentSession.value = sessions.value[idx]
+            syncStreamPollForOpenSession(updated.device_id || deviceId, updated)
           }
 		} else {
 		  sessions.value.push({ ...updated, device_id: updated.device_id || deviceId })
+		  if (currentSession.value?.id === updated.id) {
+		    currentSession.value = sessions.value[sessions.value.length - 1]
+		    syncStreamPollForOpenSession(updated.device_id || deviceId, updated)
+		  }
 		}
 		}
 		if (msg.sealed_payload && msg.device_id) {
@@ -1262,6 +1280,9 @@ export const useSessionStore = defineStore('sessions', () => {
 
     if (gen === historyGeneration && currentSession.value?.id === sessionId) {
       requestNativeHistory(deviceId, sessionId)
+      if (currentSession.value.status === 'running') {
+        ensureStreamPollForOpenRunning(deviceId, sessionId)
+      }
     }
   }
 
@@ -1287,15 +1308,37 @@ export const useSessionStore = defineStore('sessions', () => {
     streaming.value = true
     if (streamIdleTimer) window.clearTimeout(streamIdleTimer)
     // Shorter idle: once frames stop, leave "replying" quickly.
+    // Catch-up polling for an open running session must keep running until a
+    // terminal update, session switch, or the bounded 3-minute poll cap —
+    // missing WS frames are exactly why the poll exists.
     streamIdleTimer = window.setTimeout(() => {
       streaming.value = false
-      stopStreamPoll()
+      if (currentSession.value?.status !== 'running') {
+        stopStreamPoll()
+      }
     }, 8000)
+  }
+
+  function syncStreamPollForOpenSession(deviceId: string, session: AgentSession) {
+    if (session.status === 'running') {
+      ensureStreamPollForOpenRunning(deviceId, session.id)
+      return
+    }
+    stopStreamPoll()
+    streaming.value = false
+  }
+
+  function ensureStreamPollForOpenRunning(deviceId: string, sessionId: string) {
+    if (!currentSession.value || currentSession.value.id !== sessionId) return
+    if (currentSession.value.status !== 'running') return
+    if (streamPollTimer !== null && streamPollSessionId === sessionId) return
+    startStreamPoll(deviceId, sessionId)
   }
 
   function startStreamPoll(deviceId: string, sessionId: string) {
     stopStreamPoll()
     streaming.value = true
+    streamPollSessionId = sessionId
     let ticks = 0
     streamPollTimer = window.setInterval(() => {
       ticks++
@@ -1322,6 +1365,7 @@ export const useSessionStore = defineStore('sessions', () => {
       window.clearInterval(streamPollTimer)
       streamPollTimer = null
     }
+    streamPollSessionId = null
     if (streamIdleTimer) {
       window.clearTimeout(streamIdleTimer)
       streamIdleTimer = null
@@ -1933,6 +1977,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function cleanup() {
     stopStreamPoll()
+    streaming.value = false
     clearAllAckTimers()
     if (typeof window !== 'undefined') {
       window.removeEventListener('storage', handleOutboxStorage)

@@ -1843,6 +1843,278 @@ describe('session prompt outbox', () => {
     store.cleanup()
   })
 
+  it('starts catch-up polling when the open session becomes running without a local prompt', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(
+      new Response(JSON.stringify({ messages: [] }), { status: 200 })
+    )
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({ sessions: [{
+      id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'idle',
+      summary: '', last_activity: 1, capabilities: { send: true }
+    }] }, 'device-a')
+    store.currentSession = store.sessions[0]
+    vi.mocked(apiFetch).mockClear()
+
+    emit({
+      protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+      device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      payload: { session: {
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build',
+        status: 'running', last_activity: 2
+      } }
+    })
+
+    expect(store.currentSession?.status).toBe('running')
+    expect(store.streaming).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(apiFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/messages?device_id=device-a&session_id=session-a')
+    )
+    store.cleanup()
+  })
+
+  it('suppresses duplicate running updates from creating extra catch-up timers', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(
+      new Response(JSON.stringify({ messages: [] }), { status: 200 })
+    )
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({ sessions: [{
+      id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'idle',
+      summary: '', last_activity: 1, capabilities: { send: true }
+    }] }, 'device-a')
+    store.currentSession = store.sessions[0]
+    vi.mocked(apiFetch).mockClear()
+
+    const runningUpdate = {
+      protocol_version: '1.2', transport_mode: 'open' as const, type: 'session_update' as const,
+      device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      payload: { session: {
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build' as const,
+        status: 'running' as const, last_activity: 2
+      } }
+    }
+    emit(runningUpdate)
+    emit({ ...runningUpdate, timestamp: 3 })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    store.cleanup()
+  })
+
+  it('starts catch-up polling after reopening a running session history load', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(
+      new Response(JSON.stringify({
+        messages: [{
+          id: 'assistant-1', role: 'assistant', content: 'partial',
+          type: 'text', timestamp: 1
+        }]
+      }), { status: 200 })
+    )
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({ sessions: [{
+      id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'running',
+      summary: '', last_activity: 1, capabilities: { send: true }
+    }] }, 'device-a')
+
+    store.setCurrentSession(store.sessions[0])
+    await Promise.resolve()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.messages.some(message => message.id === 'assistant-1')).toBe(true)
+    expect(store.streaming).toBe(true)
+
+    vi.mocked(apiFetch).mockClear()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(apiFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/messages?device_id=device-a&session_id=session-a')
+    )
+    store.cleanup()
+  })
+
+  it('restarts catch-up polling on disconnect and resubscribe for the open running session', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(
+      new Response(JSON.stringify({ messages: [] }), { status: 200 })
+    )
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({ sessions: [{
+      id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'running',
+      summary: '', last_activity: 1, capabilities: { send: true }
+    }] }, 'device-a')
+    store.currentSession = store.sessions[0]
+
+    emit({
+      protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+      device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      payload: { session: {
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build',
+        status: 'running', last_activity: 2
+      } }
+    })
+    expect(store.streaming).toBe(true)
+
+    setConnected(false)
+    store.cleanup()
+    expect(store.streaming).toBe(false)
+
+    store.subscribeDevice('device-a')
+    store.currentSession = {
+      id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'running',
+      summary: '', last_activity: 2, capabilities: { send: true }
+    }
+    vi.mocked(apiFetch).mockClear()
+    setConnected(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(apiFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/messages?device_id=device-a&session_id=session-a')
+    )
+    store.cleanup()
+  })
+
+  it('keeps catch-up polling past the 8s stream-idle timer while the open session stays running', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(
+      new Response(JSON.stringify({ messages: [] }), { status: 200 })
+    )
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({ sessions: [{
+      id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'idle',
+      summary: '', last_activity: 1, capabilities: { send: true }
+    }] }, 'device-a')
+    store.currentSession = store.sessions[0]
+
+    emit({
+      protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+      device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      payload: { session: {
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build',
+        status: 'running', last_activity: 2
+      } }
+    })
+    expect(store.streaming).toBe(true)
+
+    vi.mocked(apiFetch).mockClear()
+    await vi.advanceTimersByTimeAsync(8000)
+    expect(store.streaming).toBe(false)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(apiFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/messages?device_id=device-a&session_id=session-a')
+    )
+    store.cleanup()
+  })
+
+  it.each(['waiting_user', 'waiting_approval'] as const)(
+    'clears replying state when a running session enters %s',
+    async status => {
+      vi.mocked(apiFetch).mockResolvedValue(
+        new Response(JSON.stringify({ messages: [] }), { status: 200 })
+      )
+      setConnected(true)
+      const store = useSessionStore()
+      store.subscribeDevice('device-a')
+      store.applySessionList({ sessions: [{
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'running',
+        summary: '', last_activity: 1, capabilities: { send: true }
+      }] }, 'device-a')
+      store.currentSession = store.sessions[0]
+
+      emit({
+        protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+        device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+        payload: { session: {
+          id: 'session-a', device_id: 'device-a', agent_type: 'grok_build',
+          status: 'running', last_activity: 2
+        } }
+      })
+      expect(store.streaming).toBe(true)
+
+      emit({
+        protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+        device_id: 'device-a', session_id: 'session-a', timestamp: 3,
+        payload: { session: {
+          id: 'session-a', device_id: 'device-a', agent_type: 'grok_build',
+          status, last_activity: 3
+        } }
+      })
+      expect(store.streaming).toBe(false)
+      vi.mocked(apiFetch).mockClear()
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(apiFetch).not.toHaveBeenCalled()
+      store.cleanup()
+    }
+  )
+
+  it('stops catch-up polling on session switch and terminal idle updates', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(
+      new Response(JSON.stringify({ messages: [] }), { status: 200 })
+    )
+    setConnected(true)
+    const store = useSessionStore()
+    store.subscribeDevice('device-a')
+    store.applySessionList({ sessions: [
+      {
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'running',
+        summary: '', last_activity: 1, capabilities: { send: true }
+      },
+      {
+        id: 'session-b', device_id: 'device-a', agent_type: 'codex', status: 'idle',
+        summary: '', last_activity: 1, capabilities: { send: true }
+      }
+    ] }, 'device-a')
+    store.currentSession = store.sessions[0]
+    emit({
+      protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+      device_id: 'device-a', session_id: 'session-a', timestamp: 2,
+      payload: { session: {
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build',
+        status: 'running', last_activity: 2
+      } }
+    })
+    expect(store.streaming).toBe(true)
+
+    store.setCurrentSession(store.sessions[1])
+    expect(store.streaming).toBe(false)
+    vi.mocked(apiFetch).mockClear()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(apiFetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('session_id=session-a')
+    )
+
+    store.currentSession = {
+      id: 'session-a', device_id: 'device-a', agent_type: 'grok_build', status: 'running',
+      summary: '', last_activity: 3, capabilities: { send: true }
+    }
+    emit({
+      protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+      device_id: 'device-a', session_id: 'session-a', timestamp: 4,
+      payload: { session: {
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build',
+        status: 'running', last_activity: 4
+      } }
+    })
+    expect(store.streaming).toBe(true)
+    emit({
+      protocol_version: '1.2', transport_mode: 'open', type: 'session_update',
+      device_id: 'device-a', session_id: 'session-a', timestamp: 5,
+      payload: { session: {
+        id: 'session-a', device_id: 'device-a', agent_type: 'grok_build',
+        status: 'idle', last_activity: 5
+      } }
+    })
+    expect(store.streaming).toBe(false)
+    vi.mocked(apiFetch).mockClear()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(apiFetch).not.toHaveBeenCalled()
+    store.cleanup()
+  })
+
   it('migrates the legacy outbox array into per-command records', () => {
     localStorage.setItem(LEGACY_OUTBOX_STORAGE_KEY, JSON.stringify([{
       clientMsgId: 'legacy-message',

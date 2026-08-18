@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore low-latency Grok Build streaming with current `streaming-json` ACP
+  `session/update` output while retaining stable cumulative message IDs,
+  bounded coalescing, and ordered persistence callbacks.
+- Keep an open running thread catching up across PWA reopen/reconnect, and stop
+  the replying state cleanly when the agent becomes idle, errors, or waits for
+  user input or approval.
+
 ## [0.2.8] - 2026-08-18
 
 ### Changed

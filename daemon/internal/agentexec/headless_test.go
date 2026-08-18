@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nekonest/daemon/internal/attach"
 )
@@ -86,6 +88,24 @@ func TestHeadlessStartRequiresPositivePromptOutput(t *testing.T) {
 	if !grokPromptAcknowledged(`{"type":"tool_call"}`) {
 		t.Fatal("Grok tool event did not acknowledge prompt processing")
 	}
+	if !grokPromptAcknowledged(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}`) {
+		t.Fatal("Grok ACP agent_message_chunk did not acknowledge prompt processing")
+	}
+	if !grokPromptAcknowledged(`{"method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"plan"}}}}`) {
+		t.Fatal("Grok ACP agent_thought_chunk did not acknowledge prompt processing")
+	}
+	if grokPromptAcknowledged(`{"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"echo"}}}}`) {
+		t.Fatal("Grok ACP user echo was treated as prompt acknowledgement")
+	}
+	if grokPromptAcknowledged(`{"method":"session/update","params":{"update":{"sessionUpdate":"retry_status","attempt":2}}}`) {
+		t.Fatal("Grok ACP retry metadata was treated as prompt acknowledgement")
+	}
+	if grokPromptAcknowledged(`{"method":"session/update","params":{}}`) {
+		t.Fatal("malformed Grok ACP update was treated as prompt acknowledgement")
+	}
+	if grokPromptAcknowledged(`not-json`) {
+		t.Fatal("malformed Grok JSON was treated as prompt acknowledgement")
+	}
 }
 
 func TestGrokResumeArgs(t *testing.T) {
@@ -157,6 +177,198 @@ func TestGrokStreamingOutputIsBoundedAndBatched(t *testing.T) {
 	}
 	if eventCount > grokMaxStreamBytes/grokEmitStepBytes+2 {
 		t.Fatalf("stream emitted %d cumulative frames", eventCount)
+	}
+}
+
+func TestGrokACPOutputAccumulatesStableMessages(t *testing.T) {
+	commander := NewGrokCommander()
+	var events []struct {
+		typ, content, id string
+	}
+	commander.OnAgentOutput = func(_ string, typ, content, id string) {
+		events = append(events, struct {
+			typ, content, id string
+		}{typ, content, id})
+	}
+	commander.parseAndForwardOutput("s", `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","messageId":"msg-a","content":{"type":"text","text":"hello"}}}}`)
+	commander.parseAndForwardOutput("s", `{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","messageId":"msg-a","content":{"type":"text","text":" world"}}}}`)
+	commander.parseAndForwardOutput("s", `{"method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","messageId":"thought-a","content":{"type":"text","text":"think"}}}}`)
+	commander.parseAndForwardOutput("s", `{"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"echo"}}}}`)
+	commander.parseAndForwardOutput("s", `{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"run"}}}`)
+	commander.parseAndForwardOutput("s", `{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed"}}}`)
+	if len(events) != 3 {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].typ != "assistant" || events[0].content != "hello" || events[0].id != "msg-a" {
+		t.Fatalf("first assistant = %#v", events[0])
+	}
+	if events[1].typ != "thinking" || events[1].content != "think" || events[1].id != "thought-a" {
+		t.Fatalf("thinking = %#v", events[1])
+	}
+	if events[2].typ != "assistant" || events[2].content != "hello world" || events[2].id != "msg-a" {
+		t.Fatalf("flushed assistant = %#v", events[2])
+	}
+	if events[0].id == events[1].id {
+		t.Fatal("assistant and thinking reused the same message id")
+	}
+}
+
+func TestGrokInterleavedPendingStreamsFlushWithinEmitLatency(t *testing.T) {
+	prev := grokEmitLatency
+	grokEmitLatency = 20 * time.Millisecond
+	defer func() { grokEmitLatency = prev }()
+
+	commander := NewGrokCommander()
+	var events []struct {
+		typ, content, id string
+	}
+	commander.OnAgentOutput = func(_ string, typ, content, id string) {
+		events = append(events, struct {
+			typ, content, id string
+		}{typ, content, id})
+	}
+	commander.parseAndForwardOutput("s", `{"type":"text","data":"a"}`)
+	commander.parseAndForwardOutput("s", `{"type":"text","data":"b"}`)
+	commander.parseAndForwardOutput("s", `{"type":"thought","data":"t"}`)
+	if len(events) != 2 || events[0].content != "a" || events[1].typ != "thinking" || events[1].content != "t" {
+		t.Fatalf("immediate events = %#v", events)
+	}
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for len(events) < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(events) != 3 || events[2].typ != "assistant" || events[2].content != "ab" {
+		t.Fatalf("pending assistant should flush within latency after interleaved thinking: %#v", events)
+	}
+}
+
+func TestGrokCumulativeCallbacksRemainOrdered(t *testing.T) {
+	prev := grokEmitLatency
+	grokEmitLatency = 10 * time.Millisecond
+	defer func() { grokEmitLatency = prev }()
+
+	commander := NewGrokCommander()
+	var (
+		mu      sync.Mutex
+		lengths []int
+		once    sync.Once
+	)
+	timerStarted := make(chan struct{})
+	releaseTimer := make(chan struct{})
+	commander.OnAgentOutput = func(_ string, typ, content, _ string) {
+		if typ != "assistant" {
+			return
+		}
+		if content == "ab" {
+			once.Do(func() { close(timerStarted) })
+			<-releaseTimer
+		}
+		mu.Lock()
+		lengths = append(lengths, len(content))
+		mu.Unlock()
+	}
+
+	commander.parseAndForwardOutput("ordered", `{"type":"text","data":"a"}`)
+	commander.parseAndForwardOutput("ordered", `{"type":"text","data":"b"}`)
+	select {
+	case <-timerStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timer flush did not reach the sink")
+	}
+
+	newerDone := make(chan struct{})
+	go func() {
+		commander.parseAndForwardOutput(
+			"ordered",
+			`{"type":"text","data":"`+strings.Repeat("x", grokEmitStepBytes)+`"}`,
+		)
+		close(newerDone)
+	}()
+	select {
+	case <-newerDone:
+		close(releaseTimer)
+		t.Fatal("newer cumulative callback overtook the blocked timer callback")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseTimer)
+	select {
+	case <-newerDone:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("newer cumulative callback did not resume")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 1; i < len(lengths); i++ {
+		if lengths[i] < lengths[i-1] {
+			t.Fatalf("cumulative callback lengths regressed: %v", lengths)
+		}
+	}
+}
+
+func TestGrokACPMessageIDsStayStableAfterStreamStarts(t *testing.T) {
+	commander := NewGrokCommander()
+	var ids []string
+	commander.OnAgentOutput = func(_ string, typ, _, id string) {
+		if typ == "assistant" {
+			ids = append(ids, id)
+		}
+	}
+	commander.parseAndForwardOutput("s", `{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","messageId":"native-a","content":{"type":"text","text":"one"}}}}`)
+	commander.parseAndForwardOutput("s", `{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","messageId":"native-b","content":{"type":"text","text":" two"}}}}`)
+	commander.parseAndForwardOutput("s", `{"method":"session/update","params":{"update":{"sessionUpdate":"turn_completed"}}}`)
+	if len(ids) != 2 || ids[0] != "native-a" || ids[1] != "native-a" {
+		t.Fatalf("assistant ids switched after stream start: %#v", ids)
+	}
+}
+
+func TestGrokShortChunksFlushWithinEmitLatency(t *testing.T) {
+	prev := grokEmitLatency
+	grokEmitLatency = 20 * time.Millisecond
+	defer func() { grokEmitLatency = prev }()
+
+	commander := NewGrokCommander()
+	var events []string
+	commander.OnAgentOutput = func(_ string, typ, content, _ string) {
+		if typ == "assistant" {
+			events = append(events, content)
+		}
+	}
+	commander.parseAndForwardOutput("s", `{"type":"text","data":"a"}`)
+	if len(events) != 1 || events[0] != "a" {
+		t.Fatalf("first chunk should emit immediately: %#v", events)
+	}
+	commander.parseAndForwardOutput("s", `{"type":"text","data":"b"}`)
+	if len(events) != 1 {
+		t.Fatalf("second short chunk should wait for latency window: %#v", events)
+	}
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for len(events) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(events) != 2 || events[1] != "ab" {
+		t.Fatalf("latency flush = %#v", events)
+	}
+}
+
+func TestGrokStopAllClearsPendingEmitTimer(t *testing.T) {
+	prev := grokEmitLatency
+	grokEmitLatency = 30 * time.Millisecond
+	defer func() { grokEmitLatency = prev }()
+
+	commander := NewGrokCommander()
+	var events int
+	commander.OnAgentOutput = func(_, _, _, _ string) { events++ }
+	commander.parseAndForwardOutput("s", `{"type":"text","data":"a"}`)
+	commander.parseAndForwardOutput("s", `{"type":"text","data":"b"}`)
+	commander.StopAll()
+	time.Sleep(80 * time.Millisecond)
+	if events != 1 {
+		t.Fatalf("late timer emitted after StopAll: events=%d", events)
+	}
+	commander.parseAndForwardOutput("s", `{"type":"text","data":"next"}`)
+	if events != 2 {
+		t.Fatalf("new run after StopAll = %d events", events)
 	}
 }
 

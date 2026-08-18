@@ -22,12 +22,18 @@ const (
 	grokEmitStepBytes  = 512
 )
 
+// grokEmitLatency bounds relay cost for short incremental ACP/legacy chunks.
+// The first useful content still emits immediately; pending content flushes on
+// this window, the 512-byte step, terminal events, process exit, or stop.
+var grokEmitLatency = 40 * time.Millisecond
+
 // GrokCommander resumes Grok Build sessions in headless streaming-json mode.
 type GrokCommander struct {
-	mu        sync.Mutex
-	cliPath   string
-	executors map[string]*AgentExecutor
-	streams   map[string]*grokStreamState
+	mu         sync.Mutex
+	dispatchMu sync.Mutex
+	cliPath    string
+	executors  map[string]*AgentExecutor
+	streams    map[string]*grokStreamState
 
 	OnAgentOutput func(sessionID, msgType, content, msgID string)
 	OnTurnEnd     func(sessionID string, exitCode int, interrupted bool)
@@ -40,6 +46,7 @@ type grokStreamState struct {
 	thoughtID      string
 	textEmitted    int
 	thoughtEmitted int
+	emitTimer      *time.Timer
 }
 
 func NewGrokCommander() *GrokCommander {
@@ -139,17 +146,56 @@ func (c *GrokCommander) StartThread(ctx context.Context, workDir, prompt string)
 }
 
 func grokPromptAcknowledged(line string) bool {
-	var message struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal([]byte(line), &message) != nil {
+	var msg map[string]interface{}
+	if json.Unmarshal([]byte(line), &msg) != nil {
 		return false
 	}
-	switch message.Type {
+	if method, _ := msg["method"].(string); method == "session/update" {
+		update := grokACPUpdate(msg)
+		if update == nil {
+			return false
+		}
+		switch sessionUpdate, _ := update["sessionUpdate"].(string); sessionUpdate {
+		case "agent_message_chunk", "agent_thought_chunk",
+			"tool_call", "tool_call_update", "tool_call_progress",
+			"turn_completed":
+			return true
+		default:
+			// User echoes, system primers, plans, retry state, and unknown
+			// lifecycle metadata must not count as prompt acceptance.
+			return false
+		}
+	}
+	eventType, _ := msg["type"].(string)
+	switch eventType {
 	case "text", "thought", "tool", "tool_call", "tool_use", "end", "done", "complete":
 		return true
 	default:
 		return false
+	}
+}
+
+func grokACPUpdate(msg map[string]interface{}) map[string]interface{} {
+	params, _ := msg["params"].(map[string]interface{})
+	if params == nil {
+		return nil
+	}
+	update, _ := params["update"].(map[string]interface{})
+	return update
+}
+
+func grokACPText(update map[string]interface{}) string {
+	if update == nil {
+		return ""
+	}
+	switch content := update["content"].(type) {
+	case string:
+		return content
+	case map[string]interface{}:
+		text, _ := content["text"].(string)
+		return text
+	default:
+		return ""
 	}
 }
 
@@ -180,11 +226,7 @@ func (c *GrokCommander) startPromptInDir(
 		return fmt.Errorf("grok CLI not found")
 	}
 
-	now := time.Now().UnixNano()
-	c.streams[sessionID] = &grokStreamState{
-		textID:    fmt.Sprintf("grok_%s_text_%d", sessionID, now),
-		thoughtID: fmt.Sprintf("grok_%s_thought_%d", sessionID, now),
-	}
+	c.replaceStreamLocked(sessionID)
 	executor := NewAgentExecutor("grok_build", sessionID)
 	diagnostics := &stderrDiagnostics{}
 	executor.OnOutputSource = func(source, line string) {
@@ -211,7 +253,7 @@ func (c *GrokCommander) startPromptInDir(
 		c.mu.Lock()
 		if cur, ok := c.executors[sessionID]; ok && cur == executor {
 			delete(c.executors, sessionID)
-			delete(c.streams, sessionID)
+			c.clearStreamLocked(sessionID)
 		}
 		c.mu.Unlock()
 		if c.OnTurnEnd != nil {
@@ -220,7 +262,7 @@ func (c *GrokCommander) startPromptInDir(
 	}
 
 	if err := executor.StartWithDir(c.cliPath, args, nil, workDir); err != nil {
-		delete(c.streams, sessionID)
+		c.clearStreamLocked(sessionID)
 		return fmt.Errorf("start grok: %w", err)
 	}
 	_ = executor.CloseStdin()
@@ -235,22 +277,50 @@ func (c *GrokCommander) handleProcessLine(sessionID, source, line string) {
 	c.parseAndForwardOutput(sessionID, line)
 }
 
+func (c *GrokCommander) replaceStreamLocked(sessionID string) {
+	c.clearStreamLocked(sessionID)
+	now := time.Now().UnixNano()
+	c.streams[sessionID] = &grokStreamState{
+		textID:    fmt.Sprintf("grok_%s_text_%d", sessionID, now),
+		thoughtID: fmt.Sprintf("grok_%s_thought_%d", sessionID, now),
+	}
+}
+
+func (c *GrokCommander) clearStreamLocked(sessionID string) {
+	if state := c.streams[sessionID]; state != nil {
+		c.stopEmitTimerLocked(state)
+	}
+	delete(c.streams, sessionID)
+}
+
+func (c *GrokCommander) stopEmitTimerLocked(state *grokStreamState) {
+	if state == nil || state.emitTimer == nil {
+		return
+	}
+	state.emitTimer.Stop()
+	state.emitTimer = nil
+}
+
 func (c *GrokCommander) parseAndForwardOutput(sessionID, line string) {
 	if c.OnAgentOutput == nil {
 		return
 	}
 	var msg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		c.emitChunk(sessionID, "assistant", line)
+		c.emitChunk(sessionID, "assistant", line, "")
+		return
+	}
+	if method, _ := msg["method"].(string); method == "session/update" {
+		c.handleACPSessionUpdate(sessionID, msg)
 		return
 	}
 	eventType, _ := msg["type"].(string)
 	data, _ := msg["data"].(string)
 	switch eventType {
 	case "text":
-		c.emitChunk(sessionID, "assistant", data)
+		c.emitChunk(sessionID, "assistant", data, "")
 	case "thought":
-		c.emitChunk(sessionID, "thinking", data)
+		c.emitChunk(sessionID, "thinking", data, "")
 	case "error":
 		message, _ := msg["message"].(string)
 		if message != "" {
@@ -259,14 +329,45 @@ func (c *GrokCommander) parseAndForwardOutput(sessionID, line string) {
 	case "end", "done", "complete":
 		c.flushStream(sessionID)
 	default:
-		// end and lifecycle events carry metadata only.
+		// Lifecycle and unknown records carry metadata only.
 	}
 }
 
-func (c *GrokCommander) emitChunk(sessionID, msgType, chunk string) {
+func (c *GrokCommander) handleACPSessionUpdate(sessionID string, msg map[string]interface{}) {
+	update := grokACPUpdate(msg)
+	if update == nil {
+		return
+	}
+	sessionUpdate, _ := update["sessionUpdate"].(string)
+	switch sessionUpdate {
+	case "agent_message_chunk":
+		text := grokACPText(update)
+		if text == "" {
+			return
+		}
+		messageID, _ := update["messageId"].(string)
+		c.emitChunk(sessionID, "assistant", text, messageID)
+	case "agent_thought_chunk":
+		text := grokACPText(update)
+		if text == "" {
+			return
+		}
+		messageID, _ := update["messageId"].(string)
+		c.emitChunk(sessionID, "thinking", text, messageID)
+	case "turn_completed":
+		c.flushStream(sessionID)
+	default:
+		// Ignore user/system chunks, tool bodies, plans, retry metadata, and
+		// unknown lifecycle events. They must never become assistant text.
+	}
+}
+
+func (c *GrokCommander) emitChunk(sessionID, msgType, chunk, nativeID string) {
 	if chunk == "" || c.OnAgentOutput == nil {
 		return
 	}
+	c.dispatchMu.Lock()
+	defer c.dispatchMu.Unlock()
 	c.mu.Lock()
 	state := c.streams[sessionID]
 	if state == nil {
@@ -280,31 +381,93 @@ func (c *GrokCommander) emitChunk(sessionID, msgType, chunk string) {
 	var content, msgID string
 	var shouldEmit bool
 	if msgType == "thinking" {
+		if nativeID != "" && state.thought.Len() == 0 {
+			state.thoughtID = nativeID
+		}
 		appendGrokStreamChunk(&state.thought, chunk)
 		content = state.thought.String()
 		msgID = state.thoughtID
-		if state.thoughtEmitted == 0 ||
-			state.thought.Len()-state.thoughtEmitted >= grokEmitStepBytes ||
-			(state.thought.Len() == grokMaxStreamBytes &&
-				state.thoughtEmitted < state.thought.Len()) {
-			state.thoughtEmitted = state.thought.Len()
-			shouldEmit = true
-		}
+		shouldEmit = noteGrokPending(&state.thoughtEmitted, state.thought.Len())
 	} else {
+		if nativeID != "" && state.text.Len() == 0 {
+			state.textID = nativeID
+		}
 		appendGrokStreamChunk(&state.text, chunk)
 		content = state.text.String()
 		msgID = state.textID
-		if state.textEmitted == 0 ||
-			state.text.Len()-state.textEmitted >= grokEmitStepBytes ||
-			(state.text.Len() == grokMaxStreamBytes &&
-				state.textEmitted < state.text.Len()) {
-			state.textEmitted = state.text.Len()
-			shouldEmit = true
-		}
+		shouldEmit = noteGrokPending(&state.textEmitted, state.text.Len())
+	}
+	pendingOther := state.text.Len() > state.textEmitted ||
+		state.thought.Len() > state.thoughtEmitted
+	if shouldEmit && !pendingOther {
+		c.stopEmitTimerLocked(state)
+	} else if pendingOther || !shouldEmit {
+		// Keep a shared latency flush while either stream still has pending
+		// content. An immediate emit on one stream must not cancel the other.
+		c.scheduleEmitLocked(sessionID, state)
 	}
 	c.mu.Unlock()
 	if shouldEmit {
 		c.OnAgentOutput(sessionID, msgType, content, msgID)
+	}
+}
+
+func noteGrokPending(emitted *int, length int) bool {
+	if *emitted == 0 ||
+		length-*emitted >= grokEmitStepBytes ||
+		(length == grokMaxStreamBytes && *emitted < length) {
+		*emitted = length
+		return true
+	}
+	return false
+}
+
+func (c *GrokCommander) scheduleEmitLocked(sessionID string, state *grokStreamState) {
+	if state.emitTimer != nil {
+		return
+	}
+	state.emitTimer = time.AfterFunc(grokEmitLatency, func() {
+		c.flushScheduled(sessionID, state)
+	})
+}
+
+func (c *GrokCommander) flushScheduled(sessionID string, state *grokStreamState) {
+	if c.OnAgentOutput == nil {
+		return
+	}
+	c.dispatchMu.Lock()
+	defer c.dispatchMu.Unlock()
+	type pendingEvent struct {
+		msgType string
+		content string
+		msgID   string
+	}
+	var pending []pendingEvent
+	c.mu.Lock()
+	if c.streams[sessionID] != state {
+		c.mu.Unlock()
+		return
+	}
+	state.emitTimer = nil
+	if state.text.Len() > state.textEmitted {
+		state.textEmitted = state.text.Len()
+		pending = append(pending, pendingEvent{
+			msgType: "assistant",
+			content: state.text.String(),
+			msgID:   state.textID,
+		})
+	}
+	if state.thought.Len() > state.thoughtEmitted {
+		state.thoughtEmitted = state.thought.Len()
+		pending = append(pending, pendingEvent{
+			msgType: "thinking",
+			content: state.thought.String(),
+			msgID:   state.thoughtID,
+		})
+	}
+	c.mu.Unlock()
+	for _, event := range pending {
+		c.OnAgentOutput(sessionID, event.msgType, event.content, event.msgID)
 	}
 }
 
@@ -326,6 +489,8 @@ func (c *GrokCommander) flushStream(sessionID string) {
 	if c.OnAgentOutput == nil {
 		return
 	}
+	c.dispatchMu.Lock()
+	defer c.dispatchMu.Unlock()
 	type pendingEvent struct {
 		msgType string
 		content string
@@ -335,6 +500,7 @@ func (c *GrokCommander) flushStream(sessionID string) {
 	c.mu.Lock()
 	state := c.streams[sessionID]
 	if state != nil {
+		c.stopEmitTimerLocked(state)
 		if state.text.Len() > state.textEmitted {
 			state.textEmitted = state.text.Len()
 			pending = append(pending, pendingEvent{
@@ -383,6 +549,9 @@ func (c *GrokCommander) StopAll() {
 		list = append(list, executor)
 	}
 	c.executors = make(map[string]*AgentExecutor)
+	for sessionID := range c.streams {
+		c.clearStreamLocked(sessionID)
+	}
 	c.streams = make(map[string]*grokStreamState)
 	c.mu.Unlock()
 	for _, executor := range list {
